@@ -1,4 +1,5 @@
 import type {
+  CadFeatureOperation,
   EvaluatedMesh,
   FeaComparisonReport,
   FeaElementStress,
@@ -105,7 +106,8 @@ export function evaluateStructuralFea(
   feaSettings: FeaSettings,
   isolationTarget = 'all',
   profile?: PartEngineeringProfile,
-  importedModel?: ImportedCadModel | null
+  importedModel?: ImportedCadModel | null,
+  featureOps: CadFeatureOperation[] = []
 ): FeaResult {
   const effectiveFinish = profile?.primaryMaterial ?? materialFinish;
   const spec = MATERIAL_MECHANICAL_SPECS[effectiveFinish] ?? MATERIAL_MECHANICAL_SPECS.aluminum;
@@ -193,7 +195,28 @@ export function evaluateStructuralFea(
     }
 
     const curvRed = meshData.colors[i * 3] ?? 0.2;
-    const concentrationKt = 1.0 + curvRed * 0.42;
+    let concentrationKt = 1.0 + curvRed * 0.42;
+
+    if (featureOps.length > 0) {
+      for (const op of featureOps) {
+        const dx = px - op.point[0];
+        const dy = py - op.point[1];
+        const dz = pz - op.point[2];
+        const dist = Math.hypot(dx, dy, dz);
+        const charLen = Math.max(op.diameterMm, op.widthMm, op.lengthMm, 8);
+        const influenceR = Math.max(12, charLen * 1.45);
+        if (dist < influenceR) {
+          const proximity = Math.exp(-Math.pow(dist / (influenceR * 0.52), 2));
+          if (op.kind === 'slot-cutout' || op.kind === 'through-hole') {
+            concentrationKt += proximity * 0.95;
+          } else if (op.kind === 'threaded-bolt') {
+            concentrationKt += proximity * 0.32;
+          } else if (op.kind === 'rib-boss') {
+            concentrationKt = Math.max(0.72, concentrationKt - proximity * 0.22);
+          }
+        }
+      }
+    }
 
     const sigma = Math.max(0.25, baseBendingMpa * momentFactor * loadFactor * concentrationKt);
     stresses[i] = sigma;
@@ -275,7 +298,16 @@ export function evaluateStructuralFea(
 
   const eMpa = spec.youngsModulusGpa * 1000;
   const shellI = (effectiveWidthMm * Math.pow(thickness, 3)) / 12;
-  const effI = shellI * ribInertiaFactor * shellActionDivisor;
+  const featureCutRatio = featureOps.reduce((acc, op) => {
+    if (op.kind === 'slot-cutout' || op.kind === 'through-hole') {
+      return Math.max(0.55, acc - 0.045);
+    }
+    if (op.kind === 'rib-boss') {
+      return Math.min(1.35, acc + 0.06);
+    }
+    return acc;
+  }, 1.0);
+  const effI = shellI * ribInertiaFactor * shellActionDivisor * featureCutRatio;
   const supportCoeff =
     feaSettings.supportMode === 'cantilever-u'
       ? 3

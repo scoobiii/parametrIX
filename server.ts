@@ -132,6 +132,8 @@ async function generateContentWithFallback(
     contents: Content[];
     systemInstruction: string;
     tools?: { functionDeclarations: FunctionDeclaration[] }[];
+    responseMimeType?: string;
+    responseSchema?: Record<string, unknown>;
   }
 ) {
   const attempts: { model: string; delayMs: number }[] = [
@@ -153,6 +155,8 @@ async function generateContentWithFallback(
         config: {
           systemInstruction: request.systemInstruction,
           ...(request.tools ? { tools: request.tools } : {}),
+          ...(request.responseMimeType ? { responseMimeType: request.responseMimeType } : {}),
+          ...(request.responseSchema ? { responseSchema: request.responseSchema } : {}),
         },
       });
       return { response, usedModel: attempt.model };
@@ -208,7 +212,7 @@ const MCP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: 'cad_explode_assembly',
     description:
-      'Controla a vista explodida estilo GrabCAD do conjunto 3D (explodeFactor de 0.0 montado até 1.0 totalmente explodido).',
+      'Controla a vista explodida do conjunto 3D (explodeFactor de 0.0 montado até 1.0 totalmente explodido).',
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -373,6 +377,48 @@ const MCP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
       },
     },
   },
+  {
+    name: 'cad_magic_pen_feature',
+    description:
+      'Aplica operação geométrica paramétrica da Caneta Mágica em ponto/área 3D marcada: recorte/rasgo (slot-cutout), furo (through-hole), parafuso com rosca métrica ISO (threaded-bolt M3..M12), nervura/ressalto (rib-boss) ou chanfro (chamfer-fillet).',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        kind: {
+          type: Type.STRING,
+          description: 'slot-cutout, through-hole, threaded-bolt, rib-boss ou chamfer-fillet.',
+        },
+        point: {
+          type: Type.ARRAY,
+          items: { type: Type.NUMBER },
+          description: 'Coordenada 3D [x, y, z] em mm.',
+        },
+        normal: {
+          type: Type.ARRAY,
+          items: { type: Type.NUMBER },
+          description: 'Vetor normal [nx, ny, nz].',
+        },
+        targetComponentId: { type: Type.STRING },
+        widthMm: { type: Type.NUMBER },
+        lengthMm: { type: Type.NUMBER },
+        diameterMm: { type: Type.NUMBER },
+        depthMm: { type: Type.NUMBER },
+        threadSpec: { type: Type.STRING, description: 'M3, M4, M5, M6, M8, M10 ou M12.' },
+        headStyle: { type: Type.STRING, description: 'allen ou hex.' },
+        slotProfile: { type: Type.STRING, description: 'rectangular ou oblong.' },
+      },
+      required: ['kind'],
+    },
+  },
+  {
+    name: 'cad_get_scoobiii_vuc_proof',
+    description:
+      'Retorna a prova matemática determinística SCOOBIII/VUC (NURBS Cox-de Boor, Jacobiano, Von Mises, Euler-Bernoulli, rosca ISO e verificação normativa sem chute).',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+    },
+  },
 ];
 
 function getGeminiClient(): GoogleGenAI {
@@ -459,14 +505,15 @@ async function startServer() {
       }
 
       const buf = Buffer.from(arrayBuf);
-      const isBinaryExt = /\.(stl|3dm|pdf|png|jpg|jpeg|zip)$/i.test(title);
+      const isBinaryExt = /\.(stl|3dm|ipt|pdf|png|jpg|jpeg|webp|zip)$/i.test(title);
       const looksText =
         !isBinaryExt &&
         (contentType.includes('text/') ||
           contentType.includes('json') ||
           contentType.includes('xml') ||
+          contentType.includes('svg') ||
           contentType.includes('csv') ||
-          /\.(obj|dxf|step|stp|ifc|txt|md|json|csv|nc|gcode|src)$/i.test(title));
+          /\.(obj|dxf|step|stp|ifc|svg|txt|md|json|csv|nc|gcode|src)$/i.test(title));
 
       let extractedText = '';
       if (looksText || contentType.includes('html')) {
@@ -532,6 +579,181 @@ Retorne apenas JSON válido em português com as chaves: partName, manufacturer,
     }
   });
 
+  app.post('/api/image-to-cad', async (req, res) => {
+    try {
+      const ai = getGeminiClient();
+      const filename = String(req.body?.filename || 'imagem_projeto.png');
+      const rawMime = String(req.body?.mimeType || 'image/png').toLowerCase();
+      const mimeType = rawMime.includes('webp')
+        ? 'image/webp'
+        : rawMime.includes('jpeg') || rawMime.includes('jpg')
+          ? 'image/jpeg'
+          : 'image/png';
+      const rawBase64 = typeof req.body?.base64Data === 'string' ? req.body.base64Data.trim() : '';
+      const cleanBase64 = rawBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+
+      if (!cleanBase64 || cleanBase64.length < 32) {
+        return res.status(400).json({ error: 'Dados da imagem base64 ausentes ou inválidos.' });
+      }
+
+      const aspectRatio = Number(req.body?.aspectRatio) || 1;
+      const coveragePct = Number(req.body?.coveragePct) || 50;
+
+      const responseSchema: Record<string, unknown> = {
+        type: Type.OBJECT,
+        properties: {
+          partName: { type: Type.STRING },
+          manufacturer: { type: Type.STRING },
+          modelCode: { type: Type.STRING },
+          segment: {
+            type: Type.STRING,
+            enum: [
+              'ciclismo-mobilidade',
+              'automotivo',
+              'aeroespacial',
+              'arquitetura-bim',
+              'industrial-cnc',
+              'robotica',
+              'medico',
+            ],
+          },
+          primaryMaterial: {
+            type: Type.STRING,
+            enum: [
+              'aluminum',
+              'titanium',
+              'clay',
+              'oak',
+              'glass',
+              'carbon-fiber',
+              'matte-plastic',
+            ],
+          },
+          intendedUse: { type: Type.STRING },
+          specifications: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+          certifications: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+          recommendedLoadN: { type: Type.NUMBER },
+          minSafetyFactor: { type: Type.NUMBER },
+          maxDeflectionMm: { type: Type.NUMBER },
+          criticalInspectionNote: { type: Type.STRING },
+          constructionMode: {
+            type: Type.STRING,
+            enum: ['assembly', 'extruded-relief'],
+          },
+          overallDimensionsMm: {
+            type: Type.OBJECT,
+            properties: {
+              width: { type: Type.NUMBER },
+              height: { type: Type.NUMBER },
+              depth: { type: Type.NUMBER },
+            },
+            required: ['width', 'height', 'depth'],
+          },
+          components: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                shape: {
+                  type: Type.STRING,
+                  enum: [
+                    'box',
+                    'plate',
+                    'cylinder-x',
+                    'cylinder-y',
+                    'cylinder-z',
+                    'ring',
+                    'arch',
+                  ],
+                },
+                centerMm: {
+                  type: Type.ARRAY,
+                  items: { type: Type.NUMBER },
+                },
+                sizeMm: {
+                  type: Type.ARRAY,
+                  items: { type: Type.NUMBER },
+                },
+                material: {
+                  type: Type.STRING,
+                  enum: [
+                    'aluminum',
+                    'titanium',
+                    'clay',
+                    'oak',
+                    'glass',
+                    'carbon-fiber',
+                    'matte-plastic',
+                  ],
+                },
+              },
+              required: ['name', 'shape', 'centerMm', 'sizeMm', 'material'],
+            },
+          },
+        },
+        required: [
+          'partName',
+          'manufacturer',
+          'modelCode',
+          'segment',
+          'primaryMaterial',
+          'intendedUse',
+          'specifications',
+          'certifications',
+          'recommendedLoadN',
+          'minSafetyFactor',
+          'maxDeflectionMm',
+          'criticalInspectionNote',
+          'constructionMode',
+          'overallDimensionsMm',
+          'components',
+        ],
+      };
+
+      const { response, usedModel } = await generateContentWithFallback(ai, {
+        systemInstruction: `Você é um engenheiro mecânico/CAD sênior especialista em engenharia reversa por visão computacional.
+Analise a imagem enviada e gere um projeto CAD 3D FIDEDIGNO em milímetros (sistema Y-up: X largura, Y altura vertical, Z profundidade).
+REGRAS:
+1. Identifique fielmente a peça, equipamento, conjunto ou perfil mostrado na imagem (nome, fabricante provável ou "Design Personalizado", modelo, segmento, especificações técnicas, certificações aplicáveis, carga N e fator de segurança mínimo).
+2. Se a imagem for uma foto/render de conjunto 3D mecânico, automotivo, bicicleta/garfo, suporte, braço robótico, estrutura, etc., defina constructionMode="assembly" e decomponha entre 3 e 12 componentes geométricos precisos (centerMm [x,y,z] e sizeMm [sx,sy,sz] coerentes e conectados entre si sem sobreposição aleatória, base apoiada em Y>=0, largura típica 120..260mm).
+3. Se a imagem for um desenho técnico 2D, emblema, placa recortada, perfil plano, silhueta ou logotipo, defina constructionMode="extruded-relief" e forneça também 1 a 4 componentes estruturais complementares ou placas.
+4. Responda apenas no JSON estruturado conforme o schema, em Português técnico.`,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType,
+                  data: cleanBase64,
+                },
+              },
+              {
+                text: `Arquivo de imagem: "${filename}" (${mimeType}, aspectRatio=${aspectRatio.toFixed(2)}, foregroundCoverage=${coveragePct.toFixed(1)}%). Converta esta imagem em um projeto CAD 3D fidedigno com decomposição de componentes e perfil de engenharia para cálculo FEA.`,
+              },
+            ],
+          },
+        ],
+        responseMimeType: 'application/json',
+        responseSchema,
+      });
+
+      const rawText = (response.text || '').trim();
+      const blueprint = JSON.parse(rawText);
+      return res.json({ blueprint, usedModel });
+    } catch (err) {
+      const friendly = formatFriendlyGeminiError(err);
+      return res.status(friendly.status).json({ error: friendly.message });
+    }
+  });
+
   app.post('/api/rag-mcp-agent', async (req, res) => {
     try {
       const ai = getGeminiClient();
@@ -559,9 +781,10 @@ Responda sempre em Português técnico claro, objetivo e orientado a decisões d
 CAPACIDADES E REGRAS:
 1. IDENTIDADE DA PEÇA & CERTIFICAÇÃO: Sempre considere quem fabrica, modelo, especificações, certificações obrigatórias, uso pretendido e critérios de segurança descritos em \`cadContext.partProfile\` e \`cadContext.activeSegment\`. Use esses critérios ao avaliar o FEA Antes e Depois!
 2. OBJECT MASK & MATERIAIS POR COMPONENTE: Você enxerga todos os subcomponentes detectados em \`cadContext.components\` (com \`family\`, \`subFamily\`, \`maskColorHex\` e \`inferredMaterial\`). Pode usar \`cad_explode_assembly\`, \`cad_rotate_component\`, \`cad_set_component_material\`, \`cad_isolate_part\` e \`cad_set_segment_profile\`.
-3. RAG: Utilize os trechos recuperados dos arquivos enviados (Upload local, URL ou Google Drive compartilhado) como base normativa e de requisitos geométricos/estruturais, citando a fonte.
-4. MCP Tools: Quando o usuário pedir para alterar geometria, explodir conjunto, rotacionar peça, isolar componente, alterar material por peça, ativar máscara de objetos, exportar arquivo (.STL, .DXF, .3DM, .NC, .SRC), executar cálculo estrutural / mapa de calor FEA, ou gerar uma nova geometria otimizada com comparação Antes vs Depois, CHAME AS FERRAMENTAS (function calling) correspondentes!
-5. Nunca invente valores não retornados pelas ferramentas ou pelos documentos RAG.
+3. CANETA MÁGICA & SCOOBIII/VUC: Quando o usuário enviar coordenadas da Caneta Mágica ou pedir recorte/rasgo paramétrico, furo, parafuso com rosca métrica ISO (M3..M12), nervura ou prova matemática determinística SCOOBIII/VUC, chame \`cad_magic_pen_feature\` e/ou \`cad_get_scoobiii_vuc_proof\`.
+4. RAG: Utilize os trechos recuperados dos arquivos enviados (Upload local, URL ou Google Drive compartilhado) como base normativa e de requisitos geométricos/estruturais, citando a fonte.
+5. MCP Tools: Quando o usuário pedir para alterar geometria, explodir conjunto, rotacionar peça, isolar componente, alterar material por peça, ativar máscara de objetos, exportar arquivo (.STL, .DXF, .3DM, .NC, .SRC), executar cálculo estrutural / mapa de calor FEA, ou gerar uma nova geometria otimizada com comparação Antes vs Depois, CHAME AS FERRAMENTAS (function calling) correspondentes!
+6. Nunca invente valores não retornados pelas ferramentas ou pelos documentos RAG.
 
 ESTADO ATUAL DO MODELO, PEÇA, COMPONENTES & FEA:
 ${JSON.stringify(cadContext, null, 2)}

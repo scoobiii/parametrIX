@@ -23,6 +23,7 @@ import {
   type McpRuntimeContext,
   executeMcpToolCall,
 } from '../kernel/mcpServer';
+import { convertImageToCadModel, isRasterImageFilename } from '../kernel/imageToCad';
 import {
   base64ToArrayBuffer,
   retrieveTopRagChunks,
@@ -138,7 +139,32 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
     setIngestBusy(true);
     try {
       const lower = file.name.toLowerCase();
-      const isBinary = lower.endsWith('.stl') || lower.endsWith('.3dm');
+      if (isRasterImageFilename(file.name, file.type)) {
+        setIngestInfo('Convertendo imagem em projeto CAD 3D fidedigno...');
+        const { model, ragTextSummary } = await convertImageToCadModel({
+          filename: file.name,
+          mimeType: file.type,
+          blobOrBuffer: file,
+        });
+        const { ragDoc, importedCad } = tryBuildCadAndRagDoc({
+          title: file.name,
+          kind: 'upload',
+          mimeType: file.type || 'image/png',
+          byteSize: file.size,
+          extractedText: ragTextSummary,
+          preBuiltCad: model,
+        });
+        onAddRagDoc(ragDoc, importedCad);
+        setIngestInfo(
+          `Imagem "${ragDoc.title}" convertida em projeto CAD 3D fidedigno (${
+            importedCad?.components?.length ?? 1
+          } sub-componentes) + Visualizador 3D aberto.`
+        );
+        return;
+      }
+
+      const isBinary =
+        lower.endsWith('.stl') || lower.endsWith('.3dm') || lower.endsWith('.ipt');
       const buffer = isBinary ? await file.arrayBuffer() : undefined;
       const extractedText = isBinary ? undefined : await file.text();
 
@@ -153,10 +179,11 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
       onAddRagDoc(ragDoc, importedCad);
       setIngestInfo(
         `Fonte "${ragDoc.title}" indexada (${ragDoc.chunkCount} trechos RAG)${
-          importedCad ? ' + Visualizador 3D GrabCAD aberto.' : '.'
+          importedCad ? ' + Visualizador 3D aberto.' : '.'
         }`
       );
     } catch (err) {
+      setIngestInfo(null);
       setIngestError(err instanceof Error ? err.message : 'Erro ao processar upload local.');
     } finally {
       setIngestBusy(false);
@@ -186,14 +213,32 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
           ? base64ToArrayBuffer(data.base64Content)
           : undefined;
 
+      const sourceTitle = String(data.title || 'documento_externo');
+      const sourceMime = String(data.mimeType || 'application/octet-stream');
+      let preBuiltCad: ImportedCadModel | null = null;
+      let extractedText =
+        typeof data.extractedText === 'string' ? data.extractedText : undefined;
+
+      if (buffer && isRasterImageFilename(sourceTitle, sourceMime)) {
+        setIngestInfo('Convertendo imagem remota em projeto CAD 3D fidedigno...');
+        const converted = await convertImageToCadModel({
+          filename: sourceTitle,
+          mimeType: sourceMime,
+          blobOrBuffer: buffer,
+        });
+        preBuiltCad = converted.model;
+        extractedText = converted.ragTextSummary;
+      }
+
       const { ragDoc, importedCad } = tryBuildCadAndRagDoc({
-        title: String(data.title || 'documento_externo'),
+        title: sourceTitle,
         kind: data.isGoogleDrive ? 'gdrive' : 'url',
         originUrl: String(data.originUrl || target),
-        mimeType: String(data.mimeType || 'application/octet-stream'),
+        mimeType: sourceMime,
         byteSize: Number(data.byteSize || 0),
-        extractedText: typeof data.extractedText === 'string' ? data.extractedText : undefined,
+        extractedText,
         buffer,
+        preBuiltCad,
       });
 
       onAddRagDoc(ragDoc, importedCad);
@@ -204,6 +249,7 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
         } trechos)${importedCad ? ' + Visualizador 3D aberto.' : '.'}`
       );
     } catch (err) {
+      setIngestInfo(null);
       setIngestError(err instanceof Error ? err.message : 'Erro ao importar URL / Google Drive.');
     } finally {
       setIngestBusy(false);
@@ -493,7 +539,7 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded-lg cursor-pointer"
           >
             <Box className="w-3.5 h-3.5" />
-            Editor 3D GrabCAD
+            Editor 3D
           </button>
         </div>
 
@@ -566,7 +612,7 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
                 Base RAG (Upload, URL & Google Drive)
               </h2>
               <p className="text-[11px] text-slate-400">
-                Envie arquivos CAD (.STEP, .STL, .OBJ, .DXF, .3DM, .IFC) para abrir automaticamente no Editor 3D e indexar no agente.
+                Envie arquivos CAD (.STEP/.STP, .IPT, .SVG, .STL, .OBJ, .DXF, .3DM, .IFC) ou imagens (.PNG, .JPG, .WEBP) para abrir no Editor 3D e indexar no agente.
               </p>
             </div>
 
@@ -574,7 +620,7 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".stl,.obj,.dxf,.3dm,.step,.stp,.ifc,.txt,.md,.json,.csv"
+                accept=".stl,.obj,.dxf,.3dm,.step,.stp,.ifc,.ipt,.svg,.png,.jpg,.jpeg,.webp,.txt,.md,.json,.csv"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) void handleLocalUpload(f);
@@ -589,7 +635,7 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
                 className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium bg-[#0c1017] border border-dashed border-sky-400/45 hover:border-sky-400 text-slate-100 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
               >
                 <FileUp className="w-4 h-4 text-sky-400" />
-                Upload Local (.STEP, .STL, .OBJ, .DXF, .3DM)
+                Upload Local (.STP, .IPT, .SVG, .PNG, .JPG, .WEBP, .STL...)
               </button>
 
               <form onSubmit={(e) => void handleIngestUrl(e)} className="space-y-2">

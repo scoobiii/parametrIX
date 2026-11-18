@@ -1,21 +1,26 @@
 import type {
   ApplicationSegment,
   CadComponentPart,
+  CadFeatureOperation,
   CamSettings,
   EvaluatedMesh,
   FeaComparisonReport,
   FeaResult,
   FeaSettings,
+  IsoThreadSpec,
+  MagicPenOperationKind,
   MaterialFinish,
   McpExecutionLog,
   McpToolDefinition,
   NurbsSurfaceData,
   ParametricDesignParams,
   PartEngineeringProfile,
+  ScoobiiiVucProofReport,
   SessionDeliverable,
   ToolpathResult,
   ViewportDisplayState,
 } from '../types/cad';
+import { ISO_METRIC_THREADS } from './scoobiiiVuc';
 import type { OptimizationObjective } from './structuralFea';
 
 const ALL_SEGMENTS: ApplicationSegment[] = [
@@ -63,7 +68,7 @@ export const MCP_TOOLS_CATALOG: McpToolDefinition[] = [
     category: 'Geometria',
     segments: ALL_SEGMENTS,
     description:
-      'Aplica vista explodida estilo GrabCAD no conjunto 3D (explodeFactor de 0.0 a 1.0) separando subcomponentes e nervuras.',
+      'Aplica vista explodida no conjunto 3D (explodeFactor de 0.0 a 1.0) separando subcomponentes e nervuras.',
     inputSchema: {
       type: 'object',
       required: ['explodeFactor'],
@@ -359,6 +364,48 @@ export const MCP_TOOLS_CATALOG: McpToolDefinition[] = [
     },
   },
   {
+    name: 'cad_magic_pen_feature',
+    category: 'Geometria',
+    segments: ALL_SEGMENTS,
+    description:
+      'Aplica operação geométrica paramétrica da Caneta Mágica em ponto/área 3D: recorte/rasgo (slot-cutout), furo (through-hole), parafuso com rosca métrica ISO (threaded-bolt M3..M12), nervura/ressalto (rib-boss) ou chanfro (chamfer-fillet).',
+    inputSchema: {
+      type: 'object',
+      required: ['kind'],
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['slot-cutout', 'through-hole', 'threaded-bolt', 'rib-boss', 'chamfer-fillet'],
+        },
+        point: { type: 'array', items: { type: 'number' }, description: 'Coordenada [x, y, z] em mm.' },
+        normal: { type: 'array', items: { type: 'number' }, description: 'Vetor normal [nx, ny, nz].' },
+        targetComponentId: { type: 'string' },
+        widthMm: { type: 'number', minimum: 2, maximum: 120 },
+        lengthMm: { type: 'number', minimum: 2, maximum: 180 },
+        diameterMm: { type: 'number', minimum: 2, maximum: 60 },
+        depthMm: { type: 'number', minimum: 1, maximum: 80 },
+        threadSpec: { type: 'string', enum: ['M3', 'M4', 'M5', 'M6', 'M8', 'M10', 'M12'] },
+        headStyle: { type: 'string', enum: ['allen', 'hex'] },
+        slotProfile: { type: 'string', enum: ['rectangular', 'oblong'] },
+      },
+    },
+    exampleArgs: {
+      kind: 'threaded-bolt',
+      threadSpec: 'M8',
+      depthMm: 20,
+      headStyle: 'allen',
+    },
+  },
+  {
+    name: 'cad_get_scoobiii_vuc_proof',
+    category: 'FEA / Otimização',
+    segments: ALL_SEGMENTS,
+    description:
+      'Executa e retorna a prova matemática determinística SCOOBIII/VUC (NURBS Cox-de Boor, Jacobiano, Von Mises, Euler-Bernoulli, rosca ISO e conformidade normativa sem chute).',
+    inputSchema: { type: 'object', properties: {} },
+    exampleArgs: {},
+  },
+  {
     name: 'session_get_deliverables_summary',
     category: 'Sessão',
     segments: ALL_SEGMENTS,
@@ -385,6 +432,8 @@ export interface McpRuntimeContext {
   activeSegment: ApplicationSegment;
   partProfile: PartEngineeringProfile;
   components: CadComponentPart[];
+  featureOps: CadFeatureOperation[];
+  scoobiiiProof: ScoobiiiVucProofReport;
   sessionSeconds: number;
   deliverables: SessionDeliverable[];
   onUpdateDesignParams: (patch: Partial<ParametricDesignParams>) => void;
@@ -392,6 +441,7 @@ export interface McpRuntimeContext {
   onUpdateCamSettings: (patch: Partial<CamSettings>) => void;
   onSetSegment: (segment: ApplicationSegment) => void;
   onUpdatePartProfile: (patch: Partial<PartEngineeringProfile>) => void;
+  onAddFeatureOp: (op: Omit<CadFeatureOperation, 'id' | 'createdAt'>) => CadFeatureOperation;
   onRunFea: (patch?: Partial<FeaSettings>, activateHeatmap?: boolean) => FeaResult;
   onGenerateOptimizedGeometry: (
     objective: OptimizationObjective,
@@ -716,6 +766,65 @@ export function executeMcpToolCall(
         registeredPlugin: name,
         executed: true,
       };
+    } else if (toolName === 'cad_magic_pen_feature') {
+      const kind = String(args.kind ?? 'slot-cutout') as MagicPenOperationKind;
+      const rawPt = Array.isArray(args.point) ? args.point.map(Number) : null;
+      const rawNorm = Array.isArray(args.normal) ? args.normal.map(Number) : null;
+      const bbox = ctx.meshData.boundingBox;
+      const fallbackPt: [number, number, number] = [
+        (bbox.min[0] + bbox.max[0]) * 0.5,
+        bbox.max[1],
+        (bbox.min[2] + bbox.max[2]) * 0.5,
+      ];
+      const pt: [number, number, number] =
+        rawPt && rawPt.length >= 3 && rawPt.every(Number.isFinite)
+          ? [rawPt[0], rawPt[1], rawPt[2]]
+          : fallbackPt;
+      const norm: [number, number, number] =
+        rawNorm && rawNorm.length >= 3 && rawNorm.every(Number.isFinite)
+          ? [rawNorm[0], rawNorm[1], rawNorm[2]]
+          : [0, 1, 0];
+      const threadSpec = (typeof args.threadSpec === 'string'
+        ? args.threadSpec.toUpperCase()
+        : 'M6') as IsoThreadSpec;
+      const threadDef = ISO_METRIC_THREADS[threadSpec] ?? ISO_METRIC_THREADS.M6;
+      const widthMm = Number(args.widthMm ?? (kind === 'slot-cutout' ? 12 : threadDef.headDiameterMm));
+      const lengthMm = Number(args.lengthMm ?? (kind === 'slot-cutout' ? 28 : widthMm));
+      const diameterMm = Number(args.diameterMm ?? (kind === 'threaded-bolt' ? threadDef.nominalDiameterMm : 12));
+      const depthMm = Number(args.depthMm ?? (kind === 'threaded-bolt' ? 16 : 8));
+      const label =
+        kind === 'threaded-bolt'
+          ? `Parafuso ${threadDef.spec}×${threadDef.pitchMm} (L=${depthMm}mm)`
+          : kind === 'slot-cutout'
+            ? `Rasgo Paramétrico ${widthMm}×${lengthMm}mm`
+            : kind === 'through-hole'
+              ? `Furo Ø${diameterMm}mm`
+              : kind === 'rib-boss'
+                ? `Nervura/Ressalto ${widthMm}×${lengthMm}mm`
+                : `Chanfro/Filete ${widthMm}mm`;
+
+      const created = ctx.onAddFeatureOp({
+        kind,
+        label,
+        targetComponentId: String(args.targetComponentId ?? ctx.display.selectedComponentId ?? 'shell'),
+        point: pt,
+        normal: norm,
+        widthMm,
+        lengthMm,
+        diameterMm,
+        depthMm,
+        threadSpec: kind === 'threaded-bolt' ? threadDef.spec : undefined,
+        threadPitchMm: kind === 'threaded-bolt' ? threadDef.pitchMm : undefined,
+        headStyle: args.headStyle === 'hex' ? 'hex' : 'allen',
+        slotProfile: args.slotProfile === 'oblong' ? 'oblong' : 'rectangular',
+      });
+      resultPayload = {
+        appliedFeature: created,
+        totalFeaturesCount: ctx.featureOps.length + 1,
+        status: `${label} aplicado na geometria 3D e acoplado ao cálculo FEA / SCOOBIII-VUC.`,
+      };
+    } else if (toolName === 'cad_get_scoobiii_vuc_proof') {
+      resultPayload = ctx.scoobiiiProof;
     } else if (toolName === 'session_get_deliverables_summary') {
       resultPayload = {
         sessionElapsedSeconds: ctx.sessionSeconds,
@@ -728,6 +837,8 @@ export function executeMcpToolCall(
           status: ctx.feaResult.status,
           complianceNote: ctx.feaResult.complianceNote,
         },
+        scoobiiiCertificateId: ctx.scoobiiiProof.certificateId,
+        scoobiiiAllPassed: ctx.scoobiiiProof.allPassed,
         deliverablesCount: ctx.deliverables.length,
         deliverables: ctx.deliverables,
       };

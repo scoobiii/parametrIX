@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Download, Eye, FileCode2, FolderOpen, Layers, Trash2 } from 'lucide-react';
+import { Box, Download, Eye, FileCode2, FolderOpen, Layers, Loader2, Trash2 } from 'lucide-react';
 import {
   SAMPLE_CAD_FILES,
   buildIsolatedEvaluatedMesh,
@@ -8,11 +8,14 @@ import {
   exportOpenNurbs3DM,
   parse3DM,
   parseDXF,
+  parseIPT,
   parseOBJ,
   parseSTEPorIFC,
   parseSTL,
+  parseSVGToCad,
   triggerBlobDownload,
 } from '../kernel/cadFormats';
+import { convertImageToCadModel, isRasterImageFilename } from '../kernel/imageToCad';
 import type {
   EvaluatedMesh,
   ImportedCadModel,
@@ -45,6 +48,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
 }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [importBusy, setImportBusy] = useState<boolean>(false);
   const [exportIsolatedOnly, setExportIsolatedOnly] = useState<boolean>(
     isolationTarget !== 'all'
   );
@@ -53,6 +57,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
     setErrorMsg(null);
     setStatusMsg(null);
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    setImportBusy(true);
     try {
       if (ext === 'stl') {
         const buf = await file.arrayBuffer();
@@ -79,11 +84,35 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
         const model = parseSTEPorIFC(text, file.name, ext === 'ifc' ? 'IFC' : 'STEP');
         onSetImportedModel(model);
         setStatusMsg(model.notes);
+      } else if (ext === 'ipt') {
+        const buf = await file.arrayBuffer();
+        const model = parseIPT(buf, file.name);
+        onSetImportedModel(model);
+        setStatusMsg(model.notes);
+      } else if (ext === 'svg') {
+        const text = await file.text();
+        const model = parseSVGToCad(text, file.name);
+        onSetImportedModel(model);
+        setStatusMsg(model.notes);
+      } else if (isRasterImageFilename(file.name, file.type)) {
+        setStatusMsg('Analisando imagem e convertendo em projeto CAD 3D fidedigno...');
+        const { model } = await convertImageToCadModel({
+          filename: file.name,
+          mimeType: file.type,
+          blobOrBuffer: file,
+        });
+        onSetImportedModel(model);
+        setStatusMsg(model.notes);
       } else {
-        setErrorMsg(`Extensão .${ext} não suportada. Utilize STL, OBJ, DXF, 3DM, STEP ou IFC.`);
+        setErrorMsg(
+          `Extensão .${ext} não suportada. Utilize STL, OBJ, DXF, 3DM, STEP/STP, IFC, IPT, SVG, PNG, JPG ou WEBP.`
+        );
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Falha ao analisar o arquivo CAD.');
+      setStatusMsg(null);
+      setErrorMsg(err instanceof Error ? err.message : 'Falha ao analisar o arquivo CAD ou imagem.');
+    } finally {
+      setImportBusy(false);
     }
   };
 
@@ -132,24 +161,24 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
   };
 
   return (
-    <div className="w-full h-full overflow-y-auto bg-[#0b0e14] p-6 lg:p-8">
-      <div className="max-w-5xl mx-auto space-y-8">
-        <div>
-          <h2 className="font-display text-xl font-semibold text-slate-100">
+    <div className="w-full h-full overflow-y-auto overflow-x-hidden bg-[#0b0e14] p-4 sm:p-6 lg:p-8">
+      <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8 min-w-0">
+        <div className="min-w-0">
+          <h2 className="font-display text-lg sm:text-xl font-semibold text-slate-100 break-words">
             Interoperabilidade CAD & Exportação Industrial
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            Importe referências externas (.STL, .OBJ, .DXF, .3DM, .STEP, .IFC) para abrir automaticamente o Editor 3D GrabCAD com Object Mask e cálculo estrutural.
+          <p className="text-xs sm:text-sm text-slate-400 mt-1 break-words">
+            Importe arquivos CAD (.STL, .OBJ, .DXF, .3DM, .STEP/.STP, .IFC, .IPT, .SVG) ou imagens (.PNG, .JPG, .WEBP) para converter em projeto CAD 3D fidedigno com Object Mask e FEA.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 min-w-0">
           {/* Import Zone */}
-          <div className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-5">
+          <div className="p-4 sm:p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4 sm:space-y-5 min-w-0">
             <div className="flex items-center gap-2">
-              <FolderOpen className="w-4 h-4 text-sky-400" />
+              <FolderOpen className="w-4 h-4 text-sky-400 shrink-0" />
               <h3 className="font-display text-sm font-semibold text-slate-100">
-                Importar Arquivo CAD Externo
+                Importar Arquivo CAD ou Imagem
               </h3>
             </div>
 
@@ -158,19 +187,33 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
               onDrop={(e) => {
                 e.preventDefault();
                 const file = e.dataTransfer.files?.[0];
-                if (file) void handleFileImport(file);
+                if (file && !importBusy) void handleFileImport(file);
               }}
-              className="flex flex-col items-center justify-center p-8 border border-dashed border-sky-400/35 rounded-xl bg-[#0c1017] hover:border-sky-400/70 transition-colors cursor-pointer text-center"
+              className="flex flex-col items-center justify-center p-5 sm:p-8 border border-dashed border-sky-400/35 rounded-xl bg-[#0c1017] hover:border-sky-400/70 transition-colors cursor-pointer text-center min-w-0"
             >
-              <span className="text-sm font-medium text-slate-200">
-                Arraste um arquivo CAD ou clique para selecionar
-              </span>
-              <span className="text-xs text-slate-400 mt-1">
-                Suporte nativo: .STL (Binário/ASCII) · .OBJ · .DXF · .3DM · .STEP · .IFC
-              </span>
+              {importBusy ? (
+                <div className="flex flex-col items-center gap-2 text-sky-300">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-xs sm:text-sm font-medium">
+                    Processando geometria 3D fidedigna...
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <span className="text-xs sm:text-sm font-medium text-slate-200 break-words">
+                    Arraste um arquivo CAD/imagem ou clique para selecionar
+                  </span>
+                  <span className="text-[11px] text-slate-400 mt-1.5 leading-relaxed break-words">
+                    CAD: .STL · .OBJ · .DXF · .3DM · .STEP/.STP · .IFC · .IPT · .SVG
+                    <br />
+                    Imagem → 3D Fidedigno: .PNG · .JPG · .WEBP
+                  </span>
+                </>
+              )}
               <input
                 type="file"
-                accept=".stl,.obj,.dxf,.3dm,.step,.stp,.ifc"
+                disabled={importBusy}
+                accept=".stl,.obj,.dxf,.3dm,.step,.stp,.ifc,.ipt,.svg,.png,.jpg,.jpeg,.webp"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) void handleFileImport(file);
@@ -189,6 +232,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
                   <button
                     key={s.filename}
                     type="button"
+                    disabled={importBusy}
                     onClick={() => handleLoadSample(s)}
                     className="px-3 py-1.5 text-xs bg-[#0c1017] border border-white/10 hover:border-sky-400/50 text-slate-200 rounded-lg transition-colors cursor-pointer"
                   >
@@ -199,22 +243,22 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
             </div>
 
             {errorMsg && (
-              <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-lg text-xs text-rose-300">
+              <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-lg text-xs text-rose-300 break-words">
                 {errorMsg}
               </div>
             )}
             {statusMsg && (
-              <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-xs text-emerald-300">
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-xs text-emerald-300 break-words">
                 {statusMsg}
               </div>
             )}
           </div>
 
           {/* Export Zone */}
-          <div className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-5">
+          <div className="p-4 sm:p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4 sm:space-y-5 min-w-0">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Download className="w-4 h-4 text-amber-400" />
+                <Download className="w-4 h-4 text-amber-400 shrink-0" />
                 <h3 className="font-display text-sm font-semibold text-slate-100">
                   Exportar Modelo Paramétrico Atual
                 </h3>
@@ -257,15 +301,15 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
 
         {/* Active Imported Model Inspector */}
         {importedModel && (
-          <div className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4">
+          <div className="p-4 sm:p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4 min-w-0">
             <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-2.5">
-                <FileCode2 className="w-4 h-4 text-sky-400" />
-                <div>
-                  <h3 className="font-display text-sm font-semibold text-slate-100">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <FileCode2 className="w-4 h-4 text-sky-400 shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="font-display text-sm font-semibold text-slate-100 break-all">
                     Referência Importada: {importedModel.filename}
                   </h3>
-                  <p className="text-xs text-slate-400">{importedModel.notes}</p>
+                  <p className="text-xs text-slate-400 break-words">{importedModel.notes}</p>
                 </div>
               </div>
 
@@ -276,7 +320,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 cursor-pointer"
                 >
                   <Box className="w-3.5 h-3.5" />
-                  Abrir no Editor 3D GrabCAD
+                  Abrir no Editor 3D
                 </button>
                 <button
                   type="button"
@@ -322,7 +366,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
                   {importedModel.boundingBox.size[1].toFixed(1)}
                 </div>
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-slate-500 flex items-center gap-1">
                   <Layers className="w-3 h-3" /> Camadas
                 </div>
@@ -346,15 +390,15 @@ interface ExportCardProps {
 }
 
 const ExportCard: React.FC<ExportCardProps> = ({ title, desc, actionLabel, onClick }) => (
-  <div className="flex items-center justify-between gap-4 p-4 bg-[#0c1017] border border-white/8 rounded-xl">
-    <div className="space-y-0.5">
-      <div className="text-xs font-semibold text-slate-100">{title}</div>
-      <p className="text-[11px] text-slate-400 leading-relaxed">{desc}</p>
+  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 p-4 bg-[#0c1017] border border-white/8 rounded-xl min-w-0">
+    <div className="space-y-0.5 min-w-0">
+      <div className="text-xs font-semibold text-slate-100 break-words">{title}</div>
+      <p className="text-[11px] text-slate-400 leading-relaxed break-words">{desc}</p>
     </div>
     <button
       type="button"
       onClick={onClick}
-      className="px-3.5 py-2 text-xs font-medium bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+      className="px-3.5 py-2 text-xs font-medium bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer"
     >
       {actionLabel}
     </button>

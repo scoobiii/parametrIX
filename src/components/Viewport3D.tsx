@@ -14,33 +14,46 @@ import {
   Circle,
   Eye,
   EyeOff,
+  FileUp,
   HelpCircle,
   List,
+  Loader2,
   Minus,
   Plus,
   Ruler,
+  Send,
+  Sigma,
   SplitSquareHorizontal,
   Trash2,
   Volume2,
+  Wand2,
 } from 'lucide-react';
 import { solveRobot6AxisIK } from '../kernel/camRobotics';
+import { ISO_METRIC_THREADS } from '../kernel/scoobiiiVuc';
 import { stressRatioToRgb } from '../kernel/structuralFea';
+import { ACCEPTED_CAD_EXTENSIONS } from '../kernel/workspacePresets';
 import type {
   CadComponentPart,
+  CadFeatureOperation,
   CameraPreset,
   DisplayMode,
   EvaluatedMesh,
   FeaResult,
   ImportedCadModel,
+  IsoThreadSpec,
   MachineType,
+  MagicPenOperationKind,
   MaterialFinish,
   NurbsSurfaceData,
   PartEngineeringProfile,
+  ScoobiiiVucProofReport,
   ToolpathResult,
   ViewportDisplayState,
 } from '../types/cad';
+import { ScoobiiiVucModal } from './ScoobiiiVucModal';
 
-type GrabCadMenuTab = 'none' | 'models' | 'section' | 'explode' | 'measure';
+type IxMenuTab = 'none' | 'models' | 'section' | 'explode' | 'measure';
+type MagicPenMenuTab = 'slot' | 'hole' | 'bolt' | 'rib' | 'part';
 type MeasureToolMode =
   | 'edge-length'
   | 'edge-radius'
@@ -137,6 +150,17 @@ function extractTriangleEdgeMetrics(hit: THREE.Intersection): {
   };
 }
 
+interface MagicPenPickState {
+  point: [number, number, number];
+  normal: [number, number, number];
+  componentId: string;
+  componentName: string;
+  areaWidthMm: number;
+  areaLengthMm: number;
+  screenX: number;
+  screenY: number;
+}
+
 interface Viewport3DProps {
   surface: NurbsSurfaceData;
   meshData: EvaluatedMesh;
@@ -154,6 +178,23 @@ interface Viewport3DProps {
   partProfile?: PartEngineeringProfile;
   feaResult?: FeaResult;
   beforeFeaResult?: FeaResult | null;
+  featureOps?: CadFeatureOperation[];
+  onAddFeatureOp?: (op: Omit<CadFeatureOperation, 'id' | 'createdAt'>) => void;
+  onRemoveFeatureOp?: (id: string) => void;
+  scoobiiiProof?: ScoobiiiVucProofReport;
+  onUploadFile?: (file: File) => Promise<void>;
+  onExecuteMagicPenMcpPrompt?: (
+    prompt: string,
+    pick: {
+      point: [number, number, number];
+      normal: [number, number, number];
+      componentId: string;
+      componentName: string;
+      widthMm: number;
+      lengthMm: number;
+    }
+  ) => Promise<{ summary: string }>;
+  onExportCertificate?: (filename: string, kind: 'REPORT' | 'MCP', summary: string) => void;
   compact?: boolean;
   onOpenHelp?: () => void;
 }
@@ -555,26 +596,52 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   partProfile,
   feaResult,
   beforeFeaResult = null,
+  featureOps = [],
+  onAddFeatureOp,
+  onRemoveFeatureOp,
+  scoobiiiProof,
+  onUploadFile,
+  onExecuteMagicPenMcpPrompt,
+  onExportCertificate,
   compact = false,
   onOpenHelp,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(
     () => typeof window !== 'undefined' && window.innerWidth < 768
   );
   const [webglLost, setWebglLost] = useState(false);
   const [liveReadout, setLiveReadout] = useState<{ x: number; y: number; z: number } | null>(null);
 
-  // GrabCAD Traditional Navigation Menus & Measurement state
-  const [activeGrabMenu, setActiveGrabMenu] = useState<GrabCadMenuTab>('none');
+  // IX Navigation Menus, Upload & Measurement state
+  const [activeIxMenu, setActiveIxMenu] = useState<IxMenuTab>('none');
   const [viewsMenuOpen, setViewsMenuOpen] = useState(false);
   const [helpPopoverOpen, setHelpPopoverOpen] = useState(false);
+  const [scoobiiiModalOpen, setScoobiiiModalOpen] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [treeExpandedAll, setTreeExpandedAll] = useState(false);
   const [expandedCompIds, setExpandedCompIds] = useState<Record<string, boolean>>({});
   const [measureMode, setMeasureMode] = useState<MeasureToolMode | null>(null);
   const [measureUnit, setMeasureUnit] = useState<MeasureUnit>('mm');
   const [measurements, setMeasurements] = useState<MeasurementRecord[]>([]);
   const [pendingPick, setPendingPick] = useState<PendingMeasurePick | null>(null);
+
+  // Magic Pen ("Caneta Mágica") & Translucent Floating Contextual Menu state
+  const [magicPenActive, setMagicPenActive] = useState(false);
+  const [magicPenPick, setMagicPenPick] = useState<MagicPenPickState | null>(null);
+  const [magicPenTab, setMagicPenTab] = useState<MagicPenMenuTab>('slot');
+  const [penSlotW, setPenSlotW] = useState(12);
+  const [penSlotL, setPenSlotL] = useState(26);
+  const [penDepth, setPenDepth] = useState(8);
+  const [penSlotProfile, setPenSlotProfile] = useState<'rectangular' | 'oblong'>('oblong');
+  const [penHoleD, setPenHoleD] = useState(10);
+  const [penThreadSpec, setPenThreadSpec] = useState<IsoThreadSpec>('M6');
+  const [penHeadStyle, setPenHeadStyle] = useState<'allen' | 'hex'>('allen');
+  const [penMcpPrompt, setPenMcpPrompt] = useState('');
+  const [penMcpBusy, setPenMcpBusy] = useState(false);
+  const [penMcpFeedback, setPenMcpFeedback] = useState<string | null>(null);
 
   const stateRef = useRef({
     simPlaying,
@@ -584,11 +651,16 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     display,
     measureMode,
     pendingPick,
+    magicPenActive,
+    components,
     onSimProgressChange,
     onSelectControlPoint,
     onUpdateDisplay,
     onMeasureHit: (hit: THREE.Intersection) => {
       void hit;
+    },
+    onMagicPenSelect: (pick: MagicPenPickState) => {
+      void pick;
     },
   });
   stateRef.current = {
@@ -599,10 +671,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     display,
     measureMode,
     pendingPick,
+    magicPenActive,
+    components,
     onSimProgressChange,
     onSelectControlPoint,
     onUpdateDisplay,
     onMeasureHit: stateRef.current.onMeasureHit,
+    onMagicPenSelect: stateRef.current.onMagicPenSelect,
   };
 
   const handleMeasureHit = useCallback(
@@ -698,6 +773,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   );
   stateRef.current.onMeasureHit = handleMeasureHit;
 
+  const handleMagicPenSelect = useCallback((pick: MagicPenPickState) => {
+    setMagicPenPick(pick);
+    setPenSlotW(Math.max(4, Math.min(80, Math.round(pick.areaWidthMm))));
+    setPenSlotL(Math.max(6, Math.min(120, Math.round(pick.areaLengthMm))));
+    setPenHoleD(Math.max(4, Math.min(50, Math.round(Math.min(pick.areaWidthMm, pick.areaLengthMm)))));
+    setPenMcpFeedback(null);
+  }, []);
+  stateRef.current.onMagicPenSelect = handleMagicPenSelect;
+
   const sceneRefs = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -717,6 +801,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     importedGroup: THREE.Group;
     importedMeshGroup: THREE.Group;
     importedWireGroup: THREE.Group;
+    featureOpsGroup: THREE.Group;
+    magicPenOverlayGroup: THREE.Group;
     sectionHelperGroup: THREE.Group;
     measureGroup: THREE.Group;
     spindleGroup: THREE.Group;
@@ -894,6 +980,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const importedMeshGroup = new THREE.Group();
     const importedWireGroup = new THREE.Group();
     importedGroup.add(importedMeshGroup, importedWireGroup);
+    const featureOpsGroup = new THREE.Group();
 
     assemblyRoot.add(
       nurbsMesh,
@@ -902,7 +989,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       cageGroup,
       bimGroup,
       toolpathGroup,
-      importedGroup
+      importedGroup,
+      featureOpsGroup
     );
 
     const spindleGroup = buildSpindleGroup();
@@ -911,7 +999,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     robotRig.root.visible = false;
     scene.add(spindleGroup, robotRig.root);
 
-    // Visual GrabCAD Section Plane Helper (green frame + translucent cut sheet)
+    // Visual IX Section Plane Helper (green frame + translucent cut sheet)
     const sectionHelperGroup = new THREE.Group();
     sectionHelperGroup.visible = false;
     const secPlaneGeo = new THREE.PlaneGeometry(1, 1);
@@ -933,7 +1021,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     scene.add(sectionHelperGroup);
 
     const measureGroup = new THREE.Group();
-    scene.add(measureGroup);
+    const magicPenOverlayGroup = new THREE.Group();
+    scene.add(measureGroup, magicPenOverlayGroup);
 
     const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 5000);
 
@@ -1148,7 +1237,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     transformControls.addEventListener('change', onTransformChange);
     transformControls.addEventListener('mouseUp', onTransformMouseUp);
 
-    // Raycasters: Layer 1 for NURBS control points, Layer 0 for component selection
+    // Raycasters: Layer 1 for NURBS control points, Layer 0 for component & Magic Pen selection
     const cpRaycaster = new THREE.Raycaster();
     cpRaycaster.layers.set(1);
     const compRaycaster = new THREE.Raycaster();
@@ -1156,18 +1245,202 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const pointer = new THREE.Vector2();
     let downX = 0;
     let downY = 0;
+    let magicDragStart: {
+      point: THREE.Vector3;
+      normal: THREE.Vector3;
+      componentId: string;
+      componentName: string;
+      plane: THREE.Plane;
+      lastPoint: THREE.Vector3;
+    } | null = null;
+
+    const getVisibleRaycastTargets = (refs: NonNullable<typeof sceneRefs.current>): THREE.Object3D[] => {
+      const targets: THREE.Object3D[] = [];
+      if (refs.importedGroup.visible) targets.push(...refs.importedMeshGroup.children);
+      if (refs.bimGroup.visible) targets.push(...refs.bimGroup.children);
+      if (refs.nurbsMesh.visible) targets.push(refs.nurbsMesh);
+      return targets;
+    };
+
+    const drawLiveMagicRegion = (
+      refs: NonNullable<typeof sceneRefs.current>,
+      center: THREE.Vector3,
+      normal: THREE.Vector3,
+      w: number,
+      l: number
+    ) => {
+      while (refs.magicPenOverlayGroup.children.length > 0) {
+        const ch = refs.magicPenOverlayGroup.children.pop() as THREE.Mesh | THREE.Line;
+        ch.geometry.dispose();
+        (ch.material as THREE.Material).dispose();
+      }
+      const nVec = normal.clone().normalize();
+      const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), nVec);
+
+      const hw = Math.max(4, w * 0.5);
+      const hl = Math.max(4, l * 0.5);
+      const pts = [
+        new THREE.Vector3(-hw, 0.8, -hl),
+        new THREE.Vector3(hw, 0.8, -hl),
+        new THREE.Vector3(hw, 0.8, hl),
+        new THREE.Vector3(-hw, 0.8, hl),
+        new THREE.Vector3(-hw, 0.8, -hl),
+      ].map((p) => p.applyQuaternion(quat).add(center));
+
+      const rectGeo = new THREE.BufferGeometry().setFromPoints(pts);
+      const rectLine = new THREE.Line(
+        rectGeo,
+        new THREE.LineBasicMaterial({ color: 0x38bdf8, depthTest: false })
+      );
+      rectLine.renderOrder = 999;
+
+      const pinMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(2.4, 14, 14),
+        new THREE.MeshBasicMaterial({ color: 0xfacc15, depthTest: false })
+      );
+      pinMesh.position.copy(center).addScaledVector(nVec, 1.2);
+      pinMesh.renderOrder = 999;
+
+      const areaPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(hw * 2, hl * 2),
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.2,
+          side: THREE.DoubleSide,
+          depthTest: false,
+        })
+      );
+      areaPlane.position.copy(center).addScaledVector(nVec, 0.7);
+      areaPlane.quaternion.copy(quat);
+      areaPlane.rotateX(-Math.PI / 2);
+      areaPlane.renderOrder = 998;
+
+      refs.magicPenOverlayGroup.add(rectLine, pinMesh, areaPlane);
+      refs.requestRender();
+    };
 
     const handlePointerDown = (e: PointerEvent) => {
       downX = e.clientX;
       downY = e.clientY;
+
+      const refs = sceneRefs.current;
+      if (!refs || !stateRef.current.magicPenActive) return;
+
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      compRaycaster.setFromCamera(pointer, camera);
+      const hits = compRaycaster.intersectObjects(getVisibleRaycastTargets(refs), false);
+      const visibleHit = hits.find((h) => h.object.visible);
+      if (visibleHit) {
+        const normal = new THREE.Vector3(0, 1, 0);
+        if (visibleHit.face) {
+          normal
+            .copy(visibleHit.face.normal)
+            .transformDirection(visibleHit.object.matrixWorld)
+            .normalize();
+        }
+        const cid = String(visibleHit.object.userData?.componentId || 'shell');
+        const matched = stateRef.current.components.find((c) => c.id === cid);
+        const cname = matched?.name || String(visibleHit.object.userData?.name || 'Casca Principal');
+        const hitPt = visibleHit.point.clone();
+        const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, hitPt);
+
+        magicDragStart = {
+          point: hitPt.clone(),
+          normal: normal.clone(),
+          componentId: cid,
+          componentName: cname,
+          plane,
+          lastPoint: hitPt.clone(),
+        };
+        controls.enabled = false;
+        drawLiveMagicRegion(refs, hitPt, normal, 12, 18);
+      }
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const refs = sceneRefs.current;
+      if (!refs || !magicDragStart) return;
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      compRaycaster.setFromCamera(pointer, camera);
+
+      const hits = compRaycaster.intersectObjects(getVisibleRaycastTargets(refs), false);
+      const visibleHit = hits.find((h) => h.object.visible);
+      const endPt = new THREE.Vector3();
+      if (visibleHit) {
+        endPt.copy(visibleHit.point);
+      } else {
+        compRaycaster.ray.intersectPlane(magicDragStart.plane, endPt);
+      }
+      if (endPt.lengthSq() > 0 || visibleHit) {
+        magicDragStart.lastPoint.copy(endPt);
+        const mid = magicDragStart.point.clone().add(endPt).multiplyScalar(0.5);
+        const dx = Math.abs(endPt.x - magicDragStart.point.x);
+        const dz = Math.abs(endPt.z - magicDragStart.point.z);
+        const span = magicDragStart.point.distanceTo(endPt);
+        const w = Math.max(10, Math.min(90, Math.max(dx, span * 0.7)));
+        const l = Math.max(12, Math.min(120, Math.max(dz, span * 0.85)));
+        drawLiveMagicRegion(refs, mid, magicDragStart.normal, w, l);
+      }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
+      const refs = sceneRefs.current;
+      if (magicDragStart && refs) {
+        controls.enabled = true;
+        const dragDist = Math.hypot(e.clientX - downX, e.clientY - downY);
+        const endPt = magicDragStart.lastPoint;
+        const centerPt =
+          dragDist > 8
+            ? magicDragStart.point.clone().add(endPt).multiplyScalar(0.5)
+            : magicDragStart.point.clone();
+        const span3d = magicDragStart.point.distanceTo(endPt);
+        const w = dragDist > 8 ? Math.max(8, Math.min(90, Math.round(Math.max(Math.abs(endPt.x - magicDragStart.point.x), span3d * 0.7)))) : 12;
+        const l = dragDist > 8 ? Math.max(10, Math.min(120, Math.round(Math.max(Math.abs(endPt.z - magicDragStart.point.z), span3d * 0.9)))) : 24;
+
+        // Convert world center/normal to assemblyRoot local coordinates so features stay attached if assembly rotates
+        const localCenter = refs.assemblyRoot.worldToLocal(centerPt.clone());
+        const invRot = new THREE.Quaternion();
+        refs.assemblyRoot.getWorldQuaternion(invRot).invert();
+        const localNormal = magicDragStart.normal.clone().applyQuaternion(invRot).normalize();
+
+        drawLiveMagicRegion(refs, centerPt, magicDragStart.normal, w, l);
+
+        const rect = canvas.getBoundingClientRect();
+        const proj = centerPt.clone().project(camera);
+        const sx = Math.max(16, Math.min(rect.width - 336, (proj.x * 0.5 + 0.5) * rect.width));
+        const sy = Math.max(54, Math.min(rect.height - 360, (-proj.y * 0.5 + 0.5) * rect.height));
+
+        stateRef.current.onMagicPenSelect({
+          point: [
+            Number(localCenter.x.toFixed(2)),
+            Number(localCenter.y.toFixed(2)),
+            Number(localCenter.z.toFixed(2)),
+          ],
+          normal: [
+            Number(localNormal.x.toFixed(3)),
+            Number(localNormal.y.toFixed(3)),
+            Number(localNormal.z.toFixed(3)),
+          ],
+          componentId: magicDragStart.componentId,
+          componentName: magicDragStart.componentName,
+          areaWidthMm: w,
+          areaLengthMm: l,
+          screenX: sx,
+          screenY: sy,
+        });
+        magicDragStart = null;
+        return;
+      }
+
       if (transformControls.dragging) return;
       const moveDist = Math.hypot(e.clientX - downX, e.clientY - downY);
       if (moveDist > 6) return; // Was orbit drag, not a click
 
-      const refs = sceneRefs.current;
       if (!refs) return;
       const rect = canvas.getBoundingClientRect();
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -1184,12 +1457,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       }
 
       compRaycaster.setFromCamera(pointer, camera);
-      const targets: THREE.Object3D[] = [];
-      if (refs.importedGroup.visible) targets.push(...refs.importedMeshGroup.children);
-      if (refs.bimGroup.visible) targets.push(...refs.bimGroup.children);
-      if (refs.nurbsMesh.visible) targets.push(refs.nurbsMesh);
-
-      const hits = compRaycaster.intersectObjects(targets, false);
+      const hits = compRaycaster.intersectObjects(getVisibleRaycastTargets(refs), false);
       const visibleHit = hits.find((h) => h.object.visible);
       if (visibleHit) {
         if (stateRef.current.measureMode) {
@@ -1204,6 +1472,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     };
 
     canvas.addEventListener('pointerdown', handlePointerDown);
+    canvas.addEventListener('pointermove', handlePointerMove);
     canvas.addEventListener('pointerup', handlePointerUp);
 
     const resizeObserver = new ResizeObserver(() => {
@@ -1237,6 +1506,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       importedGroup,
       importedMeshGroup,
       importedWireGroup,
+      featureOpsGroup,
+      magicPenOverlayGroup,
       sectionHelperGroup,
       measureGroup,
       spindleGroup,
@@ -1267,6 +1538,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       transformControls.removeEventListener('mouseUp', onTransformMouseUp);
       transformControls.dispose();
       canvas.removeEventListener('pointerdown', handlePointerDown);
+      canvas.removeEventListener('pointermove', handlePointerMove);
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('webglcontextlost', onContextLost);
       canvas.removeEventListener('webglcontextrestored', onContextRestored);
@@ -1277,6 +1549,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       (secPlaneBorder.material as THREE.Material).dispose();
       while (measureGroup.children.length > 0) {
         const ch = measureGroup.children.pop() as THREE.Mesh | THREE.Line;
+        ch.geometry.dispose();
+        (ch.material as THREE.Material).dispose();
+      }
+      while (magicPenOverlayGroup.children.length > 0) {
+        const ch = magicPenOverlayGroup.children.pop() as THREE.Mesh | THREE.Line;
         ch.geometry.dispose();
         (ch.material as THREE.Material).dispose();
       }
@@ -2011,6 +2288,201 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     refs.requestRender();
   }, [measurements, pendingPick, importedModel]);
 
+  // Clear Magic Pen 3D overlay when selection closes or pen turns off
+  useEffect(() => {
+    const refs = sceneRefs.current;
+    if (!refs) return;
+    if (!magicPenPick || !magicPenActive) {
+      while (refs.magicPenOverlayGroup.children.length > 0) {
+        const ch = refs.magicPenOverlayGroup.children.pop() as THREE.Mesh | THREE.Line;
+        ch.geometry.dispose();
+        (ch.material as THREE.Material).dispose();
+      }
+      refs.requestRender();
+    }
+  }, [magicPenPick, magicPenActive]);
+
+  // Render Parametric Magic Pen 3D Features (Slots, Through-Holes, ISO Threaded Bolts, Ribs, Chamfers)
+  useEffect(() => {
+    const refs = sceneRefs.current;
+    if (!refs) return;
+
+    const disposeGroupTree = (grp: THREE.Object3D) => {
+      while (grp.children.length > 0) {
+        const ch = grp.children.pop()!;
+        disposeGroupTree(ch);
+        const mesh = ch as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) {
+          if (Array.isArray(mesh.material)) mesh.material.forEach((m) => m.dispose());
+          else mesh.material.dispose();
+        }
+      }
+    };
+    disposeGroupTree(refs.featureOpsGroup);
+
+    const activeClip = display.sectionEnabled ? [refs.clipPlane] : [];
+    const steelMat = new THREE.MeshPhysicalMaterial({
+      color: 0xe2e8f0,
+      metalness: 0.92,
+      roughness: 0.18,
+      clearcoat: 0.25,
+      clippingPlanes: activeClip,
+    });
+    const darkThreadMat = new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      metalness: 0.85,
+      roughness: 0.32,
+      clippingPlanes: activeClip,
+    });
+    const pocketMat = new THREE.MeshStandardMaterial({
+      color: 0x05070b,
+      metalness: 0.35,
+      roughness: 0.85,
+      clippingPlanes: activeClip,
+    });
+    const rimMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0c4a6e,
+      metalness: 0.7,
+      roughness: 0.25,
+      clippingPlanes: activeClip,
+    });
+    const gussetMat = new THREE.MeshPhysicalMaterial({
+      color: 0x94a3b8,
+      metalness: 0.86,
+      roughness: 0.24,
+      clippingPlanes: activeClip,
+    });
+
+    for (const op of featureOps) {
+      const container = new THREE.Group();
+      container.position.set(op.point[0], op.point[1], op.point[2]);
+      _vec3A.set(op.normal[0], op.normal[1], op.normal[2]).normalize();
+      if (_vec3A.lengthSq() < 0.01) _vec3A.set(0, 1, 0);
+      _quatA.setFromUnitVectors(_upVec, _vec3A);
+      container.quaternion.copy(_quatA);
+
+      if (op.kind === 'slot-cutout') {
+        const w = Math.max(3, op.widthMm);
+        const l = Math.max(4, op.lengthMm);
+        const d = Math.max(2, op.depthMm);
+
+        const pocket = new THREE.Mesh(new THREE.BoxGeometry(w, d, l), pocketMat);
+        pocket.position.y = -d * 0.45 + 0.4;
+        container.add(pocket);
+
+        const rimGeo = new THREE.BoxGeometry(w + 1.8, 0.8, l + 1.8);
+        const rimEdges = new THREE.LineSegments(
+          new THREE.EdgesGeometry(rimGeo),
+          new THREE.LineBasicMaterial({ color: 0x38bdf8 })
+        );
+        rimEdges.position.y = 0.6;
+        rimGeo.dispose();
+        container.add(rimEdges);
+
+        const collar = new THREE.Mesh(
+          new THREE.BoxGeometry(w + 2.4, 0.5, l + 2.4),
+          rimMat
+        );
+        collar.position.y = 0.35;
+        collar.scale.set(1, 1, 0.12);
+        container.add(collar);
+      } else if (op.kind === 'through-hole') {
+        const r = Math.max(1.5, op.diameterMm * 0.5);
+        const d = Math.max(2, op.depthMm);
+        const bore = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d, 24), pocketMat);
+        bore.position.y = -d * 0.45 + 0.4;
+        container.add(bore);
+
+        const chamfer = new THREE.Mesh(
+          new THREE.TorusGeometry(r + 0.6, 0.55, 8, 28),
+          rimMat
+        );
+        chamfer.rotation.x = Math.PI / 2;
+        chamfer.position.y = 0.5;
+        container.add(chamfer);
+      } else if (op.kind === 'threaded-bolt') {
+        const spec = ISO_METRIC_THREADS[op.threadSpec ?? 'M6'] ?? ISO_METRIC_THREADS.M6;
+        const r = spec.nominalDiameterMm * 0.5;
+        const headR = spec.headDiameterMm * 0.5;
+        const headH = spec.headHeightMm;
+        const pitch = spec.pitchMm;
+        const shaftLen = Math.max(6, op.depthMm);
+
+        const washer = new THREE.Mesh(
+          new THREE.CylinderGeometry(headR * 1.24, headR * 1.24, 1.1, 24),
+          steelMat
+        );
+        washer.position.y = 0.55;
+        washer.castShadow = true;
+        container.add(washer);
+
+        const headSegs = op.headStyle === 'hex' ? 6 : 24;
+        const head = new THREE.Mesh(
+          new THREE.CylinderGeometry(headR, headR, headH, headSegs),
+          steelMat
+        );
+        head.position.y = 1.1 + headH * 0.5;
+        head.castShadow = true;
+        container.add(head);
+
+        if (op.headStyle !== 'hex') {
+          const hexSocket = new THREE.Mesh(
+            new THREE.CylinderGeometry(headR * 0.52, headR * 0.52, headH * 0.55, 6),
+            pocketMat
+          );
+          hexSocket.position.y = 1.1 + headH * 0.8;
+          container.add(hexSocket);
+        }
+
+        const shank = new THREE.Mesh(
+          new THREE.CylinderGeometry(r * 0.84, r * 0.84, shaftLen, 18),
+          darkThreadMat
+        );
+        shank.position.y = -shaftLen * 0.5;
+        container.add(shank);
+
+        // Helical/pitched ISO thread ridges
+        const ringCount = Math.min(18, Math.max(3, Math.floor(shaftLen / Math.max(0.6, pitch))));
+        for (let t = 0; t < ringCount; t++) {
+          const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(r * 0.96, Math.max(0.22, pitch * 0.28), 6, 18),
+            steelMat
+          );
+          ring.rotation.x = Math.PI / 2;
+          ring.position.y = -1.2 - t * (shaftLen / ringCount);
+          container.add(ring);
+        }
+      } else if (op.kind === 'rib-boss') {
+        const w = Math.max(3, op.widthMm);
+        const l = Math.max(6, op.lengthMm);
+        const h = Math.max(3, op.depthMm);
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(w, h, l), gussetMat);
+        rib.position.y = h * 0.5;
+        rib.castShadow = true;
+        container.add(rib);
+      } else {
+        const c = Math.max(2, op.widthMm);
+        const cone = new THREE.Mesh(
+          new THREE.CylinderGeometry(c * 0.7, c, 2.5, 24),
+          rimMat
+        );
+        cone.position.y = 1.2;
+        container.add(cone);
+      }
+
+      refs.featureOpsGroup.add(container);
+    }
+
+    steelMat.dispose();
+    darkThreadMat.dispose();
+    pocketMat.dispose();
+    rimMat.dispose();
+    gussetMat.dispose();
+    refs.requestRender();
+  }, [featureOps, display.sectionEnabled, display.sectionRatio, display.sectionAxis, display.sectionFlipped]);
+
   // Trigger camera preset smooth transition (all 7 GrabCAD Standard Views + perspective)
   useEffect(() => {
     const refs = sceneRefs.current;
@@ -2136,10 +2608,123 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     });
   };
 
-  const toggleGrabMenu = (tab: GrabCadMenuTab) => {
+  const toggleIxMenu = (tab: IxMenuTab) => {
     setViewsMenuOpen(false);
     setHelpPopoverOpen(false);
-    setActiveGrabMenu((prev) => (prev === tab ? 'none' : tab));
+    setActiveIxMenu((prev) => (prev === tab ? 'none' : tab));
+  };
+
+  const handleIxFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !onUploadFile) return;
+    setUploadError(null);
+    setUploadBusy(true);
+    try {
+      await onUploadFile(file);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Falha ao importar arquivo.');
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
+  const handleApplyMagicPenFeature = (kind: MagicPenOperationKind) => {
+    if (!magicPenPick || !onAddFeatureOp) return;
+    if (kind === 'slot-cutout') {
+      onAddFeatureOp({
+        kind,
+        label: `Rasgo ${penSlotW}×${penSlotL}mm`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: penSlotW,
+        lengthMm: penSlotL,
+        diameterMm: penSlotW,
+        depthMm: penDepth,
+        slotProfile: penSlotProfile,
+      });
+      setPenMcpFeedback(`Rasgo paramétrico ${penSlotW}×${penSlotL}×${penDepth}mm aplicado!`);
+    } else if (kind === 'through-hole') {
+      onAddFeatureOp({
+        kind,
+        label: `Furo Ø${penHoleD}mm`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: penHoleD,
+        lengthMm: penHoleD,
+        diameterMm: penHoleD,
+        depthMm: penDepth,
+      });
+      setPenMcpFeedback(`Furo Ø${penHoleD}mm (prof. ${penDepth}mm) aplicado!`);
+    } else if (kind === 'threaded-bolt') {
+      const tDef = ISO_METRIC_THREADS[penThreadSpec];
+      onAddFeatureOp({
+        kind,
+        label: `Parafuso ${tDef.spec}×${tDef.pitchMm} (L=${penDepth}mm)`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: tDef.headDiameterMm,
+        lengthMm: tDef.headDiameterMm,
+        diameterMm: tDef.nominalDiameterMm,
+        depthMm: Math.max(tDef.nominalDiameterMm * 1.5, penDepth),
+        threadSpec: tDef.spec,
+        threadPitchMm: tDef.pitchMm,
+        headStyle: penHeadStyle,
+      });
+      setPenMcpFeedback(`Parafuso com rosca ${tDef.spec}×${tDef.pitchMm}mm inserido!`);
+    } else if (kind === 'rib-boss') {
+      onAddFeatureOp({
+        kind,
+        label: `Nervura/Ressalto ${penSlotW}×${penSlotL}mm`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: Math.max(4, penSlotW),
+        lengthMm: Math.max(8, penSlotL),
+        diameterMm: penSlotW,
+        depthMm: Math.max(4, penDepth),
+      });
+      setPenMcpFeedback(`Nervura/Ressalto de reforço aplicado!`);
+    } else {
+      onAddFeatureOp({
+        kind: 'chamfer-fillet',
+        label: `Chanfro/Filete ${Math.max(2, Math.round(penSlotW * 0.4))}mm`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: Math.max(2, Math.round(penSlotW * 0.4)),
+        lengthMm: penSlotL,
+        diameterMm: penSlotW,
+        depthMm: 3,
+      });
+      setPenMcpFeedback('Chanfro local aplicado!');
+    }
+  };
+
+  const handleRunMagicPenMcp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!magicPenPick || !penMcpPrompt.trim() || !onExecuteMagicPenMcpPrompt || penMcpBusy) return;
+    setPenMcpBusy(true);
+    setPenMcpFeedback(null);
+    try {
+      const res = await onExecuteMagicPenMcpPrompt(penMcpPrompt.trim(), {
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        componentId: magicPenPick.componentId,
+        componentName: magicPenPick.componentName,
+        widthMm: magicPenPick.areaWidthMm,
+        lengthMm: magicPenPick.areaLengthMm,
+      });
+      setPenMcpFeedback(res.summary);
+      setPenMcpPrompt('');
+    } catch (err) {
+      setPenMcpFeedback(err instanceof Error ? err.message : 'Erro ao executar comando MCP.');
+    } finally {
+      setPenMcpBusy(false);
+    }
   };
 
   const measureModesList: { id: MeasureToolMode; label: string; hint: string }[] = [
@@ -2163,11 +2748,19 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
   return (
     <div
-      className={`relative w-full h-full overflow-hidden bg-[#14171c] select-none ${
-        measureMode ? 'cursor-crosshair' : ''
+      className={`relative w-full h-full overflow-hidden bg-[#10141c] select-none ${
+        measureMode || magicPenActive ? 'cursor-crosshair' : ''
       }`}
     >
       <div ref={mountRef} className="w-full h-full" />
+
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept={ACCEPTED_CAD_EXTENSIONS}
+        onChange={handleIxFileSelected}
+        className="hidden"
+      />
 
       {webglLost && (
         <div className="absolute inset-0 flex items-center justify-center bg-[#0c1017]/95 text-slate-200 z-30">
@@ -2180,69 +2773,150 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         </div>
       )}
 
-      {/* GrabCAD Traditional Top 4-Icon Viewer Bar */}
+      {/* Menu IX Top Viewer Bar */}
       {!compact && (
         <div className="absolute top-0 left-0 right-0 z-20 flex flex-col items-center pointer-events-none">
-          <div className="w-full h-11 bg-[#1f232b]/95 border-b border-white/10 flex items-center justify-center gap-1 sm:gap-2 px-2 pointer-events-auto shadow-md">
+          <div className="w-full h-11 bg-[#161b24]/95 border-b border-white/10 flex items-center justify-between sm:justify-center gap-0.5 sm:gap-1.5 px-2 overflow-x-auto pointer-events-auto shadow-md">
+            <span className="font-display text-xs font-extrabold tracking-widest text-rose-400 px-2 py-0.5 rounded bg-rose-500/12 border border-rose-500/30 shrink-0 mr-1">
+              IX
+            </span>
+
+            {onUploadFile && (
+              <button
+                type="button"
+                disabled={uploadBusy}
+                title="Subir Arquivo CAD (.STP, .IPT, .SVG, .STL, .DXF, .OBJ) ou Imagem (.PNG, .JPG, .WEBP)"
+                onClick={() => uploadInputRef.current?.click()}
+                className="h-8 px-2.5 sm:px-3 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 transition-colors shrink-0 cursor-pointer disabled:opacity-60"
+              >
+                {uploadBusy ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <FileUp className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">{uploadBusy ? 'Importando...' : 'Subir Arquivo'}</span>
+              </button>
+            )}
+
             <button
               type="button"
               title="Árvore de Modelos / Subcomponentes"
-              onClick={() => toggleGrabMenu('models')}
-              className={`h-full px-4 sm:px-6 flex items-center gap-2 text-xs font-medium transition-colors cursor-pointer ${
-                activeGrabMenu === 'models'
+              onClick={() => toggleIxMenu('models')}
+              className={`h-full px-2.5 sm:px-4 flex items-center gap-1.5 text-xs font-medium transition-colors shrink-0 cursor-pointer ${
+                activeIxMenu === 'models'
                   ? 'bg-red-600 text-white'
                   : 'text-slate-200 hover:bg-white/8'
               }`}
             >
-              <List className="w-5 h-5" />
+              <List className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden md:inline">Modelos</span>
             </button>
 
             <button
               type="button"
               title="Plano de Corte em Seção (X / Y / Z)"
-              onClick={() => toggleGrabMenu('section')}
-              className={`h-full px-4 sm:px-6 flex items-center gap-2 text-xs font-medium transition-colors cursor-pointer ${
-                activeGrabMenu === 'section' || display.sectionEnabled
+              onClick={() => toggleIxMenu('section')}
+              className={`h-full px-2.5 sm:px-4 flex items-center gap-1.5 text-xs font-medium transition-colors shrink-0 cursor-pointer ${
+                activeIxMenu === 'section' || display.sectionEnabled
                   ? 'bg-red-600 text-white'
                   : 'text-slate-200 hover:bg-white/8'
               }`}
             >
-              <SplitSquareHorizontal className="w-5 h-5" />
+              <SplitSquareHorizontal className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden md:inline">Seção</span>
             </button>
 
             <button
               type="button"
               title="Explodir Conjunto de Peças"
-              onClick={() => toggleGrabMenu('explode')}
-              className={`h-full px-4 sm:px-6 flex items-center gap-2 text-xs font-medium transition-colors cursor-pointer ${
-                activeGrabMenu === 'explode' || display.explodeFactor > 0.01
+              onClick={() => toggleIxMenu('explode')}
+              className={`h-full px-2.5 sm:px-4 flex items-center gap-1.5 text-xs font-medium transition-colors shrink-0 cursor-pointer ${
+                activeIxMenu === 'explode' || display.explodeFactor > 0.01
                   ? 'bg-red-600 text-white'
                   : 'text-slate-200 hover:bg-white/8'
               }`}
             >
-              <Box className="w-5 h-5" />
+              <Box className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden md:inline">Explodir</span>
             </button>
 
             <button
               type="button"
               title="Medir Arestas, Raios, Diâmetros, Distâncias e Ângulos"
-              onClick={() => toggleGrabMenu('measure')}
-              className={`h-full px-4 sm:px-6 flex items-center gap-2 text-xs font-medium transition-colors cursor-pointer ${
-                activeGrabMenu === 'measure' || Boolean(measureMode)
+              onClick={() => toggleIxMenu('measure')}
+              className={`h-full px-2.5 sm:px-4 flex items-center gap-1.5 text-xs font-medium transition-colors shrink-0 cursor-pointer ${
+                activeIxMenu === 'measure' || Boolean(measureMode)
                   ? 'bg-red-600 text-white'
                   : 'text-slate-200 hover:bg-white/8'
               }`}
             >
-              <Ruler className="w-5 h-5" />
+              <Ruler className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden md:inline">Medir</span>
             </button>
+
+            <button
+              type="button"
+              title="Caneta Mágica: Clique ou arraste na peça 3D para marcar ponto/área e recortar, roscar parafuso ou enviar comando MCP"
+              onClick={() => {
+                setMeasureMode(null);
+                setActiveIxMenu('none');
+                setMagicPenActive((prev) => {
+                  const next = !prev;
+                  if (!next) setMagicPenPick(null);
+                  return next;
+                });
+              }}
+              className={`h-8 px-2.5 sm:px-3 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold border transition-colors shrink-0 cursor-pointer ${
+                magicPenActive
+                  ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-sm'
+                  : 'bg-[#0e131c] border-amber-400/35 text-amber-200 hover:border-amber-400'
+              }`}
+            >
+              <Wand2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Caneta Mágica</span>
+            </button>
+
+            {scoobiiiProof && (
+              <button
+                type="button"
+                title="SCOOBIII / VUC — Prova Matemática Paramétrica NURBS, BIM, Física e Normas"
+                onClick={() => setScoobiiiModalOpen(true)}
+                className={`h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold border transition-colors shrink-0 cursor-pointer ${
+                  scoobiiiProof.allPassed
+                    ? 'bg-emerald-500/15 border-emerald-400/45 text-emerald-200 hover:bg-emerald-500/25'
+                    : 'bg-amber-500/15 border-amber-400/45 text-amber-200 hover:bg-amber-500/25'
+                }`}
+              >
+                <Sigma className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">SCOOBIII/VUC</span>
+                <span className="font-mono-tabular text-[10px]">
+                  {scoobiiiProof.allPassed ? 'OK' : '!'}
+                </span>
+              </button>
+            )}
           </div>
 
-          {/* GrabCAD Popover 1: Models Tree Browser */}
-          {activeGrabMenu === 'models' && (
+          {magicPenActive && !magicPenPick && (
+            <div className="mt-2 px-3 py-1.5 rounded-lg bg-[#0b0e14]/92 border border-amber-400/45 text-[11px] text-amber-200 shadow-lg pointer-events-auto">
+              Caneta Mágica ativa: clique em um ponto ou arraste sobre uma área da peça 3D para recortar, adicionar parafuso com rosca ou acionar MCP.
+            </div>
+          )}
+
+          {uploadError && (
+            <div className="mt-2 px-3 py-1.5 rounded-lg bg-rose-950/95 border border-rose-400/50 text-[11px] text-rose-200 shadow-lg pointer-events-auto flex items-center gap-2">
+              <span>{uploadError}</span>
+              <button
+                type="button"
+                onClick={() => setUploadError(null)}
+                className="text-rose-300 hover:text-white cursor-pointer"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          {/* IX Popover 1: Models Tree Browser */}
+          {activeIxMenu === 'models' && (
             <div className="mt-2 ml-3 self-start sm:self-center sm:ml-0 w-[calc(100%-104px)] sm:w-80 max-h-[60vh] overflow-y-auto bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 pointer-events-auto">
               <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10">
                 <div className="flex items-center gap-2">
@@ -2279,7 +2953,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setActiveGrabMenu('none')}
+                  onClick={() => setActiveIxMenu('none')}
                   className="text-slate-400 hover:text-white px-1 cursor-pointer"
                 >
                   ×
@@ -2369,14 +3043,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             </div>
           )}
 
-          {/* GrabCAD Popover 2: Section Plane Orientations (X | Y | Z + Flip + Slider) */}
-          {activeGrabMenu === 'section' && (
+          {/* IX Popover 2: Section Plane Orientations (X | Y | Z + Flip + Slider) */}
+          {activeIxMenu === 'section' && (
             <div className="mt-2 w-72 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2.5 pointer-events-auto">
               <div className="flex items-center justify-between">
                 <span className="font-medium text-slate-200">Orientação do plano de corte</span>
                 <button
                   type="button"
-                  onClick={() => setActiveGrabMenu('none')}
+                  onClick={() => setActiveIxMenu('none')}
                   className="text-slate-400 hover:text-white cursor-pointer"
                 >
                   ×
@@ -2465,8 +3139,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             </div>
           )}
 
-          {/* GrabCAD Popover 3: Explode Slider */}
-          {activeGrabMenu === 'explode' && (
+          {/* IX Popover 3: Explode Slider */}
+          {activeIxMenu === 'explode' && (
             <div className="mt-2 w-72 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl px-3.5 py-2.5 text-xs text-slate-200 pointer-events-auto">
               <div className="flex items-center gap-2.5">
                 <button
@@ -2512,14 +3186,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             </div>
           )}
 
-          {/* GrabCAD Popover 4: Measure Tools (6-grid + Clear + Unit Selector) */}
-          {activeGrabMenu === 'measure' && (
+          {/* IX Popover 4: Measure Tools (6-grid + Clear + Unit Selector) */}
+          {activeIxMenu === 'measure' && (
             <div className="mt-2 w-[calc(100%-104px)] sm:w-80 max-h-[68vh] overflow-y-auto bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2.5 pointer-events-auto">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-slate-100">Ferramenta de Medição 3D</span>
                 <button
                   type="button"
-                  onClick={() => setActiveGrabMenu('none')}
+                  onClick={() => setActiveIxMenu('none')}
                   className="text-slate-400 hover:text-white cursor-pointer"
                 >
                   ×
@@ -2734,13 +3408,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         </div>
       )}
 
-      {/* Bottom-Right GrabCAD Quick Help (?) FAB */}
+      {/* Bottom-Right IX Quick Help (?) FAB */}
       {!compact && (
         <div className="absolute bottom-14 sm:bottom-4 right-3 z-20 flex flex-col items-end gap-2">
           {helpPopoverOpen && (
-            <div className="w-64 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2">
+            <div className="w-64 bg-[#1a1f29]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2">
               <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
-                <span className="font-semibold text-slate-100">Navegação 3D GrabCAD</span>
+                <span className="font-semibold text-slate-100">Navegação 3D IX</span>
                 <button
                   type="button"
                   onClick={() => setHelpPopoverOpen(false)}
@@ -2753,8 +3427,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 <li>• <strong>Rotacionar</strong>: 1 dedo ou botão esquerdo</li>
                 <li>• <strong>Mover (Pan)</strong>: 2 dedos ou botão direito</li>
                 <li>• <strong>Zoom</strong>: Pinça, scroll ou + / -</li>
-                <li>• <strong>Selecionar / Medir</strong>: Toque direto na peça</li>
-                <li>• <strong>Toolbar Superior</strong>: Árvore, Seção, Explodir, Medir</li>
+                <li>• <strong>Caneta Mágica</strong>: Marque ponto/área p/ rasgo, rosca ISO ou MCP</li>
+                <li>• <strong>SCOOBIII/VUC</strong>: Prova matemática NURBS, física e normas</li>
               </ul>
               {onOpenHelp && (
                 <button
@@ -3172,6 +3846,376 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           )}
         </div>
       )}
+
+      {/* Translucent Floating Magic Pen Contextual Menu (No CSS backdrop-blur over WebGL) */}
+      {!compact && magicPenActive && magicPenPick && (
+        <div
+          style={{
+            left: `${magicPenPick.screenX}px`,
+            top: `${magicPenPick.screenY}px`,
+            backgroundColor: 'rgba(11, 14, 20, 0.90)',
+          }}
+          className="absolute z-30 w-[310px] sm:w-[332px] max-w-[calc(100vw-24px)] border border-sky-400/45 rounded-xl shadow-2xl p-3 text-xs text-slate-100 space-y-2.5"
+        >
+          <div className="flex items-start justify-between gap-2 pb-2 border-b border-white/10">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 font-semibold text-amber-300 text-[11px]">
+                <Wand2 className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Caneta Mágica · {magicPenPick.componentName}</span>
+              </div>
+              <div className="font-mono-tabular text-[10px] text-slate-400 mt-0.5">
+                Ponto ({magicPenPick.point[0]}, {magicPenPick.point[1]}, {magicPenPick.point[2]}) mm · Área {magicPenPick.areaWidthMm}×{magicPenPick.areaLengthMm}mm
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMagicPenPick(null)}
+              className="text-slate-400 hover:text-white px-1 cursor-pointer shrink-0"
+            >
+              ×
+            </button>
+          </div>
+
+          {/* Operation Tabs */}
+          <div className="grid grid-cols-5 gap-1 p-0.5 bg-[#07090d] border border-white/8 rounded-lg text-[10px] font-semibold">
+            {(
+              [
+                { id: 'slot', label: 'Rasgo' },
+                { id: 'hole', label: 'Furo' },
+                { id: 'bolt', label: 'Rosca' },
+                { id: 'rib', label: 'Nervura' },
+                { id: 'part', label: 'Peça' },
+              ] as { id: MagicPenMenuTab; label: string }[]
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setMagicPenTab(t.id)}
+                className={`py-1 rounded transition-colors cursor-pointer ${
+                  magicPenTab === t.id
+                    ? 'bg-sky-500 text-slate-950'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {magicPenTab === 'slot' && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Largura (mm)</span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={90}
+                    value={penSlotW}
+                    onChange={(e) => setPenSlotW(Math.max(2, Number(e.target.value) || 4))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Compr. (mm)</span>
+                  <input
+                    type="number"
+                    min={4}
+                    max={140}
+                    value={penSlotL}
+                    onChange={(e) => setPenSlotL(Math.max(4, Number(e.target.value) || 10))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Prof. (mm)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={penDepth}
+                    onChange={(e) => setPenDepth(Math.max(1, Number(e.target.value) || 6))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[10px]">
+                <select
+                  aria-label="Perfil do rasgo"
+                  value={penSlotProfile}
+                  onChange={(e) => setPenSlotProfile(e.target.value as 'rectangular' | 'oblong')}
+                  className="px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-200"
+                >
+                  <option value="oblong">Rasgo Oblongo (Chaveta)</option>
+                  <option value="rectangular">Recorte Retangular</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => handleApplyMagicPenFeature('slot-cutout')}
+                  className="flex-1 py-1.5 px-2.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold cursor-pointer"
+                >
+                  Aplicar Recorte / Rasgo
+                </button>
+              </div>
+            </div>
+          )}
+
+          {magicPenTab === 'hole' && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2 text-[10px]">
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Diâmetro Ø (mm)</span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={60}
+                    value={penHoleD}
+                    onChange={(e) => setPenHoleD(Math.max(2, Number(e.target.value) || 8))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Profundidade (mm)</span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={80}
+                    value={penDepth}
+                    onChange={(e) => setPenDepth(Math.max(2, Number(e.target.value) || 10))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleApplyMagicPenFeature('through-hole')}
+                className="w-full py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-[11px] cursor-pointer"
+              >
+                Usinar Furo Ø{penHoleD} mm neste ponto
+              </button>
+            </div>
+          )}
+
+          {magicPenTab === 'bolt' && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Rosca ISO</span>
+                  <select
+                    aria-label="Rosca métrica ISO"
+                    value={penThreadSpec}
+                    onChange={(e) => setPenThreadSpec(e.target.value as IsoThreadSpec)}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  >
+                    {(Object.keys(ISO_METRIC_THREADS) as IsoThreadSpec[]).map((k) => (
+                      <option key={k} value={k}>
+                        {k}×{ISO_METRIC_THREADS[k].pitchMm}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Compr. (mm)</span>
+                  <input
+                    type="number"
+                    min={6}
+                    max={70}
+                    value={penDepth}
+                    onChange={(e) => setPenDepth(Math.max(6, Number(e.target.value) || 16))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Cabeça</span>
+                  <select
+                    aria-label="Cabeça do parafuso"
+                    value={penHeadStyle}
+                    onChange={(e) => setPenHeadStyle(e.target.value as 'allen' | 'hex')}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100"
+                  >
+                    <option value="allen">Allen</option>
+                    <option value="hex">Sextav.</option>
+                  </select>
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleApplyMagicPenFeature('threaded-bolt')}
+                className="w-full py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-[11px] cursor-pointer"
+              >
+                Inserir Parafuso + Rosca {penThreadSpec}×{ISO_METRIC_THREADS[penThreadSpec].pitchMm}mm
+              </button>
+            </div>
+          )}
+
+          {magicPenTab === 'rib' && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Espess. (mm)</span>
+                  <input
+                    type="number"
+                    min={3}
+                    max={40}
+                    value={penSlotW}
+                    onChange={(e) => setPenSlotW(Math.max(3, Number(e.target.value) || 6))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Compr. (mm)</span>
+                  <input
+                    type="number"
+                    min={6}
+                    max={120}
+                    value={penSlotL}
+                    onChange={(e) => setPenSlotL(Math.max(6, Number(e.target.value) || 24))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Altura (mm)</span>
+                  <input
+                    type="number"
+                    min={3}
+                    max={50}
+                    value={penDepth}
+                    onChange={(e) => setPenDepth(Math.max(3, Number(e.target.value) || 10))}
+                    className="w-full px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleApplyMagicPenFeature('rib-boss')}
+                  className="py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-[11px] cursor-pointer"
+                >
+                  + Nervura Reforço
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyMagicPenFeature('chamfer-fillet')}
+                  className="py-1.5 rounded-lg bg-[#161c28] border border-white/15 hover:border-sky-400 text-slate-200 font-semibold text-[11px] cursor-pointer"
+                >
+                  + Chanfro Local
+                </button>
+              </div>
+            </div>
+          )}
+
+          {magicPenTab === 'part' && (
+            <div className="space-y-2 text-[11px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">Material na Peça:</span>
+                <select
+                  aria-label="Material na peça atingida"
+                  value={
+                    display.componentMaterials[magicPenPick.componentId] ??
+                    partProfile?.primaryMaterial ??
+                    display.materialFinish
+                  }
+                  onChange={(e) =>
+                    onUpdateDisplay({
+                      mode: 'component-pbr',
+                      perComponentPbr: true,
+                      selectedComponentId: magicPenPick.componentId,
+                      componentMaterials: {
+                        ...display.componentMaterials,
+                        [magicPenPick.componentId]: e.target.value as MaterialFinish,
+                      },
+                    })
+                  }
+                  className="px-2 py-1 bg-[#141923] border border-white/15 rounded text-slate-100"
+                >
+                  {FINISH_OPTIONS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateDisplay({
+                      isolationTarget:
+                        display.isolationTarget === magicPenPick.componentId
+                          ? 'all'
+                          : magicPenPick.componentId,
+                      fitViewTrigger: display.fitViewTrigger + 1,
+                    })
+                  }
+                  className="py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/45 text-amber-200 font-medium cursor-pointer"
+                >
+                  {display.isolationTarget === magicPenPick.componentId ? 'Restaurar Conjunto' : 'Isolar Peça'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateDisplay({ mode: 'stress-heatmap' });
+                  }}
+                  className="py-1.5 rounded-lg bg-rose-500/20 border border-rose-400/45 text-rose-200 font-medium cursor-pointer"
+                >
+                  Ver Estresse FEA
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Free MCP Prompt Field inside Floating Translucent Menu */}
+          {onExecuteMagicPenMcpPrompt && (
+            <form onSubmit={handleRunMagicPenMcp} className="pt-2 border-t border-white/10 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={penMcpPrompt}
+                  onChange={(e) => setPenMcpPrompt(e.target.value)}
+                  placeholder="Digite o que fazer via MCP nesta área..."
+                  className="flex-1 min-w-0 px-2.5 py-1.5 text-[11px] bg-[#141923] border border-white/15 rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                />
+                <button
+                  type="submit"
+                  disabled={penMcpBusy || !penMcpPrompt.trim()}
+                  title="Executar via MCP"
+                  className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer shrink-0"
+                >
+                  {penMcpBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  <span className="text-[10px]">MCP</span>
+                </button>
+              </div>
+              {penMcpFeedback && (
+                <div className="px-2 py-1 rounded bg-emerald-500/15 border border-emerald-400/35 text-[10px] text-emerald-200 leading-snug">
+                  {penMcpFeedback}
+                </div>
+              )}
+              {featureOps.length > 0 && onRemoveFeatureOp && (
+                <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                  <span>{featureOps.length} operação(ões) aplicada(s)</span>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveFeatureOp(featureOps[0].id)}
+                    className="text-rose-300 hover:text-rose-200 underline cursor-pointer"
+                  >
+                    Desfazer última
+                  </button>
+                </div>
+              )}
+            </form>
+          )}
+        </div>
+      )}
+
+      {/* SCOOBIII / VUC Mathematical Proof Modal */}
+      {scoobiiiModalOpen && scoobiiiProof && (
+        <ScoobiiiVucModal
+          report={scoobiiiProof}
+          onClose={() => setScoobiiiModalOpen(false)}
+          onExportCertificate={onExportCertificate}
+        />
+      )}
     </div>
   );
 };
+

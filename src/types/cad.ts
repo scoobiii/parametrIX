@@ -286,7 +286,7 @@ export interface PartEngineeringProfile {
 export interface ImportedCadModel {
   id: string;
   filename: string;
-  format: 'STL' | 'OBJ' | 'DXF' | '3DM' | 'STEP' | 'IFC';
+  format: 'STL' | 'OBJ' | 'DXF' | '3DM' | 'STEP' | 'IFC' | 'IPT' | 'SVG' | 'IMAGE';
   positions: Float32Array;
   normals: Float32Array;
   wireSegments?: Float32Array;
@@ -454,3 +454,86 @@ export interface McpExecutionLog {
   status: 'ok' | 'error';
   timestamp: string;
 }
+
+export type MagicPenOperationKind =
+  | 'slot-cutout'
+  | 'through-hole'
+  | 'threaded-bolt'
+  | 'rib-boss'
+  | 'chamfer-fillet';
+
+export type IsoThreadSpec = 'M3' | 'M4' | 'M5' | 'M6' | 'M8' | 'M10' | 'M12';
+
+export interface CadFeatureOperation {
+  id: string;
+  kind: MagicPenOperationKind;
+  label: string;
+  targetComponentId: string;
+  point: [number, number, number];
+  normal: [number, number, number];
+  widthMm: number;
+  lengthMm: number;
+  diameterMm: number;
+  depthMm: number;
+  threadSpec?: IsoThreadSpec;
+  threadPitchMm?: number;
+  headStyle?: 'hex' | 'allen';
+  slotProfile?: 'rectangular' | 'oblong';
+  materialFinish?: MaterialFinish;
+  mcpCommand?: string;
+  createdAt: string;
+}
+
+export interface ScoobiiiVucCheckItem {
+  id: string;
+  domain: 'NURBS' | 'BIM' | 'FISICA' | 'NORMA' | 'ROSCA_ISO';
+  title: string;
+  formula: string;
+  substitutedValues: string;
+  resultText: string;
+  limitText: string;
+  passed: boolean;
+}
+
+export interface ScoobiiiVucProofReport {
+  certificateId: string;
+  timestamp: string;
+  modelTitle: string;
+  segmentLabel: string;
+  nurbsProof: {
+    degreeU: number;
+    degreeV: number;
+    controlGrid: string;
+    clampedKnotsValid: boolean;
+    maxPartitionUnityResidual: number;
+    minJacobian: number;
+    maxJacobian: number;
+    gaussianCurvatureRange: [number, number];
+    nurbsIntegralAreaCm2: number;
+    meshAreaCm2: number;
+    grossVolumeCm3: number;
+    featureRemovedVolumeCm3: number;
+    featureAddedVolumeCm3: number;
+    netVolumeCm3: number;
+  };
+  physicsProof: {
+    materialName: string;
+    youngsModulusGpa: number;
+    yieldStrengthMpa: number;
+    poissonRatio: number;
+    loadNewtons: number;
+    effectiveInertiaMm4: number;
+    sectionModulusMm3: number;
+    stressConcentrationKt: number;
+    netSectionRatio: number;
+    vonMisesMaxMpa: number;
+    allowableStressMpa: number;
+    deflectionMm: number;
+    safetyFactor: number;
+    netMassKg: number;
+  };
+  checks: ScoobiiiVucCheckItem[];
+  allPassed: boolean;
+  verdict: string;
+}
+

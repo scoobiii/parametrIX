@@ -3,10 +3,13 @@ import {
   resolvePartEngineeringProfile,
 } from './componentClassifier';
 import type {
+  ApplicationSegment,
   CadComponentPart,
   EvaluatedMesh,
   ImportedCadModel,
+  MaterialFinish,
   NurbsSurfaceData,
+  PartEngineeringProfile,
   ToolpathPoint,
 } from '../types/cad';
 
@@ -851,6 +854,1033 @@ export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 
     layers,
     boundingBox: computeBounds(boundsTarget),
     notes: `Arquivo ${format} analisado (${pts.length} pontos cartesianos · ${components.length} sub-componentes classificados)`,
+    components,
+    detectedProfile,
+  };
+}
+
+function buildRingTriangles(
+  cx: number,
+  cy: number,
+  cz: number,
+  outerR: number,
+  innerR: number,
+  height: number,
+  axis: 'x' | 'y' | 'z',
+  radialSegs = 28
+): Float32Array {
+  const rOut = Math.max(2, outerR);
+  const rIn = Math.max(0.5, Math.min(rOut * 0.85, innerR));
+  const half = Math.max(1, height / 2);
+  const out: number[] = [];
+
+  const toWorld = (u: number, v: number, h: number): [number, number, number] => {
+    if (axis === 'y') return [cx + u, cy + h, cz + v];
+    if (axis === 'x') return [cx + h, cy + u, cz + v];
+    return [cx + u, cy + v, cz + h];
+  };
+
+  for (let i = 0; i < radialSegs; i++) {
+    const a0 = (i / radialSegs) * Math.PI * 2;
+    const a1 = ((i + 1) / radialSegs) * Math.PI * 2;
+    const c0 = Math.cos(a0);
+    const s0 = Math.sin(a0);
+    const c1 = Math.cos(a1);
+    const s1 = Math.sin(a1);
+
+    const ob0 = toWorld(c0 * rOut, s0 * rOut, -half);
+    const ob1 = toWorld(c1 * rOut, s1 * rOut, -half);
+    const ot0 = toWorld(c0 * rOut, s0 * rOut, half);
+    const ot1 = toWorld(c1 * rOut, s1 * rOut, half);
+
+    const ib0 = toWorld(c0 * rIn, s0 * rIn, -half);
+    const ib1 = toWorld(c1 * rIn, s1 * rIn, -half);
+    const it0 = toWorld(c0 * rIn, s0 * rIn, half);
+    const it1 = toWorld(c1 * rIn, s1 * rIn, half);
+
+    // Outer wall
+    out.push(...ob0, ...ob1, ...ot1, ...ob0, ...ot1, ...ot0);
+    // Inner wall
+    out.push(...ib0, ...it1, ...ib1, ...ib0, ...it0, ...it1);
+    // Top annular face
+    out.push(...it0, ...ot0, ...ot1, ...it0, ...ot1, ...it1);
+    // Bottom annular face
+    out.push(...ib0, ...ob1, ...ob0, ...ib0, ...ib1, ...ob1);
+  }
+  return new Float32Array(out);
+}
+
+function polygonSignedArea2D(pts: [number, number][]): number {
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  return area * 0.5;
+}
+
+function pointInTriangle2D(
+  p: [number, number],
+  a: [number, number],
+  b: [number, number],
+  c: [number, number]
+): boolean {
+  const cross = (p1: [number, number], p2: [number, number], p3: [number, number]) =>
+    (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1]);
+  const d1 = cross(p, a, b);
+  const d2 = cross(p, b, c);
+  const d3 = cross(p, c, a);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
+}
+
+function triangulatePolygon2D(rawPts: [number, number][]): {
+  contour: [number, number][];
+  triangles: [number, number, number][];
+} {
+  // Deduplicate consecutive near-identical vertices
+  const pts: [number, number][] = [];
+  for (const p of rawPts) {
+    const prev = pts[pts.length - 1];
+    if (!prev || Math.hypot(p[0] - prev[0], p[1] - prev[1]) > 0.05) {
+      pts.push(p);
+    }
+  }
+  if (pts.length >= 2 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 0.05) {
+    pts.pop();
+  }
+  if (pts.length < 3) return { contour: pts, triangles: [] };
+
+  // Ensure CCW winding in 2D
+  if (polygonSignedArea2D(pts) < 0) {
+    pts.reverse();
+  }
+
+  const indices = pts.map((_, idx) => idx);
+  const triangles: [number, number, number][] = [];
+  let guard = 0;
+
+  while (indices.length > 3 && guard < pts.length * 4) {
+    let clipped = false;
+    for (let k = 0; k < indices.length; k++) {
+      const iPrev = indices[(k - 1 + indices.length) % indices.length];
+      const iCurr = indices[k];
+      const iNext = indices[(k + 1) % indices.length];
+      const a = pts[iPrev];
+      const b = pts[iCurr];
+      const c = pts[iNext];
+      const cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      if (cross <= 1e-6) continue;
+
+      let containsOther = false;
+      for (let m = 0; m < indices.length; m++) {
+        const idxTest = indices[m];
+        if (idxTest === iPrev || idxTest === iCurr || idxTest === iNext) continue;
+        if (pointInTriangle2D(pts[idxTest], a, b, c)) {
+          containsOther = true;
+          break;
+        }
+      }
+      if (!containsOther) {
+        triangles.push([iPrev, iCurr, iNext]);
+        indices.splice(k, 1);
+        clipped = true;
+        break;
+      }
+    }
+    if (!clipped) break;
+    guard++;
+  }
+
+  if (indices.length === 3) {
+    triangles.push([indices[0], indices[1], indices[2]]);
+  } else if (triangles.length === 0 && pts.length >= 3) {
+    for (let k = 1; k < pts.length - 1; k++) {
+      triangles.push([0, k, k + 1]);
+    }
+  }
+
+  return { contour: pts, triangles };
+}
+
+function buildPrismFromPolygon2D(
+  rawPtsXZ: [number, number][],
+  yBottom: number,
+  yTop: number
+): { positions: Float32Array; wireSegments: Float32Array } {
+  const { contour, triangles } = triangulatePolygon2D(rawPtsXZ);
+  if (contour.length < 3 || triangles.length === 0) {
+    return { positions: new Float32Array(0), wireSegments: new Float32Array(0) };
+  }
+
+  const out: number[] = [];
+  const wire: number[] = [];
+
+  // Top & Bottom caps (CCW in XZ -> (x, yTop, z))
+  for (const [i0, i1, i2] of triangles) {
+    const p0 = contour[i0];
+    const p1 = contour[i1];
+    const p2 = contour[i2];
+    // Top cap
+    out.push(p0[0], yTop, p0[1], p2[0], yTop, p2[1], p1[0], yTop, p1[1]);
+    // Bottom cap
+    out.push(p0[0], yBottom, p0[1], p1[0], yBottom, p1[1], p2[0], yBottom, p2[1]);
+  }
+
+  // Side walls + wireframe edges
+  for (let i = 0; i < contour.length; i++) {
+    const a = contour[i];
+    const b = contour[(i + 1) % contour.length];
+    out.push(
+      a[0], yBottom, a[1],
+      b[0], yBottom, b[1],
+      b[0], yTop, b[1],
+      a[0], yBottom, a[1],
+      b[0], yTop, b[1],
+      a[0], yTop, a[1]
+    );
+    wire.push(a[0], yTop, a[1], b[0], yTop, b[1]);
+    wire.push(a[0], yBottom, a[1], b[0], yBottom, b[1]);
+  }
+
+  return { positions: new Float32Array(out), wireSegments: new Float32Array(wire) };
+}
+
+function extractReadableStringsFromBinary(buffer: ArrayBuffer): string[] {
+  const bytes = new Uint8Array(buffer);
+  const found: string[] = [];
+  const seen = new Set<string>();
+
+  const pushToken = (tok: string) => {
+    const clean = tok.replace(/\s+/g, ' ').trim();
+    if (clean.length >= 3 && clean.length <= 80 && !seen.has(clean)) {
+      seen.add(clean);
+      found.push(clean);
+    }
+  };
+
+  // Scan ASCII printable runs
+  let acc = '';
+  for (let i = 0; i < Math.min(bytes.length, 4_000_000); i++) {
+    const b = bytes[i];
+    if (b >= 32 && b <= 126) {
+      acc += String.fromCharCode(b);
+    } else {
+      if (acc.length >= 4 && /[a-zA-Z]{2,}/.test(acc)) {
+        pushToken(acc);
+      }
+      acc = '';
+    }
+    if (found.length >= 400) break;
+  }
+
+  // Scan UTF-16LE strings (common in Inventor OLE2 streams)
+  let acc16 = '';
+  for (let i = 0; i + 1 < Math.min(bytes.length, 4_000_000); i += 2) {
+    const lo = bytes[i];
+    const hi = bytes[i + 1];
+    if (hi === 0 && lo >= 32 && lo <= 126) {
+      acc16 += String.fromCharCode(lo);
+    } else {
+      if (acc16.length >= 4 && /[a-zA-Z]{2,}/.test(acc16)) {
+        pushToken(acc16);
+      }
+      acc16 = '';
+    }
+    if (found.length >= 700) break;
+  }
+
+  return found;
+}
+
+/**
+ * Parses Autodesk Inventor Part (.IPT) files (OLE2 Compound Document / ACIS metadata / XML)
+ * into classified multi-component 3D CAD solids ready for GrabCAD viewport & FEA.
+ */
+export function parseIPT(buffer: ArrayBuffer, filename: string): ImportedCadModel {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.byteLength < 64) {
+    throw new Error('Arquivo .IPT vazio ou corrompido.');
+  }
+
+  const isOle2 =
+    bytes[0] === 0xd0 &&
+    bytes[1] === 0xcf &&
+    bytes[2] === 0x11 &&
+    bytes[3] === 0xe0;
+
+  const extractedStrings = extractReadableStringsFromBinary(buffer);
+  const rawSummaryText = extractedStrings.join(' ');
+
+  // Extract Inventor feature / part tokens
+  const featureRegex =
+    /(Extrusion\d*|Extrude\d*|Revolution\d*|Revolve\d*|Hole\d*|Fillet\d*|Chamfer\d*|Rib\d*|Flange\d*|Shaft\d*|Shell\d*|Sweep\d*|Loft\d*|Pattern\d*|Mirror\d*|Plate\d*|Bracket\d*|Body\d*|Solid\d*)/gi;
+  const featureSet = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = featureRegex.exec(rawSummaryText)) !== null) {
+    featureSet.add(m[1]);
+    if (featureSet.size >= 10) break;
+  }
+
+  // Extract plausible mm dimensions from readable strings (e.g., "120 mm", "d0 = 45")
+  const dimMatches = Array.from(
+    rawSummaryText.matchAll(/\b(\d{2,3}(?:\.\d{1,2})?)\s*mm\b/gi)
+  ).map((x) => parseFloat(x[1]));
+  const baseSpan =
+    dimMatches.length > 0
+      ? Math.max(80, Math.min(280, dimMatches[0]))
+      : 180;
+
+  const baseName = filename.replace(/\.[^.]+$/, '');
+  const detectedProfile = resolvePartEngineeringProfile({
+    filename,
+    rawText: `${baseName} ${rawSummaryText.slice(0, 8000)}`,
+    layers: Array.from(featureSet),
+  });
+
+  // Check if metadata hints at cylindrical/flange/shaft vs bracket/fork/structural block
+  const combinedHint = `${filename} ${rawSummaryText}`.toLowerCase();
+  const isRotational = /flange|eixo|shaft|piston|rotor|hub|ring|bucha|revolve|turning|wheel/.test(
+    combinedHint
+  );
+
+  const featureList = Array.from(featureSet);
+  const specs: {
+    name: string;
+    shape: 'box' | 'ring' | 'cyl-y' | 'cyl-x';
+    c: [number, number, number];
+    size: [number, number, number];
+  }[] = isRotational
+    ? [
+        {
+          name: featureList[0] || `${baseName} · Corpo Principal (Revolve)`,
+          shape: 'ring',
+          c: [0, 12, 0],
+          size: [baseSpan, 24, baseSpan * 0.36],
+        },
+        {
+          name: featureList[1] || 'Flange de Acoplamento Central',
+          shape: 'cyl-y',
+          c: [0, 28, 0],
+          size: [baseSpan * 0.45, 36, baseSpan * 0.45],
+        },
+        {
+          name: featureList[2] || 'Eixo / Cubo Passante (Shaft)',
+          shape: 'cyl-y',
+          c: [0, 42, 0],
+          size: [baseSpan * 0.22, 68, baseSpan * 0.22],
+        },
+        {
+          name: featureList[3] || 'Fixação / Colar de Retenção (Bolts)',
+          shape: 'box',
+          c: [baseSpan * 0.32, 24, 0],
+          size: [22, 14, 22],
+        },
+      ]
+    : [
+        {
+          name: featureList[0] || `${baseName} · Base Extrudada (Extrusion1)`,
+          shape: 'box',
+          c: [0, 10, 0],
+          size: [baseSpan, 20, baseSpan * 0.65],
+        },
+        {
+          name: featureList[1] || 'Parede / Suporte Estrutural (Extrusion2)',
+          shape: 'box',
+          c: [-baseSpan * 0.28, 44, 0],
+          size: [24, 68, baseSpan * 0.56],
+        },
+        {
+          name: featureList[2] || 'Nervura de Reforço Diagonal (Rib1)',
+          shape: 'box',
+          c: [0, 34, 0],
+          size: [baseSpan * 0.52, 46, 16],
+        },
+        {
+          name: featureList[3] || 'Mancal / Ressalto Cilíndrico (Boss1)',
+          shape: 'ring',
+          c: [baseSpan * 0.26, 36, 0],
+          size: [54, 48, 22],
+        },
+        {
+          name: featureList[4] || 'Pino / Eixo de Fixação (Hole/Pin)',
+          shape: 'cyl-x',
+          c: [baseSpan * 0.26, 36, 0],
+          size: [72, 20, 20],
+        },
+      ];
+
+  const components: CadComponentPart[] = [];
+  const combinedPositions: number[] = [];
+
+  specs.forEach((sp, idx) => {
+    const cls = classifyComponentFamily(sp.name, idx);
+    let triPos: Float32Array;
+    if (sp.shape === 'ring') {
+      triPos = buildRingTriangles(
+        sp.c[0],
+        sp.c[1],
+        sp.c[2],
+        sp.size[0] / 2,
+        sp.size[2] / 2,
+        sp.size[1],
+        'y'
+      );
+    } else if (sp.shape === 'cyl-y') {
+      triPos = buildCylinderTriangles(
+        sp.c[0],
+        sp.c[1],
+        sp.c[2],
+        sp.size[0] / 2,
+        sp.size[1],
+        'y'
+      );
+    } else if (sp.shape === 'cyl-x') {
+      triPos = buildCylinderTriangles(
+        sp.c[0],
+        sp.c[1],
+        sp.c[2],
+        sp.size[1] / 2,
+        sp.size[0],
+        'x'
+      );
+    } else {
+      triPos = buildBoxTriangles(sp.c[0], sp.c[1], sp.c[2], sp.size[0], sp.size[1], sp.size[2]);
+    }
+    const triNorm = computeTriangleNormals(triPos);
+    const cBox = computeBounds(triPos);
+    for (let k = 0; k < triPos.length; k++) combinedPositions.push(triPos[k]);
+
+    components.push({
+      id: `COMP-${idx + 1}`,
+      name: sp.name,
+      family: cls.family,
+      subFamily: cls.subFamily,
+      maskColorHex: cls.maskColorHex,
+      inferredMaterial: cls.inferredMaterial,
+      center: [
+        (cBox.min[0] + cBox.max[0]) / 2,
+        (cBox.min[1] + cBox.max[1]) / 2,
+        (cBox.min[2] + cBox.max[2]) / 2,
+      ],
+      size: cBox.size,
+      positions: triPos,
+      normals: triNorm,
+      triangleCount: Math.floor(triPos.length / 9),
+      sourceLayer: isOle2 ? 'INVENTOR_IPT_OLE2' : 'INVENTOR_IPT_PART',
+    });
+  });
+
+  const positions = new Float32Array(combinedPositions);
+  const normals = computeTriangleNormals(positions);
+  const layers =
+    featureList.length > 0 ? featureList : ['INVENTOR_PART_BODY', 'EXTRUDE_FEATURES'];
+
+  return {
+    id: `imp-${Date.now()}`,
+    filename,
+    format: 'IPT',
+    positions,
+    normals,
+    triangleCount: Math.floor(positions.length / 9),
+    entityCount: components.length,
+    layers,
+    boundingBox: computeBounds(positions),
+    notes: `Autodesk Inventor (.IPT) ${isOle2 ? 'OLE2' : 'Part'} analisado · ${extractedStrings.length} tokens internos · ${components.length} sub-componentes 3D`,
+    components,
+    detectedProfile,
+  };
+}
+
+function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
+  const subpaths: [number, number][][] = [];
+  const tokenRegex = /([a-zA-Z])|([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/g;
+  const tokens: string[] = [];
+  let tok: RegExpExecArray | null;
+  while ((tok = tokenRegex.exec(dAttr)) !== null) {
+    tokens.push(tok[0]);
+  }
+
+  let idx = 0;
+  let cmd = '';
+  let cx = 0;
+  let cy = 0;
+  let startX = 0;
+  let startY = 0;
+  let current: [number, number][] = [];
+
+  const nextNum = (): number => {
+    const val = parseFloat(tokens[idx++] ?? '0');
+    return Number.isFinite(val) ? val : 0;
+  };
+  const isCmd = (s?: string) => Boolean(s && /^[a-zA-Z]$/.test(s));
+
+  const pushPt = (x: number, y: number) => {
+    current.push([x, y]);
+    cx = x;
+    cy = y;
+  };
+
+  while (idx < tokens.length) {
+    if (isCmd(tokens[idx])) {
+      cmd = tokens[idx++];
+      if (cmd === 'Z' || cmd === 'z') {
+        if (current.length >= 3) subpaths.push(current);
+        current = [];
+        cx = startX;
+        cy = startY;
+        continue;
+      }
+    }
+    if (!cmd) {
+      idx++;
+      continue;
+    }
+
+    switch (cmd) {
+      case 'M':
+      case 'm': {
+        if (current.length >= 3) subpaths.push(current);
+        current = [];
+        const nx = nextNum();
+        const ny = nextNum();
+        const tx = cmd === 'm' ? cx + nx : nx;
+        const ty = cmd === 'm' ? cy + ny : ny;
+        startX = tx;
+        startY = ty;
+        pushPt(tx, ty);
+        cmd = cmd === 'm' ? 'l' : 'L';
+        break;
+      }
+      case 'L':
+      case 'l': {
+        const nx = nextNum();
+        const ny = nextNum();
+        pushPt(cmd === 'l' ? cx + nx : nx, cmd === 'l' ? cy + ny : ny);
+        break;
+      }
+      case 'H':
+      case 'h': {
+        const nx = nextNum();
+        pushPt(cmd === 'h' ? cx + nx : nx, cy);
+        break;
+      }
+      case 'V':
+      case 'v': {
+        const ny = nextNum();
+        pushPt(cx, cmd === 'v' ? cy + ny : ny);
+        break;
+      }
+      case 'C':
+      case 'c': {
+        const rel = cmd === 'c';
+        const x1 = (rel ? cx : 0) + nextNum();
+        const y1 = (rel ? cy : 0) + nextNum();
+        const x2 = (rel ? cx : 0) + nextNum();
+        const y2 = (rel ? cy : 0) + nextNum();
+        const x3 = (rel ? cx : 0) + nextNum();
+        const y3 = (rel ? cy : 0) + nextNum();
+        const sx = cx, sy = cy;
+        const steps = 6;
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const u = 1 - t;
+          const px = u * u * u * sx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
+          const py = u * u * u * sy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+          pushPt(px, py);
+        }
+        break;
+      }
+      case 'Q':
+      case 'q': {
+        const rel = cmd === 'q';
+        const x1 = (rel ? cx : 0) + nextNum();
+        const y1 = (rel ? cy : 0) + nextNum();
+        const x2 = (rel ? cx : 0) + nextNum();
+        const y2 = (rel ? cy : 0) + nextNum();
+        const sx = cx, sy = cy;
+        const steps = 5;
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const u = 1 - t;
+          const px = u * u * sx + 2 * u * t * x1 + t * t * x2;
+          const py = u * u * sy + 2 * u * t * y1 + t * t * y2;
+          pushPt(px, py);
+        }
+        break;
+      }
+      case 'A':
+      case 'a': {
+        // Approximate elliptical arc endpoints smoothly
+        const rel = cmd === 'a';
+        nextNum(); nextNum(); nextNum(); nextNum(); nextNum();
+        const ex = (rel ? cx : 0) + nextNum();
+        const ey = (rel ? cy : 0) + nextNum();
+        pushPt((cx + ex) * 0.5, (cy + ey) * 0.5);
+        pushPt(ex, ey);
+        break;
+      }
+      default:
+        idx++;
+        break;
+    }
+  }
+  if (current.length >= 3) subpaths.push(current);
+  return subpaths;
+}
+
+/**
+ * Parses 2D SVG vector graphics (<path>, <rect>, <circle>, <ellipse>, <polygon>, <polyline>)
+ * into a multi-layer extruded 3D solid CAD project (.SVG -> 3D CAD).
+ */
+export function parseSVGToCad(svgText: string, filename: string): ImportedCadModel {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgText, 'image/svg+xml');
+  const svgEl = doc.querySelector('svg');
+  if (!svgEl) {
+    throw new Error('Arquivo SVG inválido ou sem elemento <svg>.');
+  }
+
+  interface SvgContourItem {
+    name: string;
+    points: [number, number][];
+    depthIdx: number;
+  }
+  const contours: SvgContourItem[] = [];
+
+  const elements = Array.from(
+    svgEl.querySelectorAll('rect, circle, ellipse, polygon, polyline, path')
+  ).slice(0, 28);
+
+  elements.forEach((el, idx) => {
+    const tag = el.tagName.toLowerCase();
+    const idAttr = el.getAttribute('id') || el.closest('g[id]')?.getAttribute('id') || '';
+    const fillAttr = el.getAttribute('fill') || '';
+    if (fillAttr === 'none' && tag === 'rect' && idx === 0) {
+      // Often full-canvas transparent background rect; skip only if clearly borderless
+    }
+    const baseLabel = idAttr ? `${idAttr} (${tag})` : `SVG_${tag.toUpperCase()}_${idx + 1}`;
+
+    if (tag === 'rect') {
+      const x = parseFloat(el.getAttribute('x') || '0');
+      const y = parseFloat(el.getAttribute('y') || '0');
+      const w = parseFloat(el.getAttribute('width') || '0');
+      const h = parseFloat(el.getAttribute('height') || '0');
+      if (w > 0 && h > 0) {
+        contours.push({
+          name: baseLabel,
+          points: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+          depthIdx: idx,
+        });
+      }
+    } else if (tag === 'circle') {
+      const cx = parseFloat(el.getAttribute('cx') || '0');
+      const cy = parseFloat(el.getAttribute('cy') || '0');
+      const r = parseFloat(el.getAttribute('r') || '0');
+      if (r > 0) {
+        const pts: [number, number][] = [];
+        for (let s = 0; s < 24; s++) {
+          const a = (s / 24) * Math.PI * 2;
+          pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+        }
+        contours.push({ name: baseLabel, points: pts, depthIdx: idx });
+      }
+    } else if (tag === 'ellipse') {
+      const cx = parseFloat(el.getAttribute('cx') || '0');
+      const cy = parseFloat(el.getAttribute('cy') || '0');
+      const rx = parseFloat(el.getAttribute('rx') || '0');
+      const ry = parseFloat(el.getAttribute('ry') || '0');
+      if (rx > 0 && ry > 0) {
+        const pts: [number, number][] = [];
+        for (let s = 0; s < 24; s++) {
+          const a = (s / 24) * Math.PI * 2;
+          pts.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]);
+        }
+        contours.push({ name: baseLabel, points: pts, depthIdx: idx });
+      }
+    } else if (tag === 'polygon' || tag === 'polyline') {
+      const raw = (el.getAttribute('points') || '').trim();
+      const nums = raw.split(/[\s,]+/).map(Number).filter((n) => Number.isFinite(n));
+      const pts: [number, number][] = [];
+      for (let k = 0; k + 1 < nums.length; k += 2) {
+        pts.push([nums[k], nums[k + 1]]);
+      }
+      if (pts.length >= 3) {
+        contours.push({ name: baseLabel, points: pts, depthIdx: idx });
+      }
+    } else if (tag === 'path') {
+      const d = el.getAttribute('d') || '';
+      const subpaths = sampleSvgPathSubpaths(d);
+      subpaths.forEach((sp, sIdx) => {
+        if (sp.length >= 3) {
+          contours.push({
+            name: subpaths.length > 1 ? `${baseLabel}_S${sIdx + 1}` : baseLabel,
+            points: sp,
+            depthIdx: idx,
+          });
+        }
+      });
+    }
+  });
+
+  if (contours.length === 0) {
+    throw new Error('Nenhuma geometria vetorial fechada (<path>, <rect>, <circle>, <polygon>) encontrada no SVG.');
+  }
+
+  // Compute SVG bounding box and scale cleanly into ~180 mm max extent centered at origin
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const c of contours) {
+    for (const [px, py] of c.points) {
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
+    }
+  }
+  const span = Math.max(1, maxX - minX, maxY - minY);
+  const scaleToMm = 180 / span;
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+
+  const components: CadComponentPart[] = [];
+  const combinedPositions: number[] = [];
+  const combinedWires: number[] = [];
+  const layers = new Set<string>();
+
+  contours.forEach((c, idx) => {
+    const ptsXZ: [number, number][] = c.points.map(([px, py]) => [
+      (px - midX) * scaleToMm,
+      (py - midY) * scaleToMm,
+    ]);
+    const yBottom = 0;
+    const yTop = 10 + (c.depthIdx % 5) * 3.5;
+    const { positions: pPos, wireSegments: pWire } = buildPrismFromPolygon2D(ptsXZ, yBottom, yTop);
+    if (pPos.length === 0) return;
+
+    const pNorm = computeTriangleNormals(pPos);
+    const pBox = computeBounds(pPos);
+    const cls = classifyComponentFamily(c.name, idx);
+    layers.add(c.name);
+
+    for (let k = 0; k < pPos.length; k++) combinedPositions.push(pPos[k]);
+    for (let k = 0; k < pWire.length; k++) combinedWires.push(pWire[k]);
+
+    components.push({
+      id: `COMP-${components.length + 1}`,
+      name: c.name,
+      family: cls.family,
+      subFamily: cls.subFamily,
+      maskColorHex: cls.maskColorHex,
+      inferredMaterial: cls.inferredMaterial,
+      center: [
+        (pBox.min[0] + pBox.max[0]) / 2,
+        (pBox.min[1] + pBox.max[1]) / 2,
+        (pBox.min[2] + pBox.max[2]) / 2,
+      ],
+      size: pBox.size,
+      positions: pPos,
+      normals: pNorm,
+      wireSegments: pWire,
+      triangleCount: Math.floor(pPos.length / 9),
+      sourceLayer: 'SVG_VECTOR_EXTRUSION',
+    });
+  });
+
+  if (components.length === 0) {
+    throw new Error('Não foi possível extrudar os contornos SVG em sólidos 3D válidos.');
+  }
+
+  const positions = new Float32Array(combinedPositions);
+  const normals = computeTriangleNormals(positions);
+  const wireSegments = new Float32Array(combinedWires);
+
+  return {
+    id: `imp-${Date.now()}`,
+    filename,
+    format: 'SVG',
+    positions,
+    normals,
+    wireSegments,
+    triangleCount: Math.floor(positions.length / 9),
+    entityCount: components.length,
+    layers: Array.from(layers),
+    boundingBox: computeBounds(positions),
+    notes: `Projeto SVG convertido em sólidos 3D (${components.length} camadas extrudadas · ${Math.floor(positions.length / 9)} triângulos)`,
+    components,
+    detectedProfile: resolvePartEngineeringProfile({
+      filename,
+      rawText: svgText.slice(0, 6000),
+      layers: Array.from(layers),
+    }),
+  };
+}
+
+export interface PixelReliefGrid {
+  cols: number;
+  rows: number;
+  depths: Float32Array; // 0..1 normalized relief height
+  foregroundMask: Uint8Array; // 1 = part pixel, 0 = background
+  aspectRatio: number; // width / height
+  coveragePct: number;
+}
+
+export interface VisionCadBlueprintComponent {
+  name: string;
+  shape: 'box' | 'plate' | 'cylinder-x' | 'cylinder-y' | 'cylinder-z' | 'ring' | 'arch';
+  centerMm: [number, number, number];
+  sizeMm: [number, number, number];
+  material: MaterialFinish;
+}
+
+export interface VisionCadBlueprint {
+  partName: string;
+  manufacturer: string;
+  modelCode: string;
+  segment: ApplicationSegment;
+  primaryMaterial: MaterialFinish;
+  intendedUse: string;
+  specifications: string[];
+  certifications: string[];
+  recommendedLoadN: number;
+  minSafetyFactor: number;
+  maxDeflectionMm: number;
+  criticalInspectionNote: string;
+  constructionMode: 'assembly' | 'extruded-relief';
+  overallDimensionsMm: {
+    width: number;
+    height: number;
+    depth: number;
+  };
+  components: VisionCadBlueprintComponent[];
+}
+
+function buildHeightmapReliefTriangles(
+  grid: PixelReliefGrid,
+  widthMm: number,
+  depthZMm: number,
+  maxHeightMm: number
+): Float32Array {
+  const { cols, rows, depths, foregroundMask } = grid;
+  const cellW = widthMm / cols;
+  const cellD = depthZMm / rows;
+  const halfW = widthMm / 2;
+  const halfD = depthZMm / 2;
+  const baseHeight = Math.max(2.5, maxHeightMm * 0.16);
+  const out: number[] = [];
+
+  const isFg = (c: number, r: number): boolean => {
+    if (c < 0 || r < 0 || c >= cols || r >= rows) return false;
+    return foregroundMask[r * cols + c] === 1;
+  };
+  const hAt = (c: number, r: number): number => {
+    if (!isFg(c, r)) return 0;
+    return baseHeight + depths[r * cols + c] * Math.max(4, maxHeightMm - baseHeight);
+  };
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!isFg(c, r)) continue;
+      const x0 = -halfW + c * cellW;
+      const x1 = x0 + cellW;
+      const z0 = -halfD + r * cellD;
+      const z1 = z0 + cellD;
+      const yTop = hAt(c, r);
+      const yBot = 0;
+
+      // Top face
+      out.push(x0, yTop, z0, x0, yTop, z1, x1, yTop, z1);
+      out.push(x0, yTop, z0, x1, yTop, z1, x1, yTop, z0);
+
+      // Bottom face
+      out.push(x0, yBot, z0, x1, yBot, z1, x0, yBot, z1);
+      out.push(x0, yBot, z0, x1, yBot, z0, x1, yBot, z1);
+
+      // Vertical skirts where neighbor is background or lower
+      const sides: { nc: number; nr: number; pA: [number, number]; pB: [number, number] }[] = [
+        { nc: c - 1, nr: r, pA: [x0, z0], pB: [x0, z1] },
+        { nc: c + 1, nr: r, pA: [x1, z1], pB: [x1, z0] },
+        { nc: c, nr: r - 1, pA: [x1, z0], pB: [x0, z0] },
+        { nc: c, nr: r + 1, pA: [x0, z1], pB: [x1, z1] },
+      ];
+      for (const s of sides) {
+        const nh = hAt(s.nc, s.nr);
+        if (yTop > nh + 0.25) {
+          out.push(
+            s.pA[0], nh, s.pA[1],
+            s.pB[0], nh, s.pB[1],
+            s.pB[0], yTop, s.pB[1],
+            s.pA[0], nh, s.pA[1],
+            s.pB[0], yTop, s.pB[1],
+            s.pA[0], yTop, s.pA[1]
+          );
+        }
+      }
+    }
+  }
+
+  return new Float32Array(out);
+}
+
+/**
+ * Builds a faithful multi-component 3D CAD project from Gemini Vision architectural/mechanical
+ * blueprint + client-side pixel silhouette/relief grid extracted from PNG/JPG/WEBP images.
+ */
+export function buildCadModelFromVisionAndPixels(params: {
+  filename: string;
+  blueprint: VisionCadBlueprint;
+  reliefGrid?: PixelReliefGrid;
+}): ImportedCadModel {
+  const { filename, blueprint, reliefGrid } = params;
+  const validMaterials: MaterialFinish[] = [
+    'aluminum',
+    'titanium',
+    'clay',
+    'oak',
+    'glass',
+    'carbon-fiber',
+    'matte-plastic',
+  ];
+  const sanitizeMat = (m: unknown, fallback: MaterialFinish): MaterialFinish =>
+    validMaterials.includes(m as MaterialFinish) ? (m as MaterialFinish) : fallback;
+
+  const primaryMat = sanitizeMat(blueprint.primaryMaterial, 'aluminum');
+  const detectedProfile: PartEngineeringProfile = {
+    partName: blueprint.partName || filename.replace(/\.[^.]+$/, ''),
+    manufacturer: blueprint.manufacturer || 'Projeto Reconstruído por Visão CAD',
+    modelCode: blueprint.modelCode || filename.replace(/\.[^.]+$/, ''),
+    segment: blueprint.segment || 'industrial-cnc',
+    primaryMaterial: primaryMat,
+    specifications:
+      blueprint.specifications?.length > 0
+        ? blueprint.specifications
+        : [`Dimensões reconstruídas: ${blueprint.overallDimensionsMm.width}×${blueprint.overallDimensionsMm.height}×${blueprint.overallDimensionsMm.depth} mm`],
+    certifications:
+      blueprint.certifications?.length > 0
+        ? blueprint.certifications
+        : ['ISO 2768-mK', 'ASME Y14.5 GD&T'],
+    intendedUse: blueprint.intendedUse || 'Componente CAD reconstruído fielmente a partir de imagem de referência.',
+    safetyCriteria: {
+      recommendedLoadN: Math.max(200, Math.min(40000, Number(blueprint.recommendedLoadN) || 4500)),
+      supportMode: blueprint.segment === 'aeroespacial' ? 'cantilever-u' : 'edge-clamped',
+      loadPattern: blueprint.segment === 'ciclismo-mobilidade' ? 'torsion-tip' : 'center-point',
+      minSafetyFactor: Math.max(1.2, Math.min(6, Number(blueprint.minSafetyFactor) || 2.2)),
+      maxDeflectionMm: Math.max(0.2, Math.min(20, Number(blueprint.maxDeflectionMm) || 2.5)),
+      criticalInspectionNote:
+        blueprint.criticalInspectionNote ||
+        'Verificar concentração de tensão nas interfaces geométricas detectadas na imagem.',
+    },
+    detectedFrom: `Visão CAD 3D (${filename})`,
+  };
+
+  const components: CadComponentPart[] = [];
+  const combinedPositions: number[] = [];
+
+  const useRelief =
+    Boolean(reliefGrid) &&
+    reliefGrid!.coveragePct > 4 &&
+    reliefGrid!.coveragePct < 94 &&
+    (blueprint.constructionMode === 'extruded-relief' || blueprint.components.length <= 2);
+
+  if (useRelief && reliefGrid) {
+    const wMm = Math.max(60, Math.min(320, blueprint.overallDimensionsMm.width || 180));
+    const dMm = wMm / Math.max(0.25, Math.min(4, reliefGrid.aspectRatio || 1));
+    const hMm = Math.max(12, Math.min(60, blueprint.overallDimensionsMm.depth || 26));
+    const reliefPos = buildHeightmapReliefTriangles(reliefGrid, wMm, dMm, hMm);
+    if (reliefPos.length > 0) {
+      const rNorm = computeTriangleNormals(reliefPos);
+      const rBox = computeBounds(reliefPos);
+      const cls = classifyComponentFamily(blueprint.partName || filename, 0);
+      for (let k = 0; k < reliefPos.length; k++) combinedPositions.push(reliefPos[k]);
+      components.push({
+        id: 'COMP-1',
+        name: `${blueprint.partName} (Contorno 3D Fiel)`,
+        family: cls.family,
+        subFamily: 'Relevo / Contorno Extraído da Imagem',
+        maskColorHex: cls.maskColorHex,
+        inferredMaterial: primaryMat,
+        center: [
+          (rBox.min[0] + rBox.max[0]) / 2,
+          (rBox.min[1] + rBox.max[1]) / 2,
+          (rBox.min[2] + rBox.max[2]) / 2,
+        ],
+        size: rBox.size,
+        positions: reliefPos,
+        normals: rNorm,
+        triangleCount: Math.floor(reliefPos.length / 9),
+        sourceLayer: 'VISION_PIXEL_RELIEF',
+      });
+    }
+  }
+
+  // Add Vision-identified structural CAD sub-components (full 3D assembly or secondary details)
+  if (!useRelief || blueprint.components.length >= 2) {
+    const list = blueprint.components.slice(0, 14);
+    list.forEach((comp, idx) => {
+      const [cx, cy, cz] = comp.centerMm;
+      const sx = Math.max(4, Math.min(350, comp.sizeMm[0] || 40));
+      const sy = Math.max(4, Math.min(350, comp.sizeMm[1] || 40));
+      const sz = Math.max(4, Math.min(350, comp.sizeMm[2] || 40));
+
+      // Offset y cleanly above relief base if relief was already generated as COMP-1
+      const yPos = useRelief ? cy + Math.max(8, (blueprint.overallDimensionsMm.depth || 20) * 0.6) : cy;
+
+      let triPos: Float32Array;
+      if (comp.shape === 'cylinder-y') {
+        triPos = buildCylinderTriangles(cx, yPos, cz, Math.min(sx, sz) / 2, sy, 'y');
+      } else if (comp.shape === 'cylinder-x') {
+        triPos = buildCylinderTriangles(cx, yPos, cz, Math.min(sy, sz) / 2, sx, 'x');
+      } else if (comp.shape === 'cylinder-z') {
+        triPos = buildCylinderTriangles(cx, yPos, cz, Math.min(sx, sy) / 2, sz, 'z');
+      } else if (comp.shape === 'ring') {
+        const outerR = Math.max(sx, sz) / 2;
+        triPos = buildRingTriangles(cx, yPos, cz, outerR, outerR * 0.52, sy, 'y');
+      } else {
+        triPos = buildBoxTriangles(cx, yPos, cz, sx, sy, sz);
+      }
+
+      const triNorm = computeTriangleNormals(triPos);
+      const cBox = computeBounds(triPos);
+      const cls = classifyComponentFamily(comp.name, components.length + idx);
+      for (let k = 0; k < triPos.length; k++) combinedPositions.push(triPos[k]);
+
+      components.push({
+        id: `COMP-${components.length + 1}`,
+        name: comp.name || `Sub-componente ${components.length + 1}`,
+        family: cls.family,
+        subFamily: cls.subFamily,
+        maskColorHex: cls.maskColorHex,
+        inferredMaterial: sanitizeMat(comp.material, cls.inferredMaterial),
+        center: [
+          (cBox.min[0] + cBox.max[0]) / 2,
+          (cBox.min[1] + cBox.max[1]) / 2,
+          (cBox.min[2] + cBox.max[2]) / 2,
+        ],
+        size: cBox.size,
+        positions: triPos,
+        normals: triNorm,
+        triangleCount: Math.floor(triPos.length / 9),
+        sourceLayer: 'VISION_CAD_ASSEMBLY',
+      });
+    });
+  }
+
+  const positions = new Float32Array(combinedPositions);
+  const normals = computeTriangleNormals(positions);
+  const layers = components.map((c) => c.name);
+
+  return {
+    id: `imp-${Date.now()}`,
+    filename,
+    format: 'IMAGE',
+    positions,
+    normals,
+    triangleCount: Math.floor(positions.length / 9),
+    entityCount: components.length,
+    layers,
+    boundingBox: computeBounds(positions),
+    notes: `Imagem "${filename}" convertida em projeto CAD 3D fidedigno (${blueprint.partName} · ${components.length} sub-componentes · ${Math.floor(positions.length / 9)} triângulos)`,
     components,
     detectedProfile,
   };

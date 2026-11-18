@@ -1,4 +1,12 @@
-import { parse3DM, parseDXF, parseOBJ, parseSTEPorIFC, parseSTL } from './cadFormats';
+import {
+  parse3DM,
+  parseDXF,
+  parseIPT,
+  parseOBJ,
+  parseSTEPorIFC,
+  parseSTL,
+  parseSVGToCad,
+} from './cadFormats';
 import type { ImportedCadModel, RagDocumentChunk, RagSourceDocument, RagSourceKind } from '../types/cad';
 
 const CHUNK_SIZE = 1200;
@@ -77,8 +85,8 @@ export function base64ToArrayBuffer(b64: string): ArrayBuffer {
 }
 
 /**
- * Parses CAD geometry if the ingested file is .STL, .OBJ, .DXF, .3DM, .STEP, or .IFC,
- * and builds a descriptive RAG text summary of its bounding box, triangle count, and layers.
+ * Parses CAD geometry if the ingested file is .STL, .OBJ, .DXF, .3DM, .STEP/.STP, .IFC, .IPT, .SVG,
+ * or attaches a pre-converted Image-to-CAD project, building a descriptive RAG text summary.
  */
 export function tryBuildCadAndRagDoc(params: {
   title: string;
@@ -88,24 +96,31 @@ export function tryBuildCadAndRagDoc(params: {
   byteSize: number;
   extractedText?: string;
   buffer?: ArrayBuffer;
+  preBuiltCad?: ImportedCadModel | null;
 }): { ragDoc: RagSourceDocument; importedCad: ImportedCadModel | null } {
   const lower = params.title.toLowerCase();
-  let importedCad: ImportedCadModel | null = null;
+  let importedCad: ImportedCadModel | null = params.preBuiltCad ?? null;
   let cadTextSummary = '';
 
   try {
-    if (lower.endsWith('.stl') && params.buffer) {
-      importedCad = parseSTL(params.buffer, params.title);
-    } else if (lower.endsWith('.3dm') && params.buffer) {
-      importedCad = parse3DM(params.buffer, params.title);
-    } else if (lower.endsWith('.obj') && params.extractedText) {
-      importedCad = parseOBJ(params.extractedText, params.title);
-    } else if (lower.endsWith('.dxf') && params.extractedText) {
-      importedCad = parseDXF(params.extractedText, params.title);
-    } else if ((lower.endsWith('.step') || lower.endsWith('.stp')) && params.extractedText) {
-      importedCad = parseSTEPorIFC(params.extractedText, params.title, 'STEP');
-    } else if (lower.endsWith('.ifc') && params.extractedText) {
-      importedCad = parseSTEPorIFC(params.extractedText, params.title, 'IFC');
+    if (!importedCad) {
+      if (lower.endsWith('.stl') && params.buffer) {
+        importedCad = parseSTL(params.buffer, params.title);
+      } else if (lower.endsWith('.3dm') && params.buffer) {
+        importedCad = parse3DM(params.buffer, params.title);
+      } else if (lower.endsWith('.ipt') && params.buffer) {
+        importedCad = parseIPT(params.buffer, params.title);
+      } else if (lower.endsWith('.obj') && params.extractedText) {
+        importedCad = parseOBJ(params.extractedText, params.title);
+      } else if (lower.endsWith('.dxf') && params.extractedText) {
+        importedCad = parseDXF(params.extractedText, params.title);
+      } else if ((lower.endsWith('.step') || lower.endsWith('.stp')) && params.extractedText) {
+        importedCad = parseSTEPorIFC(params.extractedText, params.title, 'STEP');
+      } else if (lower.endsWith('.ifc') && params.extractedText) {
+        importedCad = parseSTEPorIFC(params.extractedText, params.title, 'IFC');
+      } else if (lower.endsWith('.svg') && params.extractedText) {
+        importedCad = parseSVGToCad(params.extractedText, params.title);
+      }
     }
   } catch {
     // Non-fatal: still index raw text for RAG even if CAD parsing fails

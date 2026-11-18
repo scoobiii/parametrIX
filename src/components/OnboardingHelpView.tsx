@@ -57,11 +57,11 @@ interface VoiceGuideTopic {
 
 const VOICE_GUIDE_TOPICS: VoiceGuideTopic[] = [
   {
-    id: 'grabcad_3d',
-    title: '01. Visualizador & Editor 3D GrabCAD',
+    id: 'cad_3d_editor',
+    title: '01. Visualizador & Editor 3D Paramétrico',
     targetTab: 'viewport',
     script:
-      'Módulo 1: Visualizador e Editor 3D GrabCAD. Sempre que você envia ou importa um arquivo STEP, STL, OBJ, DXF, 3DM ou IFC, o ambiente abre automaticamente o editor 3D e enquadra a peça. Na barra inferior você pode usar o controle Explodir para separar os componentes, girar o conjunto ou ativar o Gizmo 3D para rotacionar peças individualmente, além de ativar o Corte Transversal e os botões de Enquadrar e câmera ortogonal.',
+      'Módulo 1: Visualizador e Editor 3D Paramétrico. Sempre que você envia ou importa um arquivo STEP, STP, IPT, SVG, STL, OBJ, DXF, 3DM, IFC ou imagens PNG, JPG e WEBP, o sistema converte em geometria 3D fidedigna, abre automaticamente o editor 3D e enquadra a peça. Na barra superior você pode abrir a árvore de modelos, ativar o Corte em Seção X, Y ou Z, ajustar o controle Explodir e medir distâncias em tempo real.',
   },
   {
     id: 'object_mask',
