@@ -1,0 +1,6 @@
+{
+  "name": "Parametrix CAD Studio",
+  "description": "Editor de engenharia paramétrico NURBS, BIM e grafo visual estilo Grasshopper com importação/exportação DXF, STL e 3DM, extensibilidade por plugins e programação CAM e robótica 6-eixos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,231 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Perfil isolado de usuário final autenticado via Google Sign-In (Firebase Auth), sem acesso a dados do PO ou Google Workspace.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID do usuário no Firebase Auth."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Nome de exibição da conta Google do usuário final."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "E-mail verificado do usuário final."
+        },
+        "photoUrl": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "URL do avatar do usuário final (ou string vazia)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp de criação do perfil."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp da última atualização do perfil."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "email",
+        "photoUrl",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CadProject": {
+      "title": "CadProject",
+      "description": "Projeto paramétrico NURBS/BIM e configuração CAM/Robótica salvo privadamente na conta do usuário.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Identificador único do projeto."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID do proprietário do projeto."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Nome do projeto CAD paramétrico."
+        },
+        "preset": {
+          "type": "string",
+          "enum": ["shell", "impeller", "cavity", "diagrid"],
+          "maxLength": 32,
+          "description": "Preset geométrico NURBS ativo."
+        },
+        "materialFinish": {
+          "type": "string",
+          "enum": [
+            "aluminum",
+            "titanium",
+            "clay",
+            "oak",
+            "glass",
+            "carbon-fiber",
+            "matte-plastic"
+          ],
+          "maxLength": 32,
+          "description": "Acabamento PBR selecionado na viewport."
+        },
+        "displayMode": {
+          "type": "string",
+          "enum": ["solid", "wireframe", "zebra", "curvature", "xray"],
+          "maxLength": 32,
+          "description": "Modo de visualização da viewport 3D."
+        },
+        "designParams": {
+          "type": "object",
+          "description": "Mapa nativo com os parâmetros numéricos da superfície NURBS e estrutura BIM."
+        },
+        "camSettings": {
+          "type": "object",
+          "description": "Mapa nativo com os parâmetros da estratégia CAM e pós-processador."
+        },
+        "sessionSeconds": {
+          "type": "integer",
+          "description": "Duração acumulada da sessão de engenharia em segundos."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp de criação."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp da última gravação."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "name",
+        "preset",
+        "materialFinish",
+        "displayMode",
+        "designParams",
+        "camSettings",
+        "sessionSeconds",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SessionDeliverable": {
+      "title": "SessionDeliverable",
+      "description": "Registro de artefato exportado (.3DM, .STL, .DXF, .NC, .SRC, .ICS, .MD, plugin) isolado por usuário.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "ID do entregável."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID do usuário proprietário."
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Nome do arquivo gerado."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "3DM",
+            "STL",
+            "DXF",
+            "NC",
+            "SRC",
+            "MOD",
+            "PLUGIN",
+            "MCP",
+            "ICS",
+            "REPORT"
+          ],
+          "maxLength": 16,
+          "description": "Categoria do entregável."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "description": "Resumo técnico do artefato."
+        },
+        "timestampLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Horário formatado da geração."
+        },
+        "sessionSeconds": {
+          "type": "integer",
+          "description": "Tempo decorrido da sessão no momento da entrega."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp de registro."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "filename",
+        "kind",
+        "summary",
+        "timestampLabel",
+        "sessionSeconds",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Documento raiz do perfil privado de cada usuário final autenticado (PII estritamente isolado pelo próprio UID)."
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/CadProject" },
+      "description": "Projetos CAD paramétricos e configurações CAM salvos privadamente pelo usuário."
+    },
+    "/users/{userId}/deliverables/{deliverableId}": {
+      "schema": { "$ref": "#/entities/SessionDeliverable" },
+      "description": "Histórico persistido de entregáveis e sessões do usuário final."
+    }
+  }
+}

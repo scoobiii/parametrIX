@@ -1,0 +1,229 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 4 Global Safety Net: Default-deny everything not explicitly allowed
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3: Global Security Primitives
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function userExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    // -------------------------------------------------------------------------
+    // Pillar 2: Validation Blueprints (Anti-Update-Gap)
+    // -------------------------------------------------------------------------
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'photoUrl', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoUrl', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.uid == userId
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254 && data.email == request.auth.token.email
+        && data.photoUrl is string && data.photoUrl.size() <= 512
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDesignParams(p) {
+      return p is map
+        && p.keys().hasAll([
+          'preset', 'spanX', 'spanY', 'archHeight', 'waveAmplitude', 'twistDeg',
+          'thicknessMm', 'uDivisions', 'vDivisions', 'ribCountU', 'ribCountV',
+          'ribHeightMm', 'attractorStrength'
+        ])
+        && p.keys().hasOnly([
+          'preset', 'spanX', 'spanY', 'archHeight', 'waveAmplitude', 'twistDeg',
+          'thicknessMm', 'uDivisions', 'vDivisions', 'ribCountU', 'ribCountV',
+          'ribHeightMm', 'attractorStrength'
+        ])
+        && p.preset is string && p.preset in ['shell', 'impeller', 'cavity', 'diagrid']
+        && p.spanX is number && p.spanX >= 20 && p.spanX <= 2000
+        && p.spanY is number && p.spanY >= 20 && p.spanY <= 2000
+        && p.archHeight is number && p.archHeight >= -500 && p.archHeight <= 500
+        && p.waveAmplitude is number && p.waveAmplitude >= 0 && p.waveAmplitude <= 300
+        && p.twistDeg is number && p.twistDeg >= -360 && p.twistDeg <= 360
+        && p.thicknessMm is number && p.thicknessMm >= 0.5 && p.thicknessMm <= 100
+        && p.uDivisions is int && p.uDivisions >= 4 && p.uDivisions <= 128
+        && p.vDivisions is int && p.vDivisions >= 4 && p.vDivisions <= 128
+        && p.ribCountU is int && p.ribCountU >= 0 && p.ribCountU <= 40
+        && p.ribCountV is int && p.ribCountV >= 0 && p.ribCountV <= 40
+        && p.ribHeightMm is number && p.ribHeightMm >= 0 && p.ribHeightMm <= 200
+        && p.attractorStrength is number && p.attractorStrength >= -200 && p.attractorStrength <= 200;
+    }
+
+    function isValidCamSettings(c) {
+      return c is map
+        && c.keys().hasAll([
+          'machineType', 'strategy', 'toolId', 'stepoverPct', 'stepdownMm',
+          'stockMarginMm', 'safeZMm', 'cutSpeedMultiplier', 'postFormat'
+        ])
+        && c.keys().hasOnly([
+          'machineType', 'strategy', 'toolId', 'stepoverPct', 'stepdownMm',
+          'stockMarginMm', 'safeZMm', 'cutSpeedMultiplier', 'postFormat'
+        ])
+        && c.machineType is string && c.machineType in ['manual', 'cnc-3axis', 'cnc-5axis', 'robot-6axis']
+        && c.strategy is string && c.strategy in ['raster', 'isoparm', 'contour']
+        && c.toolId is string && c.toolId.size() >= 1 && c.toolId.size() <= 64
+        && c.stepoverPct is number && c.stepoverPct >= 1 && c.stepoverPct <= 100
+        && c.stepdownMm is number && c.stepdownMm >= 0.05 && c.stepdownMm <= 100
+        && c.stockMarginMm is number && c.stockMarginMm >= 0 && c.stockMarginMm <= 50
+        && c.safeZMm is number && c.safeZMm >= 1 && c.safeZMm <= 500
+        && c.cutSpeedMultiplier is number && c.cutSpeedMultiplier >= 0.1 && c.cutSpeedMultiplier <= 5.0
+        && c.postFormat is string && c.postFormat in ['fanuc-nc', 'grbl-gcode', 'kuka-krl', 'abb-rapid', 'manual-sheet'];
+    }
+
+    function isValidCadProject(data, userId, projectId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'name', 'preset', 'materialFinish', 'displayMode',
+          'designParams', 'camSettings', 'sessionSeconds', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'name', 'preset', 'materialFinish', 'displayMode',
+          'designParams', 'camSettings', 'sessionSeconds', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == projectId
+        && isValidId(data.ownerId) && data.ownerId == request.auth.uid && data.ownerId == userId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.preset is string && data.preset in ['shell', 'impeller', 'cavity', 'diagrid']
+        && data.materialFinish is string && data.materialFinish in [
+          'aluminum', 'titanium', 'clay', 'oak', 'glass', 'carbon-fiber', 'matte-plastic'
+        ]
+        && data.displayMode is string && data.displayMode in [
+          'solid', 'wireframe', 'zebra', 'curvature', 'xray'
+        ]
+        && isValidDesignParams(data.designParams)
+        && isValidCamSettings(data.camSettings)
+        && data.sessionSeconds is int && data.sessionSeconds >= 0 && data.sessionSeconds <= 8640000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeliverable(data, userId, deliverableId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'filename', 'kind', 'summary', 'timestampLabel', 'sessionSeconds', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'filename', 'kind', 'summary', 'timestampLabel', 'sessionSeconds', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == deliverableId
+        && isValidId(data.ownerId) && data.ownerId == request.auth.uid && data.ownerId == userId
+        && data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 160
+        && data.kind is string && data.kind in [
+          '3DM', 'STL', 'DXF', 'NC', 'SRC', 'MOD', 'PLUGIN', 'MCP', 'ICS', 'REPORT'
+        ]
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 240
+        && data.timestampLabel is string && data.timestampLabel.size() >= 1 && data.timestampLabel.size() <= 32
+        && data.sessionSeconds is int && data.sessionSeconds >= 0 && data.sessionSeconds <= 8640000
+        && data.createdAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /users/{userId} (PII Strictly Isolated to Owner)
+    // -------------------------------------------------------------------------
+    match /users/{userId} {
+      allow list: if false;
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoUrl', 'updatedAt']);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      // Subcollection: /users/{userId}/projects/{projectId}
+      match /projects/{projectId} {
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow get: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && userExists(userId)
+          && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && isValidCadProject(incoming(), userId, projectId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && isValidCadProject(incoming(), userId, projectId)
+          && userExists(userId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'preset', 'materialFinish', 'displayMode',
+            'designParams', 'camSettings', 'sessionSeconds', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && userExists(userId)
+          && existing().ownerId == request.auth.uid;
+      }
+
+      // Subcollection: /users/{userId}/deliverables/{deliverableId}
+      match /deliverables/{deliverableId} {
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow get: if isValidId(userId)
+          && isValidId(deliverableId)
+          && isOwner(userId)
+          && userExists(userId)
+          && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(deliverableId)
+          && isOwner(userId)
+          && isValidDeliverable(incoming(), userId, deliverableId)
+          && incoming().createdAt == request.time
+          && userExists(userId);
+        allow update: if false;
+        allow delete: if isValidId(userId)
+          && isValidId(deliverableId)
+          && isOwner(userId)
+          && userExists(userId)
+          && existing().ownerId == request.auth.uid;
+      }
+    }
+  }
+}
