@@ -1048,13 +1048,13 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: `Na peça ${pick.componentName} (ID ${pick.componentId}) no ponto [${pick.point.map((n) => n.toFixed(1)).join(', ')}] com área ${pick.widthMm.toFixed(1)}x${pick.lengthMm.toFixed(1)}mm: ${prompt}`,
-          ragDocs: ragDocs.map((d) => ({
-            title: d.title,
-            sourceType: d.kind,
-            excerpt: d.summary,
+          userMessage: `Na peça ${pick.componentName} (ID ${pick.componentId}) no ponto [${pick.point.map((n) => n.toFixed(1)).join(', ')}] com área ${pick.widthMm.toFixed(1)}x${pick.lengthMm.toFixed(1)}mm: ${prompt}`,
+          ragChunks: ragDocs.slice(0, 6).map((d, idx) => ({
+            docTitle: d.title,
+            index: idx + 1,
+            text: d.chunks?.[0]?.text || d.summary,
           })),
-          cadState: {
+          cadContext: {
             activeSegment,
             partProfile,
             components: components.map((c) => ({
@@ -1074,19 +1074,19 @@ export default function App() {
       });
       if (resp.ok) {
         const data = (await resp.json()) as {
-          answer?: string;
-          toolCalls?: { name: string; arguments: Record<string, unknown> }[];
+          text?: string;
+          functionCalls?: { id?: string; name: string; args?: Record<string, unknown> }[];
         };
         const executed: string[] = [];
-        for (const tc of data.toolCalls ?? []) {
-          const log = executeMcpToolCall(tc.name, tc.arguments ?? {}, mcpContextRef.current);
-          if (log.status === 'ok') executed.push(tc.name);
+        for (const fc of data.functionCalls ?? []) {
+          const log = executeMcpToolCall(fc.name, fc.args ?? {}, mcpContextRef.current);
+          if (log.status === 'ok') executed.push(fc.name);
         }
         return {
           summary:
             executed.length > 0
-              ? `MCP (${executed.join(', ')}): ${data.answer || 'Operação concluída.'}`
-              : data.answer || 'Comando analisado via agente MCP.',
+              ? `MCP (${executed.join(', ')}): ${data.text || 'Operação concluída.'}`
+              : data.text || 'Comando analisado via agente MCP.',
         };
       }
     } catch {
@@ -1118,6 +1118,12 @@ export default function App() {
   useEffect(() => {
     (window as unknown as Record<string, unknown>).__PARAMETRIX_MCP__ = {
       protocol: '2024-11-05',
+      endpoints: {
+        llmsTxt: '/llms.txt',
+        onboarding: '/api/agent/onboarding',
+        llmBriefing: '/api/cad/llm-briefing',
+        mcpJsonRpc: '/api/mcp',
+      },
       listTools: () => MCP_TOOLS_CATALOG,
       callTool: (name: string, args: Record<string, unknown> = {}) =>
         executeMcpToolCall(name, args, mcpContextRef.current),

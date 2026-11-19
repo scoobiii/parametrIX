@@ -34,6 +34,17 @@ export const CAM_TOOLS: CamTool[] = [
     recommendedFz: 0.055,
   },
   {
+    id: 'tool-flat-12',
+    name: 'Fresa Topo Plano Ø12mm 4 Cortes',
+    type: 'flat',
+    diameterMm: 12,
+    flutes: 4,
+    lengthMm: 80,
+    material: 'Alumínio 6061 / Aço 1045',
+    recommendedVc: 145,
+    recommendedFz: 0.06,
+  },
+  {
     id: 'tool-bull-12',
     name: 'Fresa Toroidal Ø12mm R1.5',
     type: 'bull',

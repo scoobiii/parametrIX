@@ -177,6 +177,20 @@ export function analyzeCurvatureAndOptimizeWeight(params: {
     featureOps = [],
   } = params;
 
+  const baselineNurbsFea = importedModel
+    ? evaluateStructuralFea(
+        surface,
+        params.meshData,
+        designParams,
+        materialFinish,
+        feaSettings,
+        isolationTarget,
+        partProfile,
+        null,
+        featureOps
+      )
+    : feaResult;
+
   const diff = sampleNurbsDifferentialGeometry(surface, 9);
   const targetSf = Math.max(
     1.5,
@@ -233,19 +247,19 @@ export function analyzeCurvatureAndOptimizeWeight(params: {
         feaSettings,
         isolationTarget,
         partProfile,
-        importedModel,
+        null,
         featureOps
       );
 
       const passesIntegrity =
         candidateFea.safetyFactor >= targetSf &&
         candidateFea.maxDeflectionMm <= maxDeflAllowed &&
-        candidateFea.totalMassKg < feaResult.totalMassKg;
+        candidateFea.totalMassKg < baselineNurbsFea.totalMassKg;
 
       if (passesIntegrity) {
         const dropPct =
-          ((feaResult.totalMassKg - candidateFea.totalMassKg) /
-            Math.max(1e-4, feaResult.totalMassKg)) *
+          ((baselineNurbsFea.totalMassKg - candidateFea.totalMassKg) /
+            Math.max(1e-4, baselineNurbsFea.totalMassKg)) *
           100;
         if (!bestCandidate || dropPct > bestCandidate.massDropPct) {
           bestCandidate = {
@@ -281,11 +295,12 @@ export function analyzeCurvatureAndOptimizeWeight(params: {
       feaSettings,
       isolationTarget,
       partProfile,
-      importedModel,
+      null,
       featureOps
     );
     const dropPct =
-      ((feaResult.totalMassKg - fallbackFea.totalMassKg) / Math.max(1e-4, feaResult.totalMassKg)) *
+      ((baselineNurbsFea.totalMassKg - fallbackFea.totalMassKg) /
+        Math.max(1e-4, baselineNurbsFea.totalMassKg)) *
       100;
     bestCandidate = {
       nextParams: fallbackParams,
@@ -313,12 +328,12 @@ export function analyzeCurvatureAndOptimizeWeight(params: {
     recommendedRibCountV: nextParams.ribCountV,
     recommendedRibHeightMm: nextParams.ribHeightMm,
     recommendedArchHeightMm: nextParams.archHeight,
-    weightBeforeKg: feaResult.totalMassKg,
+    weightBeforeKg: baselineNurbsFea.totalMassKg,
     weightAfterKg: afterFea.totalMassKg,
     weightReductionPct: Number(massDropPct.toFixed(1)),
-    safetyFactorBefore: feaResult.safetyFactor,
+    safetyFactorBefore: baselineNurbsFea.safetyFactor,
     safetyFactorAfter: afterFea.safetyFactor,
-    deflectionBeforeMm: feaResult.maxDeflectionMm,
+    deflectionBeforeMm: baselineNurbsFea.maxDeflectionMm,
     deflectionAfterMm: afterFea.maxDeflectionMm,
     integrityPreserved,
     suggestedParams: nextParams,

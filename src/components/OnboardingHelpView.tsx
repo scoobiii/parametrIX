@@ -737,16 +737,24 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
           </div>
 
           <div className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4">
-            <div className="flex items-center gap-2.5">
-              <Terminal className="w-4 h-4 text-amber-400" />
-              <h2 className="font-display text-base font-semibold text-slate-100">
-                Para Agentes & Automação (MCP & Segmentos)
-              </h2>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <Terminal className="w-4 h-4 text-amber-400" />
+                <h2 className="font-display text-base font-semibold text-slate-100">
+                  Para Agentes &amp; Automação (MCP, /llms.txt &amp; .IPT/.STEP)
+                </h2>
+              </div>
+              <span className="px-2 py-0.5 text-[10px] font-mono-tabular bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded">
+                Agent-Ready HTTP
+              </span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Conecte agentes de IA com <strong className="text-slate-200">RAG (Upload, URL e Google Drive)</strong> e{' '}
-              <strong className="text-slate-200">Model Context Protocol (MCP)</strong> por segmento,
-              com explosão IX, Object Mask, Caneta Mágica, cálculo FEA e mapa de calor Antes vs Depois.
+              Agentes externos descobrem a plataforma via <code className="text-sky-300">/llms.txt</code>{' '}
+              e <code className="text-sky-300">/api/agent/onboarding</code>. Ao receber{' '}
+              <strong className="text-slate-200">.IPT ou .STEP</strong>, envie para{' '}
+              <code className="text-emerald-300">POST /api/cad/llm-briefing</code> ou{' '}
+              <code className="text-amber-300">POST /api/mcp</code> (<code className="text-slate-200">cad_inspect_ipt_step_briefing</code>)
+              para traduzir OpenCASCADE / OLE2+ACIS em dimensões (mm), componentes e normas sem explodir tokens.
             </p>
             <div className="pt-2 flex flex-wrap gap-2">
               <button
@@ -756,12 +764,28 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
               >
                 Agente RAG + MCP
               </button>
+              <a
+                href="/llms.txt"
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-sky-400/30 hover:border-sky-400 text-sky-300 rounded-lg transition-colors"
+              >
+                /llms.txt
+              </a>
+              <a
+                href="/api/agent/onboarding"
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-emerald-400/30 hover:border-emerald-400 text-emerald-300 rounded-lg transition-colors"
+              >
+                JSON Onboarding
+              </a>
               <button
                 type="button"
                 onClick={() => onNavigate('cam')}
                 className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 hover:border-amber-400/50 text-slate-200 rounded-lg transition-colors cursor-pointer"
               >
-                Simular CAM & Robô
+                Simular CAM &amp; Robô
               </button>
             </div>
           </div>

@@ -327,19 +327,45 @@ export function evaluateStructuralFea(
     isolationTarget === 'shell'
       ? 0
       : meshData.bimElements.reduce((acc, el) => acc + el.massKg, 0);
-  const importedMassEstKg = useImportedBox && importedModel
-    ? Math.max(
-        0.6,
-        (importedModel.boundingBox.size[0] *
-          importedModel.boundingBox.size[1] *
-          importedModel.boundingBox.size[2] *
-          0.000018 *
-          spec.densityGcm3) /
-          1000
-      )
-    : 0;
+
+  let importedMassEstKg = 0;
+  if (useImportedBox && importedModel) {
+    const computeMeshVolCm3 = (pos: Float32Array): number => {
+      if (pos.length < 9) return 0;
+      const ox = pos[0], oy = pos[1], oz = pos[2];
+      let signedMm3 = 0;
+      for (let t = 0; t + 8 < pos.length; t += 9) {
+        const ax = pos[t] - ox, ay = pos[t + 1] - oy, az = pos[t + 2] - oz;
+        const bx = pos[t + 3] - ox, by = pos[t + 4] - oy, bz = pos[t + 5] - oz;
+        const cx = pos[t + 6] - ox, cy = pos[t + 7] - oy, cz = pos[t + 8] - oz;
+        const crossX = by * cz - bz * cy;
+        const crossY = bz * cx - bx * cz;
+        const crossZ = bx * cy - by * cx;
+        signedMm3 += (ax * crossX + ay * crossY + az * crossZ) / 6;
+      }
+      return Math.abs(signedMm3) / 1000;
+    };
+
+    let volCm3 = 0;
+    if (importedModel.components && importedModel.components.length > 0) {
+      for (const comp of importedModel.components) {
+        if (comp.positions && comp.positions.length >= 9) {
+          const cv = computeMeshVolCm3(comp.positions);
+          volCm3 += cv > 0.01 ? cv : (Math.max(4, comp.size[0]) * Math.max(4, comp.size[1]) * Math.max(4, comp.size[2]) * 0.18) / 1000;
+        }
+      }
+    }
+    if (volCm3 <= 0.01 && importedModel.positions.length >= 9) {
+      volCm3 = computeMeshVolCm3(importedModel.positions);
+    }
+    if (volCm3 <= 0.01) {
+      const sz = importedModel.boundingBox.size;
+      volCm3 = (Math.max(4, sz[0]) * Math.max(4, sz[1]) * Math.max(4, sz[2]) * 0.18) / 1000;
+    }
+    importedMassEstKg = Math.max(0.02, (volCm3 * spec.densityGcm3) / 1000);
+  }
   const totalMassKg = Number(
-    Math.max(0.05, useImportedBox ? importedMassEstKg : shellMassKg + ribsMassKg).toFixed(2)
+    Math.max(0.02, useImportedBox ? importedMassEstKg : shellMassKg + ribsMassKg).toFixed(2)
   );
 
   const safetyFactor = Number(

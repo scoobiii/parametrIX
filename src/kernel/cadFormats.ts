@@ -146,23 +146,34 @@ function buildCylinderTriangles(
  */
 export function parseSTL(buffer: ArrayBuffer, filename: string): ImportedCadModel {
   const bytes = new Uint8Array(buffer);
-  const headerText = new TextDecoder().decode(bytes.slice(0, Math.min(256, bytes.length)));
+  const view = bytes.byteLength >= 84 ? new DataView(buffer) : null;
+  const binTriCount = view ? view.getUint32(80, true) : 0;
+  const expectedBinSize = 84 + binTriCount * 50;
+  const matchesBinarySize =
+    Boolean(view) &&
+    binTriCount > 0 &&
+    Math.abs(bytes.byteLength - expectedBinSize) <= 8;
+
+  const headerSlice = bytes.slice(0, Math.min(32768, bytes.length));
+  const headerText = new TextDecoder().decode(headerSlice);
   const looksAscii =
-    headerText.trimStart().startsWith('solid') &&
-    headerText.includes('facet') &&
-    bytes.length < 5_000_000;
+    !matchesBinarySize &&
+    /^\s*solid\b/i.test(headerText) &&
+    /\bfacet\b/i.test(headerText);
 
   const posList: number[] = [];
 
   if (looksAscii) {
     const text = new TextDecoder().decode(bytes);
-    const vertexRegex = /vertex\s+([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s+([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s+([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)/g;
+    const vertexRegex = /vertex\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/gi;
     let match: RegExpExecArray | null;
     while ((match = vertexRegex.exec(text)) !== null) {
       const x = parseFloat(match[1]);
       const yCad = parseFloat(match[2]);
       const zUp = parseFloat(match[3]);
-      posList.push(x, zUp, -yCad);
+      if (Number.isFinite(x) && Number.isFinite(yCad) && Number.isFinite(zUp)) {
+        posList.push(x, zUp, -yCad);
+      }
     }
   } else if (bytes.byteLength >= 84) {
     const view = new DataView(buffer);
@@ -314,13 +325,140 @@ export function parseOBJ(text: string, filename: string): ImportedCadModel {
 /**
  * Parses AutoCAD ASCII DXF files (LINE, LWPOLYLINE, CIRCLE, 3DFACE)
  */
+function buildWireRibbonTriangles(
+  wireCoords: number[],
+  ribbonWidth = 1.6,
+  ribbonHeight = 4.0
+): Float32Array {
+  const out: number[] = [];
+  const halfW = Math.max(0.3, ribbonWidth * 0.5);
+  const halfH = Math.max(0.5, ribbonHeight * 0.5);
+
+  for (let i = 0; i + 5 < wireCoords.length; i += 6) {
+    const ax = wireCoords[i], ay = wireCoords[i + 1], az = wireCoords[i + 2];
+    const bx = wireCoords[i + 3], by = wireCoords[i + 4], bz = wireCoords[i + 5];
+    const dx = bx - ax;
+    const dz = bz - az;
+    const len2D = Math.hypot(dx, dz);
+    if (len2D < 1e-4 && Math.abs(by - ay) < 1e-4) continue;
+
+    const nx = len2D > 1e-4 ? (-dz / len2D) * halfW : halfW;
+    const nz = len2D > 1e-4 ? (dx / len2D) * halfW : 0;
+
+    const aL: [number, number, number] = [ax - nx, ay + halfH, az - nz];
+    const aR: [number, number, number] = [ax + nx, ay + halfH, az + nz];
+    const bR: [number, number, number] = [bx + nx, by + halfH, bz + nz];
+    const bL: [number, number, number] = [bx - nx, by + halfH, bz - nz];
+
+    const aLb: [number, number, number] = [ax - nx, ay - halfH, az - nz];
+    const aRb: [number, number, number] = [ax + nx, ay - halfH, az + nz];
+    const bRb: [number, number, number] = [bx + nx, by - halfH, bz + nz];
+    const bLb: [number, number, number] = [bx - nx, by - halfH, bz - nz];
+
+    // Top, bottom, left side, right side (8 tris per segment -> valid non-box solid rib)
+    out.push(...aL, ...aR, ...bR, ...aL, ...bR, ...bL);
+    out.push(...aLb, ...bRb, ...aRb, ...aLb, ...bLb, ...bRb);
+    out.push(...aL, ...bL, ...bLb, ...aL, ...bLb, ...aLb);
+    out.push(...aR, ...aRb, ...bRb, ...aR, ...bRb, ...bR);
+  }
+  return new Float32Array(out);
+}
+
+function appendPolylineWithBulge(
+  rawPts: { x: number; y: number; bulge?: number }[],
+  closed: boolean,
+  elev: number,
+  wireList: number[],
+  lWires: number[]
+): [number, number][] {
+  const expandedXZ: [number, number][] = [];
+  if (rawPts.length < 2) return expandedXZ;
+
+  const count = closed ? rawPts.length : rawPts.length - 1;
+  for (let k = 0; k < count; k++) {
+    const p0 = rawPts[k];
+    const p1 = rawPts[(k + 1) % rawPts.length];
+    const bulge = p0.bulge ?? 0;
+
+    if (Math.abs(bulge) > 1e-4) {
+      const dx = p1.x - p0.x;
+      const dy = p1.y - p0.y;
+      const chord = Math.hypot(dx, dy);
+      if (chord > 1e-4) {
+        const theta = 4 * Math.atan(bulge);
+        const r = (chord * 0.5) / Math.abs(Math.sin(theta * 0.5));
+        const d = (chord * 0.5) / Math.tan(theta * 0.5);
+        const mx = (p0.x + p1.x) * 0.5;
+        const my = (p0.y + p1.y) * 0.5;
+        const ux = -dy / chord;
+        const uy = dx / chord;
+        const cx = mx + ux * d;
+        const cy = my + uy * d;
+        const a0 = Math.atan2(p0.y - cy, p0.x - cx);
+        const segs = Math.max(4, Math.min(20, Math.round((Math.abs(theta) * 180) / (Math.PI * 15))));
+        let prevX = p0.x;
+        let prevY = p0.y;
+        expandedXZ.push([p0.x, -p0.y]);
+        for (let s = 1; s <= segs; s++) {
+          const ang = a0 + (theta * s) / segs;
+          const nx = s === segs ? p1.x : cx + Math.cos(ang) * r;
+          const ny = s === segs ? p1.y : cy + Math.sin(ang) * r;
+          const seg = [prevX, elev, -prevY, nx, elev, -ny];
+          wireList.push(...seg);
+          lWires.push(...seg);
+          if (s < segs) expandedXZ.push([nx, -ny]);
+          prevX = nx;
+          prevY = ny;
+        }
+        continue;
+      }
+    }
+
+    const seg = [p0.x, elev, -p0.y, p1.x, elev, -p1.y];
+    wireList.push(...seg);
+    lWires.push(...seg);
+    expandedXZ.push([p0.x, -p0.y]);
+  }
+  if (!closed) {
+    const last = rawPts[rawPts.length - 1];
+    expandedXZ.push([last.x, -last.y]);
+  }
+  return expandedXZ;
+}
+
+/**
+ * Parses AutoCAD ASCII DXF files (LINE, ARC, CIRCLE, ELLIPSE, SPLINE, LWPOLYLINE, POLYLINE/VERTEX, SOLID, 3DFACE)
+ * Preserves per-layer geometry and extrudes genuine 2D CAD contours (rings, holes, polygons, wire ribs)
+ * instead of collapsing missing 3DFACEs into generic rectangular AABB slabs.
+ */
 export function parseDXF(text: string, filename: string): ImportedCadModel {
   const lines = text.split(/\r?\n/);
   const wireList: number[] = [];
-  const triList: number[] = [];
   const layerWireMap = new Map<string, number[]>();
+  const layerTriMap = new Map<string, number[]>();
+  const layerCircles = new Map<string, { cx: number; cy: number; cz: number; r: number }[]>();
+  const layerPolys = new Map<string, { ptsXZ: [number, number][]; elev: number; closed: boolean }[]>();
+  const layerOrder: string[] = [];
   const layers = new Set<string>();
   let entityCount = 0;
+
+  const ensureLayer = (layer: string) => {
+    if (!layers.has(layer)) {
+      layers.add(layer);
+      layerOrder.push(layer);
+    }
+    if (!layerWireMap.has(layer)) layerWireMap.set(layer, []);
+    if (!layerTriMap.has(layer)) layerTriMap.set(layer, []);
+    if (!layerCircles.has(layer)) layerCircles.set(layer, []);
+    if (!layerPolys.has(layer)) layerPolys.set(layer, []);
+  };
+
+  let activePolyline: {
+    layer: string;
+    closed: boolean;
+    elev: number;
+    pts: { x: number; y: number; bulge?: number }[];
+  } | null = null;
 
   let i = 0;
   let inEntities = false;
@@ -336,18 +474,18 @@ export function parseDXF(text: string, filename: string): ImportedCadModel {
       break;
     }
     if (inEntities && code === '0') {
-      const entityType = val;
+      const entityType = val.toUpperCase();
       i += 2;
       const props: Record<string, number[]> = {};
-      let layer = '0';
-      const lwPts: { x: number; y: number }[] = [];
+      let layer: string = activePolyline?.layer ?? '0';
+      const lwPts: { x: number; y: number; bulge?: number }[] = [];
       let curX = 0;
       let hasX = false;
 
       while (i < lines.length - 1 && lines[i].trim() !== '0') {
         const c = lines[i].trim();
         const v = lines[i + 1].trim();
-        if (c === '8') layer = v;
+        if (c === '8' && v) layer = v;
         const num = parseFloat(v);
         if (!Number.isNaN(num)) {
           if (!props[c]) props[c] = [];
@@ -359,16 +497,57 @@ export function parseDXF(text: string, filename: string): ImportedCadModel {
             } else if (c === '20' && hasX) {
               lwPts.push({ x: curX, y: num });
               hasX = false;
+            } else if (c === '42' && lwPts.length > 0) {
+              lwPts[lwPts.length - 1].bulge = num;
             }
           }
         }
         i += 2;
       }
 
-      layers.add(layer);
+      if (entityType === 'POLYLINE') {
+        ensureLayer(layer);
+        activePolyline = {
+          layer,
+          closed: ((props['70']?.[0] ?? 0) & 1) === 1,
+          elev: props['30']?.[0] ?? 0,
+          pts: [],
+        };
+        entityCount++;
+        continue;
+      } else if (entityType === 'VERTEX' && activePolyline) {
+        const vx = props['10']?.[0];
+        const vy = props['20']?.[0];
+        const vbulge = props['42']?.[0] ?? 0;
+        if (vx !== undefined && vy !== undefined) {
+          activePolyline.pts.push({ x: vx, y: vy, bulge: vbulge });
+        }
+        continue;
+      } else if (entityType === 'SEQEND' && activePolyline) {
+        const poly = activePolyline;
+        activePolyline = null;
+        if (poly.pts.length >= 2) {
+          const pWires = layerWireMap.get(poly.layer)!;
+          const expandedXZ = appendPolylineWithBulge(
+            poly.pts,
+            poly.closed,
+            poly.elev,
+            wireList,
+            pWires
+          );
+          layerPolys.get(poly.layer)!.push({
+            ptsXZ: expandedXZ,
+            elev: poly.elev,
+            closed: poly.closed,
+          });
+        }
+        continue;
+      }
+
+      ensureLayer(layer);
       entityCount++;
-      if (!layerWireMap.has(layer)) layerWireMap.set(layer, []);
       const lWires = layerWireMap.get(layer)!;
+      const lTris = layerTriMap.get(layer)!;
 
       if (entityType === 'LINE') {
         const x1 = props['10']?.[0] ?? 0;
@@ -383,8 +562,8 @@ export function parseDXF(text: string, filename: string): ImportedCadModel {
         const cx = props['10']?.[0] ?? 0;
         const cy = props['20']?.[0] ?? 0;
         const cz = props['30']?.[0] ?? 0;
-        const r = props['40']?.[0] ?? 20;
-        const segs = 32;
+        const r = Math.max(0.5, props['40']?.[0] ?? 20);
+        const segs = 36;
         for (let s = 0; s < segs; s++) {
           const a0 = (s / segs) * Math.PI * 2;
           const a1 = ((s + 1) / segs) * Math.PI * 2;
@@ -395,59 +574,191 @@ export function parseDXF(text: string, filename: string): ImportedCadModel {
           wireList.push(...seg);
           lWires.push(...seg);
         }
-      } else if (entityType === 'LWPOLYLINE' && lwPts.length >= 2) {
-        const closed = ((props['70']?.[0] ?? 0) & 1) === 1;
-        const elev = props['38']?.[0] ?? 0;
-        for (let k = 0; k < lwPts.length - 1; k++) {
-          const seg = [lwPts[k].x, elev, -lwPts[k].y, lwPts[k + 1].x, elev, -lwPts[k + 1].y];
-          wireList.push(...seg);
-          lWires.push(...seg);
-        }
-        if (closed && lwPts.length > 2) {
+        layerCircles.get(layer)!.push({ cx, cy, cz, r });
+      } else if (entityType === 'ARC') {
+        const cx = props['10']?.[0] ?? 0;
+        const cy = props['20']?.[0] ?? 0;
+        const cz = props['30']?.[0] ?? 0;
+        const r = Math.max(0.5, props['40']?.[0] ?? 20);
+        const startDeg = props['50']?.[0] ?? 0;
+        let endDeg = props['51']?.[0] ?? 360;
+        if (endDeg <= startDeg) endDeg += 360;
+        const sweep = endDeg - startDeg;
+        const segs = Math.max(6, Math.round((sweep / 360) * 32));
+        for (let s = 0; s < segs; s++) {
+          const a0 = ((startDeg + (sweep * s) / segs) * Math.PI) / 180;
+          const a1 = ((startDeg + (sweep * (s + 1)) / segs) * Math.PI) / 180;
           const seg = [
-            lwPts[lwPts.length - 1].x, elev, -lwPts[lwPts.length - 1].y,
-            lwPts[0].x, elev, -lwPts[0].y,
+            cx + Math.cos(a0) * r, cz, -(cy + Math.sin(a0) * r),
+            cx + Math.cos(a1) * r, cz, -(cy + Math.sin(a1) * r),
           ];
           wireList.push(...seg);
           lWires.push(...seg);
+        }
+      } else if (entityType === 'ELLIPSE') {
+        const cx = props['10']?.[0] ?? 0;
+        const cy = props['20']?.[0] ?? 0;
+        const cz = props['30']?.[0] ?? 0;
+        const mx = props['11']?.[0] ?? 20;
+        const my = props['21']?.[0] ?? 0;
+        const ratio = Math.max(0.05, props['40']?.[0] ?? 1);
+        const startP = props['41']?.[0] ?? 0;
+        let endP = props['42']?.[0] ?? Math.PI * 2;
+        if (endP <= startP) endP += Math.PI * 2;
+        const minX = -my * ratio;
+        const minY = mx * ratio;
+        const segs = 28;
+        for (let s = 0; s < segs; s++) {
+          const t0 = startP + ((endP - startP) * s) / segs;
+          const t1 = startP + ((endP - startP) * (s + 1)) / segs;
+          const p0x = cx + mx * Math.cos(t0) + minX * Math.sin(t0);
+          const p0y = cy + my * Math.cos(t0) + minY * Math.sin(t0);
+          const p1x = cx + mx * Math.cos(t1) + minX * Math.sin(t1);
+          const p1y = cy + my * Math.cos(t1) + minY * Math.sin(t1);
+          const seg = [p0x, cz, -p0y, p1x, cz, -p1y];
+          wireList.push(...seg);
+          lWires.push(...seg);
+        }
+      } else if (entityType === 'SPLINE') {
+        const xs = props['10']?.length ? props['10'] : (props['11'] ?? []);
+        const ys = props['20']?.length ? props['20'] : (props['21'] ?? []);
+        const zs = props['30']?.length ? props['30'] : (props['31'] ?? []);
+        const count = Math.min(xs.length, ys.length);
+        for (let k = 0; k + 1 < count; k++) {
+          const seg = [xs[k], zs[k] ?? 0, -ys[k], xs[k + 1], zs[k + 1] ?? 0, -ys[k + 1]];
+          wireList.push(...seg);
+          lWires.push(...seg);
+        }
+      } else if (entityType === 'LWPOLYLINE' && lwPts.length >= 2) {
+        const closed = ((props['70']?.[0] ?? 0) & 1) === 1;
+        const elev = props['38']?.[0] ?? 0;
+        const expandedXZ = appendPolylineWithBulge(lwPts, closed, elev, wireList, lWires);
+        layerPolys.get(layer)!.push({ ptsXZ: expandedXZ, elev, closed });
+      } else if (entityType === 'SOLID' || entityType === 'TRACE') {
+        const x0 = props['10']?.[0] ?? 0, y0 = props['20']?.[0] ?? 0, z0 = props['30']?.[0] ?? 0;
+        const x1 = props['11']?.[0] ?? 0, y1 = props['21']?.[0] ?? 0, z1 = props['31']?.[0] ?? 0;
+        const x2 = props['12']?.[0] ?? 0, y2 = props['22']?.[0] ?? 0, z2 = props['32']?.[0] ?? 0;
+        const x3 = props['13']?.[0] ?? x2, y3 = props['23']?.[0] ?? y2, z3 = props['33']?.[0] ?? z2;
+        lTris.push(x0, z0, -y0, x1, z1, -y1, x2, z2, -y2);
+        if (Math.hypot(x3 - x2, y3 - y2, z3 - z2) > 1e-4) {
+          lTris.push(x1, z1, -y1, x3, z3, -y3, x2, z2, -y2);
         }
       } else if (entityType === '3DFACE') {
         const x0 = props['10']?.[0] ?? 0, y0 = props['20']?.[0] ?? 0, z0 = props['30']?.[0] ?? 0;
         const x1 = props['11']?.[0] ?? 0, y1 = props['21']?.[0] ?? 0, z1 = props['31']?.[0] ?? 0;
         const x2 = props['12']?.[0] ?? 0, y2 = props['22']?.[0] ?? 0, z2 = props['32']?.[0] ?? 0;
         const x3 = props['13']?.[0] ?? x2, y3 = props['23']?.[0] ?? y2, z3 = props['33']?.[0] ?? z2;
-        triList.push(x0, z0, -y0, x1, z1, -y1, x2, z2, -y2);
+        lTris.push(x0, z0, -y0, x1, z1, -y1, x2, z2, -y2);
         if (Math.hypot(x3 - x2, y3 - y2, z3 - z2) > 1e-4) {
-          triList.push(x0, z0, -y0, x2, z2, -y2, x3, z3, -y3);
+          lTris.push(x0, z0, -y0, x2, z2, -y2, x3, z3, -y3);
         }
+        lWires.push(x0, z0, -y0, x1, z1, -y1, x1, z1, -y1, x2, z2, -y2, x2, z2, -y2, x0, z0, -y0);
       }
       continue;
     }
     i += 2;
   }
 
-  const positions = new Float32Array(triList);
-  const normals = computeTriangleNormals(positions);
-  const wireSegments = new Float32Array(wireList);
-  const boundsTarget = positions.length > 0 ? positions : wireSegments;
-  const layerList = layers.size > 0 ? Array.from(layers) : ['0'];
-
+  // Collect all circles across the drawing to accurately detect concentric bores/collars
+  const allCircles = Array.from(layerCircles.values()).flat();
+  const combinedTriList: number[] = [];
   const components: CadComponentPart[] = [];
-  let idx = 0;
-  for (const [lName, lWires] of layerWireMap.entries()) {
+
+  layerOrder.forEach((lName, idx) => {
+    const lWires = layerWireMap.get(lName) ?? [];
+    const lTris = layerTriMap.get(lName) ?? [];
+    const lCircles = layerCircles.get(lName) ?? [];
+    const lPolys = layerPolys.get(lName) ?? [];
+
+    let partTriCoords: number[] = [];
+
+    if (lTris.length >= 9) {
+      partTriCoords = [...lTris];
+    } else {
+      // Extrude faithful geometry directly from circles, polygons, and wires on this layer
+      for (const circ of lCircles) {
+        const concentricInner = allCircles.filter(
+          (other) =>
+            other !== circ &&
+            other.r < circ.r * 0.85 &&
+            Math.hypot(other.cx - circ.cx, other.cy - circ.cy) < circ.r * 0.25
+        );
+        const isSmallHoleLayer = /furo|furacao|bolt|m\d+|bushing|collar/i.test(lName);
+        if (concentricInner.length > 0) {
+          const maxInnerR = Math.max(...concentricInner.map((c) => c.r));
+          const plateH = Math.max(8, Math.min(20, circ.r * 0.16));
+          const ring = buildRingTriangles(
+            circ.cx,
+            circ.cz + plateH * 0.5,
+            -circ.cy,
+            circ.r,
+            maxInnerR,
+            plateH,
+            'y',
+            36
+          );
+          for (let k = 0; k < ring.length; k++) partTriCoords.push(ring[k]);
+        } else if (isSmallHoleLayer || circ.r <= 36) {
+          const sleeveH = circ.r <= 10 ? 18 : 22;
+          const rOut = circ.r <= 10 ? circ.r * 1.45 : circ.r * 1.12;
+          const rIn = circ.r <= 10 ? circ.r * 0.65 : circ.r * 0.88;
+          const ring = buildRingTriangles(
+            circ.cx,
+            circ.cz + sleeveH * 0.5,
+            -circ.cy,
+            rOut,
+            rIn,
+            sleeveH,
+            'y',
+            circ.r <= 10 ? 20 : 28
+          );
+          for (let k = 0; k < ring.length; k++) partTriCoords.push(ring[k]);
+        } else {
+          const discH = Math.max(8, Math.min(18, circ.r * 0.15));
+          const cyl = buildCylinderTriangles(
+            circ.cx,
+            circ.cz + discH * 0.5,
+            -circ.cy,
+            circ.r,
+            discH,
+            'y',
+            32
+          );
+          for (let k = 0; k < cyl.length; k++) partTriCoords.push(cyl[k]);
+        }
+      }
+
+      for (const poly of lPolys) {
+        if (poly.closed && poly.ptsXZ.length >= 3) {
+          const prismH = 12 + (idx % 4) * 3;
+          const { positions: prismPos } = buildPrismFromPolygon2D(
+            poly.ptsXZ,
+            poly.elev,
+            poly.elev + prismH
+          );
+          for (let k = 0; k < prismPos.length; k++) partTriCoords.push(prismPos[k]);
+        }
+      }
+
+      if (partTriCoords.length === 0 && lWires.length >= 6) {
+        const ribWidth = Math.max(1.2, Math.min(3.0, computeBounds(new Float32Array(lWires)).size[0] * 0.015));
+        const ribbons = buildWireRibbonTriangles(lWires, ribWidth, 5 + (idx % 3) * 2);
+        for (let k = 0; k < ribbons.length; k++) partTriCoords.push(ribbons[k]);
+      }
+    }
+
+    if (partTriCoords.length === 0 && lWires.length === 0) return;
+
+    const partPos = new Float32Array(partTriCoords);
+    const partNorm = computeTriangleNormals(partPos);
     const wArr = new Float32Array(lWires);
-    const lBox = computeBounds(wArr.length > 0 ? wArr : boundsTarget);
+    const lBox = computeBounds(partPos.length > 0 ? partPos : wArr);
     const cls = classifyComponentFamily(lName, idx);
-    const boxPos = buildBoxTriangles(
-      (lBox.min[0] + lBox.max[0]) / 2,
-      (lBox.min[1] + lBox.max[1]) / 2,
-      (lBox.min[2] + lBox.max[2]) / 2,
-      Math.max(4, lBox.size[0]),
-      Math.max(4, lBox.size[1]),
-      Math.max(4, lBox.size[2])
-    );
+
+    for (let k = 0; k < partPos.length; k++) combinedTriList.push(partPos[k]);
+
     components.push({
-      id: `COMP-${idx + 1}`,
+      id: `COMP-${components.length + 1}`,
       name: `Camada ${lName}`,
       family: cls.family,
       subFamily: cls.subFamily,
@@ -459,14 +770,19 @@ export function parseDXF(text: string, filename: string): ImportedCadModel {
         (lBox.min[2] + lBox.max[2]) / 2,
       ],
       size: lBox.size,
-      positions: positions.length > 0 && idx === 0 ? positions : boxPos,
-      normals: positions.length > 0 && idx === 0 ? normals : computeTriangleNormals(boxPos),
+      positions: partPos,
+      normals: partNorm,
       wireSegments: wArr,
-      triangleCount: Math.floor((positions.length > 0 && idx === 0 ? positions : boxPos).length / 9),
+      triangleCount: Math.floor(partPos.length / 9),
       sourceLayer: lName,
     });
-    idx++;
-  }
+  });
+
+  const positions = new Float32Array(combinedTriList);
+  const normals = computeTriangleNormals(positions);
+  const wireSegments = new Float32Array(wireList);
+  const boundsTarget = positions.length > 0 ? positions : wireSegments;
+  const layerList = layers.size > 0 ? Array.from(layers) : ['0'];
 
   return {
     id: `imp-${Date.now()}`,
@@ -479,7 +795,7 @@ export function parseDXF(text: string, filename: string): ImportedCadModel {
     entityCount,
     layers: layerList,
     boundingBox: computeBounds(boundsTarget),
-    notes: `Desenho AutoCAD DXF (${entityCount} entidades, ${layerList.length} camadas)`,
+    notes: `Desenho AutoCAD DXF (${entityCount} entidades, ${layerList.length} camadas, ${Math.floor(positions.length / 9)} triângulos)`,
     components,
     detectedProfile: resolvePartEngineeringProfile({ filename, rawText: text, layers: layerList }),
   };
@@ -530,10 +846,11 @@ export function parse3DM(buffer: ArrayBuffer, filename: string): ImportedCadMode
         }
         p += 12;
       }
-    } else if (tcode === 0x20000002 && length >= 8) {
+    } else if (tcode === 0x20000002 && length >= 16) {
       const uC = view.getUint32(pos, true);
       const vC = view.getUint32(pos + 4, true);
-      let p = pos + 8;
+      const hasDegreeHeader = length >= 16 + uC * vC * 16;
+      let p = pos + (hasDegreeHeader ? 16 : 8);
       const pts: [number, number, number][][] = [];
       for (let u = 0; u < uC; u++) {
         const row: [number, number, number][] = [];
@@ -546,10 +863,10 @@ export function parse3DM(buffer: ArrayBuffer, filename: string): ImportedCadMode
         }
         pts.push(row);
       }
-      for (let u = 0; u < uC; u++) {
-        for (let v = 0; v < vC; v++) {
-          if (u + 1 < uC) wireList.push(...pts[u][v], ...pts[u + 1][v]);
-          if (v + 1 < vC) wireList.push(...pts[u][v], ...pts[u][v + 1]);
+      for (let u = 0; u < pts.length; u++) {
+        for (let v = 0; v < (pts[u]?.length ?? 0); v++) {
+          if (u + 1 < pts.length && pts[u + 1][v]) wireList.push(...pts[u][v], ...pts[u + 1][v]);
+          if (v + 1 < pts[u].length) wireList.push(...pts[u][v], ...pts[u][v + 1]);
         }
       }
     } else if (tcode === 0x7fffffff) {
@@ -830,15 +1147,46 @@ export async function parseSTEPAsync(
  */
 export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 'IFC'): ImportedCadModel {
   const entities = new Map<number, { type: string; args: string }>();
-  const normalized = text.replace(/\r?\n/g, ' ');
-  const entRegex = /#(\d+)\s*=\s*([A-Z0-9_]+)\s*\(([^;]*)\)\s*;/gi;
-  let m: RegExpExecArray | null;
-  while ((m = entRegex.exec(normalized)) !== null) {
-    entities.set(parseInt(m[1], 10), { type: m[2].toUpperCase(), args: m[3] });
+
+  // Strip C-style STEP comments /* ... */ outside strings, then split safely by ';' ignoring semicolons inside quotes
+  const cleanText = text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\r?\n/g, ' ');
+  const statements: string[] = [];
+  let inQuote = false;
+  let stmtStart = 0;
+  for (let i = 0; i < cleanText.length; i++) {
+    const ch = cleanText[i];
+    if (ch === "'") {
+      if (inQuote && cleanText[i + 1] === "'") {
+        i++;
+      } else {
+        inQuote = !inQuote;
+      }
+    } else if (ch === ';' && !inQuote) {
+      statements.push(cleanText.slice(stmtStart, i).trim());
+      stmtStart = i + 1;
+    }
+  }
+
+  for (const st of statements) {
+    const m = /^#(\d+)\s*=\s*(.+)$/.exec(st);
+    if (!m) continue;
+    const id = parseInt(m[1], 10);
+    const rhs = m[2].trim();
+    if (rhs.startsWith('(')) {
+      // Compound complex entity e.g. (LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))
+      entities.set(id, { type: 'COMPOUND', args: rhs });
+    } else {
+      const parenIdx = rhs.indexOf('(');
+      if (parenIdx > 0) {
+        const type = rhs.slice(0, parenIdx).trim().toUpperCase();
+        const args = rhs.slice(parenIdx + 1, rhs.lastIndexOf(')'));
+        entities.set(id, { type, args });
+      }
+    }
   }
 
   const parsePoint3 = (args: string): [number, number, number] | null => {
-    const match = /\(\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*,\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*,\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*\)/.exec(
+    const match = /\(\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*,\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*,\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*\)/.exec(
       args
     );
     if (!match) return null;
@@ -857,7 +1205,23 @@ export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 
     return out;
   };
 
-  // Extract all CARTESIAN_POINTs to detect unit scale
+  // Detect explicit unit declarations in STEP / IFC first
+  let explicitScale: number | null = null;
+  if (/CONVERSION_BASED_UNIT\s*\(\s*'INCH'/i.test(cleanText)) {
+    explicitScale = 25.4;
+  } else if (/SI_UNIT\s*\(\s*\.MILLI\.\s*,\s*\.METRE\.\s*\)/i.test(cleanText)) {
+    explicitScale = 1;
+  } else if (/SI_UNIT\s*\(\s*\.CENTI\.\s*,\s*\.METRE\.\s*\)/i.test(cleanText)) {
+    explicitScale = 10;
+  } else if (/SI_UNIT\s*\(\s*\$\s*,\s*\.METRE\.\s*\)/i.test(cleanText)) {
+    explicitScale = 1000;
+  } else if (/IFCSIUNIT\s*\([^)]*\.LENGTHUNIT\.[^)]*\.MILLI\.[^)]*\.METRE\./i.test(cleanText)) {
+    explicitScale = 1;
+  } else if (/IFCSIUNIT\s*\([^)]*\.LENGTHUNIT\.[^)]*\$[^)]*\.METRE\./i.test(cleanText)) {
+    explicitScale = 1000;
+  }
+
+  // Extract all CARTESIAN_POINTs
   const allPts: [number, number, number][] = [];
   const ptById = new Map<number, [number, number, number]>();
   for (const [id, ent] of entities.entries()) {
@@ -881,7 +1245,7 @@ export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 
     if (pz > maxZ) maxZ = pz;
   }
   const rawSpan = allPts.length > 0 ? Math.max(maxX - minX, maxY - minY, maxZ - minZ, 0) : 0;
-  const unitScale = rawSpan > 0 && rawSpan < 6 ? 1000 : 1;
+  const unitScale = explicitScale !== null ? explicitScale : rawSpan > 0 && rawSpan < 0.8 ? 1000 : 1;
 
   if (unitScale !== 1) {
     for (const [id, p] of ptById.entries()) {
@@ -904,40 +1268,61 @@ export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 
     return ptById.get(id) ?? null;
   };
 
-  // Extract genuine B-Rep faces from ADVANCED_FACE -> FACE_OUTER_BOUND -> EDGE_LOOP
+  // Extract genuine B-Rep faces from STEP (ADVANCED_FACE -> EDGE_LOOP) and IFC (IFCFACE -> IFCFACEOUTERBOUND -> IFCPOLYLOOP)
   const facePositions: number[] = [];
   const wireList: number[] = [];
 
   for (const [, ent] of entities.entries()) {
-    if (ent.type !== 'ADVANCED_FACE' && ent.type !== 'FACE_SURFACE') continue;
+    if (ent.type !== 'ADVANCED_FACE' && ent.type !== 'FACE_SURFACE' && ent.type !== 'IFCFACE') continue;
     const faceRefs = refs(ent.args);
     for (const boundId of faceRefs) {
       const boundEnt = entities.get(boundId);
-      if (!boundEnt || (!boundEnt.type.includes('BOUND') && boundEnt.type !== 'EDGE_LOOP')) continue;
+      if (
+        !boundEnt ||
+        (!boundEnt.type.includes('BOUND') &&
+          boundEnt.type !== 'EDGE_LOOP' &&
+          boundEnt.type !== 'IFCPOLYLOOP')
+      ) {
+        continue;
+      }
       const loopIds =
-        boundEnt.type === 'EDGE_LOOP' ? [boundId] : refs(boundEnt.args);
+        boundEnt.type === 'EDGE_LOOP' || boundEnt.type === 'IFCPOLYLOOP'
+          ? [boundId]
+          : refs(boundEnt.args);
 
       for (const loopId of loopIds) {
         const loopEnt = entities.get(loopId);
-        if (!loopEnt || loopEnt.type !== 'EDGE_LOOP') continue;
-        const oeIds = refs(loopEnt.args);
+        if (!loopEnt) continue;
         const polyPts: [number, number, number][] = [];
 
-        for (const oeId of oeIds) {
-          const oeEnt = entities.get(oeId);
-          if (!oeEnt) continue;
-          const ecIds = oeEnt.type === 'ORIENTED_EDGE' ? refs(oeEnt.args) : [oeId];
-          const sense = oeEnt.type === 'ORIENTED_EDGE' ? !/\.F\./i.test(oeEnt.args) : true;
-          for (const ecId of ecIds) {
-            const ecEnt = entities.get(ecId);
-            if (!ecEnt || ecEnt.type !== 'EDGE_CURVE') continue;
-            const ecRefs = refs(ecEnt.args);
-            const vStart = ecRefs[0] ? resolveVertexPoint(ecRefs[0]) : null;
-            const vEnd = ecRefs[1] ? resolveVertexPoint(ecRefs[1]) : null;
-            const chosen = sense ? vStart : vEnd;
-            if (chosen) polyPts.push(chosen);
-            if (vStart && vEnd) {
-              wireList.push(vStart[0], vStart[1], vStart[2], vEnd[0], vEnd[1], vEnd[2]);
+        if (loopEnt.type === 'IFCPOLYLOOP') {
+          for (const ptId of refs(loopEnt.args)) {
+            const pt = ptById.get(ptId);
+            if (pt) polyPts.push(pt);
+          }
+          for (let k = 0; k < polyPts.length; k++) {
+            const a = polyPts[k];
+            const b = polyPts[(k + 1) % polyPts.length];
+            if (a && b) wireList.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+          }
+        } else if (loopEnt.type === 'EDGE_LOOP') {
+          const oeIds = refs(loopEnt.args);
+          for (const oeId of oeIds) {
+            const oeEnt = entities.get(oeId);
+            if (!oeEnt) continue;
+            const ecIds = oeEnt.type === 'ORIENTED_EDGE' ? refs(oeEnt.args) : [oeId];
+            const sense = oeEnt.type === 'ORIENTED_EDGE' ? !/\.F\./i.test(oeEnt.args) : true;
+            for (const ecId of ecIds) {
+              const ecEnt = entities.get(ecId);
+              if (!ecEnt || ecEnt.type !== 'EDGE_CURVE') continue;
+              const ecRefs = refs(ecEnt.args);
+              const vStart = ecRefs[0] ? resolveVertexPoint(ecRefs[0]) : null;
+              const vEnd = ecRefs[1] ? resolveVertexPoint(ecRefs[1]) : null;
+              const chosen = sense ? vStart : vEnd;
+              if (chosen) polyPts.push(chosen);
+              if (vStart && vEnd) {
+                wireList.push(vStart[0], vStart[1], vStart[2], vEnd[0], vEnd[1], vEnd[2]);
+              }
             }
           }
         }
@@ -957,6 +1342,7 @@ export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 
   // Extract named entities for layer metadata
   const extractedNames = new Set<string>();
   const nameRegex = /(?:PRODUCT|MANIFOLD_SOLID_BREP|SHAPE_REPRESENTATION|IFCBEAM|IFCCOLUMN|IFCSLAB|IFCPLATE)\s*\(\s*'([^']+)'/gi;
+  let m: RegExpExecArray | null;
   while ((m = nameRegex.exec(text)) !== null) {
     const candidate = m[1].trim();
     if (
@@ -1326,27 +1712,62 @@ export function parseIPT(buffer: ArrayBuffer, filename: string): ImportedCadMode
 
   const extractedStrings = extractReadableStringsFromBinary(buffer);
   const view = new DataView(buffer);
-  const pts: [number, number, number][] = [];
+  const limit = Math.min(bytes.byteLength, 700_000);
 
-  for (let off = 0; off + 24 <= Math.min(bytes.byteLength, 500_000); off += 8) {
-    const x = view.getFloat64(off, true);
-    const y = view.getFloat64(off + 8, true);
-    const z = view.getFloat64(off + 16, true);
-    if (
-      Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) &&
-      Math.abs(x) >= 0.05 && Math.abs(x) <= 2000 &&
-      Math.abs(y) >= 0.05 && Math.abs(y) <= 2000 &&
-      Math.abs(z) >= 0.05 && Math.abs(z) <= 2000
-    ) {
-      pts.push([x, z, -y]);
+  const isReasonableCoord = (v: number): boolean => {
+    if (!Number.isFinite(v)) return false;
+    if (v === 0) return true;
+    const av = Math.abs(v);
+    return av >= 1e-4 && av <= 50000;
+  };
+
+  let bestPts: [number, number, number][] = [];
+  for (const elemSize of [8, 4] as const) {
+    const tupleBytes = elemSize * 3;
+    const phaseCount = elemSize;
+    for (let phase = 0; phase < phaseCount; phase++) {
+      let runPts: [number, number, number][] = [];
+      let nonZeroRun = 0;
+      for (let off = phase; off + tupleBytes <= limit; off += tupleBytes) {
+        const x = elemSize === 8 ? view.getFloat64(off, true) : view.getFloat32(off, true);
+        const y = elemSize === 8 ? view.getFloat64(off + 8, true) : view.getFloat32(off + 4, true);
+        const z = elemSize === 8 ? view.getFloat64(off + 16, true) : view.getFloat32(off + 8, true);
+        if (isReasonableCoord(x) && isReasonableCoord(y) && isReasonableCoord(z)) {
+          runPts.push([x, z, -y]);
+          if (Math.hypot(x, y, z) > 1e-4) nonZeroRun++;
+        } else {
+          if (nonZeroRun >= 6 && runPts.length > bestPts.length) {
+            bestPts = runPts;
+          }
+          runPts = [];
+          nonZeroRun = 0;
+        }
+      }
+      if (nonZeroRun >= 6 && runPts.length > bestPts.length) {
+        bestPts = runPts;
+      }
     }
   }
 
-  if (pts.length < 6) {
+  if (bestPts.length < 6) {
     throw new Error(
       `Não foi possível extrair malha B-Rep ou pontos 3D válidos de "${filename}" localmente. Use o parser completo via servidor ou exporte em .STEP/.STL no Inventor.`
     );
   }
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const p of bestPts) {
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+    if (p[2] < minZ) minZ = p[2];
+    if (p[2] > maxZ) maxZ = p[2];
+  }
+  const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+  const scale = span > 0 && span < 1.2 ? 1000 : span >= 1.2 && span < 26 ? 10 : 1;
+  const pts: [number, number, number][] =
+    scale === 1 ? bestPts : bestPts.map((p) => [p[0] * scale, p[1] * scale, p[2] * scale]);
 
   const { positions, wireSegments } = buildMultiSliceHullTriangles(pts);
   const normals = computeTriangleNormals(positions);
@@ -1406,10 +1827,13 @@ function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
 
   let idx = 0;
   let cmd = '';
+  let lastCmd = '';
   let cx = 0;
   let cy = 0;
   let startX = 0;
   let startY = 0;
+  let lastCtrlX = 0;
+  let lastCtrlY = 0;
   let current: [number, number][] = [];
 
   const nextNum = (): number => {
@@ -1432,6 +1856,7 @@ function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
         current = [];
         cx = startX;
         cy = startY;
+        lastCmd = cmd;
         continue;
       }
     }
@@ -1452,6 +1877,7 @@ function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
         startX = tx;
         startY = ty;
         pushPt(tx, ty);
+        lastCmd = cmd;
         cmd = cmd === 'm' ? 'l' : 'L';
         break;
       }
@@ -1460,18 +1886,21 @@ function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
         const nx = nextNum();
         const ny = nextNum();
         pushPt(cmd === 'l' ? cx + nx : nx, cmd === 'l' ? cy + ny : ny);
+        lastCmd = cmd;
         break;
       }
       case 'H':
       case 'h': {
         const nx = nextNum();
         pushPt(cmd === 'h' ? cx + nx : nx, cy);
+        lastCmd = cmd;
         break;
       }
       case 'V':
       case 'v': {
         const ny = nextNum();
         pushPt(cx, cmd === 'v' ? cy + ny : ny);
+        lastCmd = cmd;
         break;
       }
       case 'C':
@@ -1488,10 +1917,39 @@ function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
         for (let s = 1; s <= steps; s++) {
           const t = s / steps;
           const u = 1 - t;
-          const px = u * u * u * sx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
-          const py = u * u * u * sy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
-          pushPt(px, py);
+          pushPt(
+            u * u * u * sx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+            u * u * u * sy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3
+          );
         }
+        lastCtrlX = x2;
+        lastCtrlY = y2;
+        lastCmd = cmd;
+        break;
+      }
+      case 'S':
+      case 's': {
+        const rel = cmd === 's';
+        const hasPrevCubic = /^[CcSs]$/.test(lastCmd);
+        const x1 = hasPrevCubic ? 2 * cx - lastCtrlX : cx;
+        const y1 = hasPrevCubic ? 2 * cy - lastCtrlY : cy;
+        const x2 = (rel ? cx : 0) + nextNum();
+        const y2 = (rel ? cy : 0) + nextNum();
+        const x3 = (rel ? cx : 0) + nextNum();
+        const y3 = (rel ? cy : 0) + nextNum();
+        const sx = cx, sy = cy;
+        const steps = 6;
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const u = 1 - t;
+          pushPt(
+            u * u * u * sx + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+            u * u * u * sy + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3
+          );
+        }
+        lastCtrlX = x2;
+        lastCtrlY = y2;
+        lastCmd = cmd;
         break;
       }
       case 'Q':
@@ -1506,21 +1964,48 @@ function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
         for (let s = 1; s <= steps; s++) {
           const t = s / steps;
           const u = 1 - t;
-          const px = u * u * sx + 2 * u * t * x1 + t * t * x2;
-          const py = u * u * sy + 2 * u * t * y1 + t * t * y2;
-          pushPt(px, py);
+          pushPt(
+            u * u * sx + 2 * u * t * x1 + t * t * x2,
+            u * u * sy + 2 * u * t * y1 + t * t * y2
+          );
         }
+        lastCtrlX = x1;
+        lastCtrlY = y1;
+        lastCmd = cmd;
+        break;
+      }
+      case 'T':
+      case 't': {
+        const rel = cmd === 't';
+        const hasPrevQuad = /^[QqTt]$/.test(lastCmd);
+        const x1 = hasPrevQuad ? 2 * cx - lastCtrlX : cx;
+        const y1 = hasPrevQuad ? 2 * cy - lastCtrlY : cy;
+        const x2 = (rel ? cx : 0) + nextNum();
+        const y2 = (rel ? cy : 0) + nextNum();
+        const sx = cx, sy = cy;
+        const steps = 5;
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const u = 1 - t;
+          pushPt(
+            u * u * sx + 2 * u * t * x1 + t * t * x2,
+            u * u * sy + 2 * u * t * y1 + t * t * y2
+          );
+        }
+        lastCtrlX = x1;
+        lastCtrlY = y1;
+        lastCmd = cmd;
         break;
       }
       case 'A':
       case 'a': {
-        // Approximate elliptical arc endpoints smoothly
         const rel = cmd === 'a';
         nextNum(); nextNum(); nextNum(); nextNum(); nextNum();
         const ex = (rel ? cx : 0) + nextNum();
         const ey = (rel ? cy : 0) + nextNum();
         pushPt((cx + ex) * 0.5, (cy + ey) * 0.5);
         pushPt(ex, ey);
+        lastCmd = cmd;
         break;
       }
       default:
@@ -1532,17 +2017,101 @@ function sampleSvgPathSubpaths(dAttr: string): [number, number][][] {
   return subpaths;
 }
 
-/**
- * Parses 2D SVG vector graphics (<path>, <rect>, <circle>, <ellipse>, <polygon>, <polyline>)
- * into a multi-layer extruded 3D solid CAD project (.SVG -> 3D CAD).
- */
-export function parseSVGToCad(svgText: string, filename: string): ImportedCadModel {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(svgText, 'image/svg+xml');
-  const svgEl = doc.querySelector('svg');
-  if (!svgEl) {
+interface ParsedSvgNode {
+  tag: string;
+  attrs: Record<string, string>;
+  groupId?: string;
+  tx: number;
+  ty: number;
+  sx: number;
+  sy: number;
+}
+
+function parseSvgTransform(raw?: string): { tx: number; ty: number; sx: number; sy: number } {
+  let tx = 0, ty = 0, sx = 1, sy = 1;
+  if (!raw) return { tx, ty, sx, sy };
+  const tr = /translate\(\s*([+-]?\d*\.?\d+)(?:[\s,]+([+-]?\d*\.?\d+))?\s*\)/i.exec(raw);
+  if (tr) {
+    tx = parseFloat(tr[1]) || 0;
+    ty = parseFloat(tr[2] ?? '0') || 0;
+  }
+  const sc = /scale\(\s*([+-]?\d*\.?\d+)(?:[\s,]+([+-]?\d*\.?\d+))?\s*\)/i.exec(raw);
+  if (sc) {
+    sx = parseFloat(sc[1]) || 1;
+    sy = sc[2] !== undefined ? parseFloat(sc[2]) || sx : sx;
+  }
+  return { tx, ty, sx, sy };
+}
+
+function collectSvgElementsPureTs(svgText: string): ParsedSvgNode[] {
+  const nodes: ParsedSvgNode[] = [];
+  const stack: { tag: string; id?: string; tx: number; ty: number; sx: number; sy: number }[] = [];
+  const tagRegex = /<\s*(\/?)([a-zA-Z0-9:_-]+)([^>]*?)(\/?)\s*>/g;
+  let m: RegExpExecArray | null;
+  let hasSvgRoot = false;
+
+  while ((m = tagRegex.exec(svgText)) !== null) {
+    const isClose = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    const attrText = m[3] || '';
+    const isSelfClose = m[4] === '/';
+
+    if (tag === 'svg') hasSvgRoot = true;
+
+    if (isClose) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].tag === tag) {
+          stack.splice(i);
+          break;
+        }
+      }
+      continue;
+    }
+
+    const attrs: Record<string, string> = {};
+    const attrRx = /([a-zA-Z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    let am: RegExpExecArray | null;
+    while ((am = attrRx.exec(attrText)) !== null) {
+      attrs[am[1].toLowerCase()] = am[2] ?? am[3] ?? '';
+    }
+
+    const parent = stack[stack.length - 1] ?? { tx: 0, ty: 0, sx: 1, sy: 1, id: undefined };
+    const ownT = parseSvgTransform(attrs.transform);
+    const mergedTx = parent.tx + ownT.tx * parent.sx;
+    const mergedTy = parent.ty + ownT.ty * parent.sy;
+    const mergedSx = parent.sx * ownT.sx;
+    const mergedSy = parent.sy * ownT.sy;
+    const groupId = attrs.id || parent.id;
+
+    if (/^(rect|circle|ellipse|polygon|polyline|path)$/.test(tag)) {
+      nodes.push({
+        tag,
+        attrs,
+        groupId,
+        tx: mergedTx,
+        ty: mergedTy,
+        sx: mergedSx,
+        sy: mergedSy,
+      });
+    }
+
+    if (!isSelfClose) {
+      stack.push({ tag, id: groupId, tx: mergedTx, ty: mergedTy, sx: mergedSx, sy: mergedSy });
+    }
+  }
+
+  if (!hasSvgRoot) {
     throw new Error('Arquivo SVG inválido ou sem elemento <svg>.');
   }
+  return nodes.slice(0, 32);
+}
+
+/**
+ * Parses 2D SVG vector graphics (<path>, <rect>, <circle>, <ellipse>, <polygon>, <polyline>)
+ * including <g transform> and S/s/T/t Bezier commands into a multi-layer extruded 3D solid CAD project (.SVG -> 3D CAD).
+ */
+export function parseSVGToCad(svgText: string, filename: string): ImportedCadModel {
+  const nodes = collectSvgElementsPureTs(svgText);
 
   interface SvgContourItem {
     name: string;
@@ -1551,74 +2120,69 @@ export function parseSVGToCad(svgText: string, filename: string): ImportedCadMod
   }
   const contours: SvgContourItem[] = [];
 
-  const elements = Array.from(
-    svgEl.querySelectorAll('rect, circle, ellipse, polygon, polyline, path')
-  ).slice(0, 28);
+  nodes.forEach((node, idx) => {
+    const { tag, attrs, groupId, tx, ty, sx, sy } = node;
+    const applyT = (pts: [number, number][]): [number, number][] =>
+      pts.map(([px, py]) => [px * sx + tx, py * sy + ty]);
 
-  elements.forEach((el, idx) => {
-    const tag = el.tagName.toLowerCase();
-    const idAttr = el.getAttribute('id') || el.closest('g[id]')?.getAttribute('id') || '';
-    const fillAttr = el.getAttribute('fill') || '';
-    if (fillAttr === 'none' && tag === 'rect' && idx === 0) {
-      // Often full-canvas transparent background rect; skip only if clearly borderless
-    }
+    const idAttr = attrs.id || groupId || '';
     const baseLabel = idAttr ? `${idAttr} (${tag})` : `SVG_${tag.toUpperCase()}_${idx + 1}`;
 
     if (tag === 'rect') {
-      const x = parseFloat(el.getAttribute('x') || '0');
-      const y = parseFloat(el.getAttribute('y') || '0');
-      const w = parseFloat(el.getAttribute('width') || '0');
-      const h = parseFloat(el.getAttribute('height') || '0');
+      const x = parseFloat(attrs.x || '0');
+      const y = parseFloat(attrs.y || '0');
+      const w = parseFloat(attrs.width || '0');
+      const h = parseFloat(attrs.height || '0');
       if (w > 0 && h > 0) {
         contours.push({
           name: baseLabel,
-          points: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+          points: applyT([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]),
           depthIdx: idx,
         });
       }
     } else if (tag === 'circle') {
-      const cx = parseFloat(el.getAttribute('cx') || '0');
-      const cy = parseFloat(el.getAttribute('cy') || '0');
-      const r = parseFloat(el.getAttribute('r') || '0');
+      const cx = parseFloat(attrs.cx || '0');
+      const cy = parseFloat(attrs.cy || '0');
+      const r = parseFloat(attrs.r || '0');
       if (r > 0) {
         const pts: [number, number][] = [];
         for (let s = 0; s < 24; s++) {
           const a = (s / 24) * Math.PI * 2;
           pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
         }
-        contours.push({ name: baseLabel, points: pts, depthIdx: idx });
+        contours.push({ name: baseLabel, points: applyT(pts), depthIdx: idx });
       }
     } else if (tag === 'ellipse') {
-      const cx = parseFloat(el.getAttribute('cx') || '0');
-      const cy = parseFloat(el.getAttribute('cy') || '0');
-      const rx = parseFloat(el.getAttribute('rx') || '0');
-      const ry = parseFloat(el.getAttribute('ry') || '0');
+      const cx = parseFloat(attrs.cx || '0');
+      const cy = parseFloat(attrs.cy || '0');
+      const rx = parseFloat(attrs.rx || '0');
+      const ry = parseFloat(attrs.ry || '0');
       if (rx > 0 && ry > 0) {
         const pts: [number, number][] = [];
         for (let s = 0; s < 24; s++) {
           const a = (s / 24) * Math.PI * 2;
           pts.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]);
         }
-        contours.push({ name: baseLabel, points: pts, depthIdx: idx });
+        contours.push({ name: baseLabel, points: applyT(pts), depthIdx: idx });
       }
     } else if (tag === 'polygon' || tag === 'polyline') {
-      const raw = (el.getAttribute('points') || '').trim();
+      const raw = (attrs.points || '').trim();
       const nums = raw.split(/[\s,]+/).map(Number).filter((n) => Number.isFinite(n));
       const pts: [number, number][] = [];
       for (let k = 0; k + 1 < nums.length; k += 2) {
         pts.push([nums[k], nums[k + 1]]);
       }
       if (pts.length >= 3) {
-        contours.push({ name: baseLabel, points: pts, depthIdx: idx });
+        contours.push({ name: baseLabel, points: applyT(pts), depthIdx: idx });
       }
     } else if (tag === 'path') {
-      const d = el.getAttribute('d') || '';
+      const d = attrs.d || '';
       const subpaths = sampleSvgPathSubpaths(d);
       subpaths.forEach((sp, sIdx) => {
         if (sp.length >= 3) {
           contours.push({
             name: subpaths.length > 1 ? `${baseLabel}_S${sIdx + 1}` : baseLabel,
-            points: sp,
+            points: applyT(sp),
             depthIdx: idx,
           });
         }
@@ -2218,14 +2782,18 @@ export function buildIsolatedEvaluatedMesh(
   isolationTarget: string,
   importedModel: ImportedCadModel | null
 ): { evaluated: EvaluatedMesh; partLabel: string } {
-  if (!isolationTarget || isolationTarget === 'all' || isolationTarget === 'shell') {
+  if (isolationTarget === 'shell') {
     return {
       evaluated: mesh,
-      partLabel: isolationTarget === 'shell' ? 'casca_nurbs' : 'conjunto_completo',
+      partLabel: 'casca_nurbs',
     };
   }
 
-  if (isolationTarget === 'imported' && importedModel && importedModel.positions.length > 0) {
+  if (
+    (!isolationTarget || isolationTarget === 'all' || isolationTarget === 'imported') &&
+    importedModel &&
+    importedModel.positions.length > 0
+  ) {
     const vCount = Math.floor(importedModel.positions.length / 3);
     const triCount = Math.floor(vCount / 3);
     const indices = new Uint32Array(triCount * 3);
@@ -2247,6 +2815,13 @@ export function buildIsolatedEvaluatedMesh(
     };
   }
 
+  if (!isolationTarget || isolationTarget === 'all') {
+    return {
+      evaluated: mesh,
+      partLabel: 'conjunto_completo',
+    };
+  }
+
   const matchedImportedPart = importedModel?.components?.find((c) => c.id === isolationTarget);
   if (matchedImportedPart && matchedImportedPart.positions && matchedImportedPart.positions.length > 0) {
     const vCount = Math.floor(matchedImportedPart.positions.length / 3);
@@ -2257,14 +2832,14 @@ export function buildIsolatedEvaluatedMesh(
       evaluated: {
         ...mesh,
         positions: matchedImportedPart.positions,
-        normals: matchedImportedPart.normals ?? new Float32Array(matchedImportedPart.positions.length),
+        normals: matchedImportedPart.normals ?? computeTriangleNormals(matchedImportedPart.positions),
         uvs: new Float32Array(vCount * 2),
         colors: new Float32Array(vCount * 3),
         indices,
         triangleCount: triCount,
         vertexCount: vCount,
         isocurves: [],
-        boundingBox: mesh.boundingBox,
+        boundingBox: computeBounds(matchedImportedPart.positions),
       },
       partLabel: matchedImportedPart.name.replace(/[^a-zA-Z0-9_-]+/g, '_').toLowerCase(),
     };
@@ -2400,7 +2975,7 @@ export const SAMPLE_CAD_FILES: {
       '0', 'CIRCLE', '8', 'FURACAO_M8', '10', '0', '20', '65', '30', '2', '40', '6',
       '0', 'CIRCLE', '8', 'FURACAO_M8', '10', '0', '20', '-65', '30', '2', '40', '6',
       '0', 'LWPOLYLINE', '8', 'CHAVETA', '70', '1', '38', '2',
-      '10', '-95', '20', '-95', '10', '95', '20', '-95', '10', '95', '20', '95', '10', '-95', '20', '95',
+      '10', '-7', '20', '28', '10', '7', '20', '28', '10', '7', '20', '40', '42', '0.65', '10', '-7', '20', '40',
       '0', 'ENDSEC', '0', 'EOF',
     ].join('\n'),
   },

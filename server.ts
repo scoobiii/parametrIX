@@ -4,7 +4,19 @@ import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI, Type, type Content, type FunctionDeclaration } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
-import { parseIptWithOle2, parseStepWithOcct } from './serverCadParser';
+import { buildCadLlmBriefing, parseIptWithOle2, parseStepWithOcct } from './serverCadParser';
+import { MCP_TOOLS_CATALOG } from './src/kernel/mcpServer';
+import { buildNurbsSurfaceFromParams, tessellateNurbsSurface } from './src/kernel/nurbs';
+import { evaluateStructuralFea } from './src/kernel/structuralFea';
+import { analyzeCurvatureAndOptimizeWeight } from './src/kernel/curvatureOptimizer';
+import { computeScoobiiiVucProof } from './src/kernel/scoobiiiVuc';
+import { resolvePartEngineeringProfile } from './src/kernel/componentClassifier';
+import type {
+  ApplicationSegment,
+  FeaSettings,
+  MaterialFinish,
+  ParametricDesignParams,
+} from './src/types/cad';
 
 const PORT = 3000;
 const MAX_FETCH_BYTES = 12 * 1024 * 1024;
@@ -420,6 +432,46 @@ const MCP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
       properties: {},
     },
   },
+  {
+    name: 'cad_evaluate_nurbs_metrics',
+    description:
+      'Avalia área de superfície NURBS, volume da casca, número de costelas BIM e curvatura média/gaussiana atual.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+    },
+  },
+  {
+    name: 'cad_optimize_surface_curvature',
+    description:
+      'Analisa a curvatura da superfície NURBS (|H| médio, energia de Willmore, picos de K) e aplica otimização de alívio de massa mantendo integridade estrutural.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        applyChanges: {
+          type: Type.BOOLEAN,
+          description: 'Se true (padrão), aplica automaticamente os parâmetros otimizados.',
+        },
+        targetWeightReductionPct: {
+          type: Type.NUMBER,
+          description: 'Meta de redução de massa em % (5..35).',
+        },
+      },
+    },
+  },
+  {
+    name: 'cad_set_layer_tolerances',
+    description:
+      'Define tolerâncias geométricas GD&T por camada (Layer) do arquivo CAD e valida conformidade normativa com a curvatura NURBS e FEA.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        layerName: { type: Type.STRING, description: 'Nome da camada (opcional).' },
+        isoClass: { type: Type.STRING, description: 'f, m, c ou v (ISO 2768).' },
+        gdtToleranceMm: { type: Type.NUMBER, description: 'Tolerância GD&T em mm (0.01..2.0).' },
+      },
+    },
+  },
 ];
 
 function getGeminiClient(): GoogleGenAI {
@@ -472,6 +524,508 @@ async function startServer() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return res.status(422).json({ error: msg });
+    }
+  });
+
+  // ============================================================================
+  // External Agent Onboarding (/llms.txt, /api/agent/onboarding, /.well-known/agent.json)
+  // & LLM-Safe .IPT/.STEP Translator (POST /api/cad/llm-briefing, POST /api/mcp)
+  // ============================================================================
+
+  const DEFAULT_STATELESS_PARAMS: ParametricDesignParams = {
+    preset: 'shell',
+    spanX: 200,
+    spanY: 140,
+    archHeight: 48,
+    waveAmplitude: 10,
+    twistDeg: 12,
+    thicknessMm: 5.5,
+    uDivisions: 24,
+    vDivisions: 24,
+    ribCountU: 4,
+    ribCountV: 3,
+    ribHeightMm: 14,
+    attractorStrength: 0,
+  };
+
+  const DEFAULT_STATELESS_FEA: FeaSettings = {
+    loadNewtons: 2500,
+    supportMode: 'edge-clamped',
+    loadPattern: 'uniform-pressure',
+    targetSafetyFactor: 2.0,
+  };
+
+  const SERVER_MCP_TOOLS = [
+    {
+      name: 'cad_inspect_ipt_step_briefing',
+      category: 'Interoperabilidade LLM (.IPT/.STEP)',
+      scope: 'server-stateless',
+      description:
+        'Decodifica arquivos binários Autodesk Inventor (.IPT via OLE2+zlib+ACIS SAT/Display Mesh) ou .STEP/.STP (via OpenCASCADE WASM) e retorna um briefing compacto em JSON/Markdown (dimensões em mm, componentes, normas, tokens iProperties) SEM estourar o contexto do LLM com arrays de vértices.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'Nome do arquivo com extensão (.ipt, .stp, .step, .igs).' },
+          base64Data: { type: 'string', description: 'Conteúdo do arquivo codificado em Base64.' },
+          includeSampleVertices: {
+            type: 'boolean',
+            description: 'Opcional (padrão false): inclui no máximo 24 vértices amostrados.',
+          },
+        },
+        required: ['filename', 'base64Data'],
+      },
+    },
+    {
+      name: 'cad_get_agent_onboarding',
+      category: 'Onboarding & Descoberta',
+      scope: 'server-stateless',
+      description:
+        'Retorna o manifesto completo de onboarding do Parametrix CAD Studio, fluxos de tradução .IPT/.STEP para LLMs, endpoints HTTP e ferramentas MCP.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+  ];
+
+  const buildOnboardingManifest = (baseUrl: string) => ({
+    name: 'Parametrix CAD Studio',
+    version: '2.4.0',
+    agentReadyStatus: 'ready',
+    protocol: 'MCP HTTP JSON-RPC 2.0 + REST LLM Briefing',
+    protocolVersion: '2024-11-05',
+    discovery: {
+      llmsTxt: `${baseUrl}/llms.txt`,
+      onboardingJson: `${baseUrl}/api/agent/onboarding`,
+      wellKnownAgentJson: `${baseUrl}/.well-known/agent.json`,
+      mcpJsonRpcEndpoint: `${baseUrl}/api/mcp`,
+      browserRuntimeBridge: 'window.__PARAMETRIX_MCP__',
+    },
+    iptAndStepRescueProtocol: {
+      problemSolved:
+        'LLMs não conseguem interpretar binários OLE2/ShapeManager (.IPT) ou entidades B-Rep ISO-10303-21 brutas (.STEP/.STP) diretamente, e recebem explosão de tokens se lerem buffers Float32 de malha.',
+      solutionEndpoint: 'POST /api/cad/llm-briefing',
+      mcpToolName: 'cad_inspect_ipt_step_briefing',
+      supportedCadExtensions: ['.ipt', '.stp', '.step', '.igs', '.iges', '.brep'],
+      howItWorks: [
+        '1. Envie { filename, base64Data } (ou { url }) para POST /api/cad/llm-briefing ou via JSON-RPC POST /api/mcp (tools/call: cad_inspect_ipt_step_briefing).',
+        '2. .STEP/.STP/.IGES são tesselados no servidor via OpenCASCADE (occt-import-js) com normalização automática de unidades para milímetros.',
+        '3. .IPT são abertos via container OLE2 CFB + descompressão zlib + ACIS SAT ASCII / Display Mesh / SAB Point-Hull + extração de iProperties UTF-16LE.',
+        '4. Arrays gigantes de posições/normais são resumidos em bounding boxes (mm), centroides, volume envelope (cm³), papéis mecânicos inferidos, normas sugeridas e llmSummaryText (< 600 tokens).',
+        '5. Se o .IPT usar ShapeManager ASM criptografado sem malha display ou ACIS exposto, o servidor retorna geometryStatus="metadata_only_asm_encrypted" com streams OLE2, iProperties e instrução clara para solicitar exportação .STEP ao usuário.',
+      ],
+    },
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/llms.txt',
+        purpose: 'Manual enxuto em Markdown para ingestão imediata por agentes e LLMs.',
+      },
+      {
+        method: 'GET',
+        path: '/api/agent/onboarding',
+        purpose: 'Manifesto estruturado de ferramentas, formatos suportados e protocolos.',
+      },
+      {
+        method: 'POST',
+        path: '/api/cad/llm-briefing',
+        purpose: 'Tradutor .IPT/.STEP -> Briefing de Engenharia compacto e seguro para contexto de LLM.',
+        bodySchema: {
+          filename: 'string (ex: garfo_rockshox.stp ou eixo.ipt)',
+          base64Data: 'string (base64 do arquivo) — opcional se url for fornecida',
+          url: 'string (http/https ou Google Drive público) — opcional se base64Data for fornecido',
+          includeSampleVertices: 'boolean (padrão false)',
+        },
+      },
+      {
+        method: 'POST',
+        path: '/api/mcp',
+        purpose: 'Endpoint MCP HTTP JSON-RPC 2.0 (initialize, ping, tools/list, tools/call).',
+      },
+      {
+        method: 'POST',
+        path: '/api/rag-mcp-agent',
+        purpose: 'Agente conversacional Gemini + RAG + Function Calling integrado à sessão CAD.',
+      },
+    ],
+    statelessServerTools: SERVER_MCP_TOOLS.map((t) => t.name).concat([
+      'cad_run_structural_fea',
+      'cad_evaluate_nurbs_metrics',
+      'cad_optimize_surface_curvature',
+      'cad_get_scoobiii_vuc_proof',
+    ]),
+    browserInteractiveTools: MCP_TOOLS_CATALOG.map((t) => ({
+      name: t.name,
+      category: t.category,
+      description: t.description,
+    })),
+    quickstartCurl: {
+      inspectIptOrStep: `curl -X POST ${baseUrl}/api/cad/llm-briefing -H "Content-Type: application/json" -d '{"filename":"peca.stp","base64Data":"<BASE64>"}'`,
+      mcpListTools: `curl -X POST ${baseUrl}/api/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
+      mcpCallBriefing: `curl -X POST ${baseUrl}/api/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"cad_inspect_ipt_step_briefing","arguments":{"filename":"peca.ipt","base64Data":"<BASE64>"}}}'`,
+    },
+  });
+
+  app.get('/llms.txt', (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get('host') || `localhost:${PORT}`}`;
+    const llmsMd = `# Parametrix CAD Studio — Agent & LLM Onboarding (/llms.txt)
+
+> Engineering CAD/NURBS/FEA/CAM/SCOOBIII Platform with Server-Side .IPT & .STEP Translator for LLMs.
+
+## Por que usar este endpoint ao receber arquivos .IPT ou .STEP/.STP?
+LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` OLE2/ShapeManager) nem malhas Float32 gigantes ou B-Rep ISO-10303-21 crus (\`.step\`/\`.stp\`) sem alucinar dimensões ou estourar a janela de contexto.
+**Regra de Ouro para Agentes:** Nunca tente interpretar texto/binário bruto de \`.ipt\` ou \`.step\`. Envie o arquivo para o tradutor determinístico do servidor:
+
+- **REST Briefing (recomendado para LLMs):** \`POST ${baseUrl}/api/cad/llm-briefing\`
+  - Body JSON: \`{ "filename": "modelo.stp", "base64Data": "<BASE64>" }\` (ou \`{ "url": "https://..." }\`)
+  - Retorna: Briefing compacto (< 600 tokens em \`llmSummaryText\` + JSON estruturado) com bounding box em **mm**, lista de componentes, papéis mecânicos inferidos, segmento industrial, normas aplicáveis e próximo fluxo MCP. Zero arrays gigantes de vértices.
+- **MCP HTTP JSON-RPC 2.0:** \`POST ${baseUrl}/api/mcp\`
+  - \`tools/list\` lista ${SERVER_MCP_TOOLS.length + MCP_TOOLS_CATALOG.length} ferramentas.
+  - \`tools/call\` executa diretamente no servidor:
+    - \`cad_inspect_ipt_step_briefing\` (Traduz \`.ipt\`/\`.stp\`/\`.step\` para LLM)
+    - \`cad_get_agent_onboarding\` (Retorna manifesto JSON completo)
+    - \`cad_run_structural_fea\` (Von Mises MPa, deflexão mm, fator de segurança)
+    - \`cad_evaluate_nurbs_metrics\` (Área, volume, curvatura NURBS)
+    - \`cad_optimize_surface_curvature\` (Análise |H| / Willmore e redução de massa)
+    - \`cad_get_scoobiii_vuc_proof\` (Prova matemática determinística Cox-de Boor / Euler-Bernoulli / ISO)
+- **Manifesto JSON completo:** \`GET ${baseUrl}/api/agent/onboarding\` e \`GET ${baseUrl}/.well-known/agent.json\`
+- **Bridge de Sessão Visual 3D (Browser):** \`window.__PARAMETRIX_MCP__\` (para isolar peças, explodir vista IX, Caneta Mágica, Máscara de Objetos e exportar \`.3dm\`/\`.stl\`/\`.dxf\`/\`.nc\`/\`.src\`).
+
+## Limite Honesto sobre Autodesk Inventor (.IPT)
+Arquivos \`.ipt\` com stream ACIS SAT, malha facetada de exibição ou nuvem SAB são reconstruídos geometricamente no servidor. Arquivos \`.ipt\` salvos exclusivamente com ShapeManager ASM binário criptografado retornam \`geometryStatus: "metadata_only_asm_encrypted"\` com a árvore OLE2, iProperties extraídas e instrução explícita para exportar \`.STEP\` AP214/AP203 no Inventor.
+`;
+    res.type('text/markdown; charset=utf-8').send(llmsMd);
+  });
+
+  app.get(['/api/agent/onboarding', '/.well-known/agent.json'], (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get('host') || `localhost:${PORT}`}`;
+    return res.json(buildOnboardingManifest(baseUrl));
+  });
+
+  app.post('/api/cad/llm-briefing', async (req, res) => {
+    try {
+      let filename = typeof req.body?.filename === 'string' ? req.body.filename.trim() : '';
+      let base64Data = typeof req.body?.base64Data === 'string' ? req.body.base64Data.trim() : '';
+      const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+      const includeSampleVertices = Boolean(req.body?.includeSampleVertices);
+
+      if (!base64Data && rawUrl) {
+        let parsedInput: URL;
+        try {
+          parsedInput = new URL(rawUrl);
+        } catch {
+          return res.status(400).json({ error: 'URL inválida.' });
+        }
+        if (parsedInput.protocol !== 'http:' && parsedInput.protocol !== 'https:') {
+          return res.status(400).json({ error: 'Apenas protocolos HTTP e HTTPS são suportados.' });
+        }
+        if (isDisallowedHostname(parsedInput.hostname)) {
+          return res.status(400).json({ error: 'Endereço de rede local ou privado não permitido.' });
+        }
+        const { fetchUrl } = normalizeSourceUrl(rawUrl);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        try {
+          const response = await fetch(fetchUrl, {
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: { 'User-Agent': 'ParametrixCAD-AgentBriefing/1.0' },
+          });
+          if (!response.ok) {
+            return res.status(response.status).json({
+              error: `Falha ao baixar arquivo CAD da URL (${response.status}).`,
+            });
+          }
+          const arrayBuf = await response.arrayBuffer();
+          if (arrayBuf.byteLength > MAX_FETCH_BYTES) {
+            return res.status(413).json({ error: 'Arquivo excede o limite de 12 MB.' });
+          }
+          base64Data = Buffer.from(arrayBuf).toString('base64');
+          if (!filename) {
+            filename = decodeURIComponent(path.basename(parsedInput.pathname) || 'modelo.stp');
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      if (!base64Data) {
+        return res.status(400).json({
+          error: 'Forneça { filename, base64Data } ou { url } para gerar o briefing CAD para LLM.',
+        });
+      }
+
+      const buffer = Buffer.from(base64Data, 'base64');
+      if (buffer.length === 0) {
+        return res.status(400).json({ error: 'Buffer CAD vazio após decodificação base64.' });
+      }
+
+      const briefing = await buildCadLlmBriefing(buffer, filename || 'modelo.stp', {
+        includeSampleVertices,
+      });
+      return res.json(briefing);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(500).json({ error: `Falha ao gerar briefing CAD para LLM: ${msg}` });
+    }
+  });
+
+  app.post('/api/mcp', async (req, res) => {
+    const body = req.body ?? {};
+    const id = body.id ?? null;
+    const method = typeof body.method === 'string' ? body.method : '';
+    const baseUrl = `${req.protocol}://${req.get('host') || `localhost:${PORT}`}`;
+
+    const rpcOk = (result: unknown) =>
+      res.json({
+        jsonrpc: '2.0',
+        id,
+        result,
+      });
+
+    const rpcErr = (code: number, message: string, data?: unknown) =>
+      res.json({
+        jsonrpc: '2.0',
+        id,
+        error: { code, message, ...(data !== undefined ? { data } : {}) },
+      });
+
+    try {
+      if (method === 'initialize') {
+        return rpcOk({
+          protocolVersion: '2024-11-05',
+          serverInfo: {
+            name: 'parametrix-cad-studio-mcp',
+            version: '2.4.0',
+          },
+          capabilities: {
+            tools: { listChanged: false },
+          },
+          instructions:
+            'Use cad_inspect_ipt_step_briefing to decode .ipt/.step/.stp files safely without raw binary or vertex float dumps. Stateless FEA, NURBS, Curvature & SCOOBIII/VUC math tools run directly via HTTP; viewport/export tools also run in browser sessions via window.__PARAMETRIX_MCP__.',
+        });
+      }
+
+      if (method === 'notifications/initialized' || method === 'ping') {
+        return rpcOk({});
+      }
+
+      if (method === 'tools/list') {
+        const allTools = [
+          ...SERVER_MCP_TOOLS.map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema,
+          })),
+          ...MCP_TOOLS_CATALOG.map((t) => ({
+            name: t.name,
+            description: `${t.description} [${
+              [
+                'cad_run_structural_fea',
+                'cad_evaluate_nurbs_metrics',
+                'cad_optimize_surface_curvature',
+                'cad_get_scoobiii_vuc_proof',
+              ].includes(t.name)
+                ? 'server-stateless + browser'
+                : 'browser-session'
+            }]`,
+            inputSchema: t.inputSchema,
+          })),
+        ];
+        return rpcOk({ tools: allTools });
+      }
+
+      if (method === 'tools/call') {
+        const toolName = String(body.params?.name || '');
+        const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
+
+        if (toolName === 'cad_get_agent_onboarding') {
+          return rpcOk({
+            content: [{ type: 'text', text: JSON.stringify(buildOnboardingManifest(baseUrl), null, 2) }],
+          });
+        }
+
+        if (toolName === 'cad_inspect_ipt_step_briefing') {
+          const filename = typeof args.filename === 'string' ? args.filename.trim() : 'modelo.stp';
+          const base64Data = typeof args.base64Data === 'string' ? args.base64Data.trim() : '';
+          if (!base64Data) {
+            return rpcErr(-32602, 'Parametro obrigatório ausente: base64Data');
+          }
+          const buffer = Buffer.from(base64Data, 'base64');
+          const briefing = await buildCadLlmBriefing(buffer, filename, {
+            includeSampleVertices: Boolean(args.includeSampleVertices),
+          });
+          return rpcOk({
+            content: [{ type: 'text', text: JSON.stringify(briefing, null, 2) }],
+            structuredContent: briefing,
+          });
+        }
+
+        const mergeParams = (): ParametricDesignParams => ({
+          ...DEFAULT_STATELESS_PARAMS,
+          ...(typeof args.designParams === 'object' && args.designParams
+            ? (args.designParams as Partial<ParametricDesignParams>)
+            : {}),
+        });
+        const material: MaterialFinish =
+          typeof args.materialFinish === 'string'
+            ? (args.materialFinish as MaterialFinish)
+            : 'aluminum';
+
+        if (toolName === 'cad_evaluate_nurbs_metrics') {
+          const params = mergeParams();
+          const surf = buildNurbsSurfaceFromParams(params);
+          const mesh = tessellateNurbsSurface(
+            surf,
+            params.ribCountU,
+            params.ribCountV,
+            params.ribHeightMm
+          );
+          const payload = {
+            mode: 'server-stateless',
+            designParams: params,
+            surfaceAreaCm2: mesh.surfaceAreaCm2,
+            volumeCm3: mesh.volumeCm3,
+            triangleCount: mesh.triangleCount,
+            controlGrid: [surf.uCount, surf.vCount],
+          };
+          return rpcOk({ content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] });
+        }
+
+        const resolveSegmentProfile = (segInput: unknown) => {
+          const validSegments: ApplicationSegment[] = [
+            'ciclismo-mobilidade',
+            'automotivo',
+            'aeroespacial',
+            'arquitetura-bim',
+            'industrial-cnc',
+            'robotica',
+            'medico',
+          ];
+          const segment: ApplicationSegment =
+            typeof segInput === 'string' && validSegments.includes(segInput as ApplicationSegment)
+              ? (segInput as ApplicationSegment)
+              : 'industrial-cnc';
+          return resolvePartEngineeringProfile({
+            segmentOverride: segment,
+            preset: DEFAULT_STATELESS_PARAMS.preset,
+          });
+        };
+
+        if (toolName === 'cad_run_structural_fea') {
+          const params = mergeParams();
+          const surf = buildNurbsSurfaceFromParams(params);
+          const mesh = tessellateNurbsSurface(
+            surf,
+            params.ribCountU,
+            params.ribCountV,
+            params.ribHeightMm
+          );
+          const feaSettings: FeaSettings = {
+            ...DEFAULT_STATELESS_FEA,
+            loadNewtons:
+              typeof args.loadNewtons === 'number'
+                ? args.loadNewtons
+                : DEFAULT_STATELESS_FEA.loadNewtons,
+          };
+          const profile = resolveSegmentProfile(args.segment);
+          const fea = evaluateStructuralFea(
+            surf,
+            mesh,
+            params,
+            material,
+            feaSettings,
+            'all',
+            profile
+          );
+          return rpcOk({
+            content: [{ type: 'text', text: JSON.stringify({ mode: 'server-stateless', fea }, null, 2) }],
+          });
+        }
+
+        if (toolName === 'cad_optimize_surface_curvature') {
+          const params = mergeParams();
+          const surf = buildNurbsSurfaceFromParams(params);
+          const mesh = tessellateNurbsSurface(
+            surf,
+            params.ribCountU,
+            params.ribCountV,
+            params.ribHeightMm
+          );
+          const profile = resolveSegmentProfile(args.segment);
+          const baselineFea = evaluateStructuralFea(
+            surf,
+            mesh,
+            params,
+            material,
+            DEFAULT_STATELESS_FEA,
+            'all',
+            profile
+          );
+          const report = analyzeCurvatureAndOptimizeWeight({
+            surface: surf,
+            meshData: mesh,
+            designParams: params,
+            materialFinish: material,
+            feaSettings: DEFAULT_STATELESS_FEA,
+            feaResult: baselineFea,
+            partProfile: profile,
+            isolationTarget: 'all',
+            importedModel: null,
+          });
+          return rpcOk({
+            content: [
+              { type: 'text', text: JSON.stringify({ mode: 'server-stateless', report }, null, 2) },
+            ],
+          });
+        }
+
+        if (toolName === 'cad_get_scoobiii_vuc_proof') {
+          const params = mergeParams();
+          const surf = buildNurbsSurfaceFromParams(params);
+          const mesh = tessellateNurbsSurface(
+            surf,
+            params.ribCountU,
+            params.ribCountV,
+            params.ribHeightMm
+          );
+          const profile = resolveSegmentProfile(args.segment);
+          const fea = evaluateStructuralFea(
+            surf,
+            mesh,
+            params,
+            material,
+            DEFAULT_STATELESS_FEA,
+            'all',
+            profile
+          );
+          const proof = computeScoobiiiVucProof({
+            surface: surf,
+            meshData: mesh,
+            designParams: params,
+            materialFinish: material,
+            feaSettings: DEFAULT_STATELESS_FEA,
+            feaResult: fea,
+            partProfile: profile,
+            featureOps: [],
+          });
+          return rpcOk({
+            content: [{ type: 'text', text: JSON.stringify({ mode: 'server-stateless', proof }, null, 2) }],
+          });
+        }
+
+        const existsInCatalog = MCP_TOOLS_CATALOG.some((t) => t.name === toolName);
+        if (existsInCatalog) {
+          return rpcErr(
+            -32001,
+            `A ferramenta '${toolName}' opera sobre a cena 3D ativa no navegador (window.__PARAMETRIX_MCP__ ou aba Agente RAG + MCP). Use 'cad_inspect_ipt_step_briefing' para inspecionar arquivos .IPT/.STEP no servidor headless.`
+          );
+        }
+
+        return rpcErr(-32601, `Ferramenta MCP desconhecida: ${toolName}`);
+      }
+
+      return rpcErr(-32601, `Método JSON-RPC não suportado: ${method}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return rpcErr(-32603, msg);
     }
   });
 

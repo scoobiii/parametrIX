@@ -59,12 +59,45 @@ Plataforma paramétrica full-stack para modelagem NURBS, análise estrutural FEA
 - Landing page técnica e interativa pronta para **GitHub Pages** (`docs/index.html`) e servida diretamente pelo servidor em `/gitpage/` e `/docs/`.
 - Inclui **Playground NURBS 3D em Canvas 2D/3D** com rotação por arraste, sliders paramétricos em tempo real (`Vão X`, `Altura Z`, `Torção`, `Espessura`, `Subdivisão`), otimização automática de curvatura, explorador dinâmico de segmentos + chamadas MCP JSON-RPC e matriz comparativa CNC vs Robô KUKA 6-eixos.
 
+### 11. Onboarding para Agentes & Tradutor `.IPT` / `.STEP` para LLMs
+- **Descoberta Automática**: `GET /llms.txt`, `GET /api/agent/onboarding` e `GET /.well-known/agent.json` expõem as capacidades, protocolos, ferramentas MCP e regras de ingestão para qualquer agente de IA.
+- **Tradutor Anti-Alucinação & Anti-Estouro de Tokens (`POST /api/cad/llm-briefing`)**: Converte arquivos binários `.IPT` (OLE2 + zlib + ACIS SAT/Display Mesh) e `.STEP/.STP` (OpenCASCADE B-Rep WASM) em um briefing estruturado e compacto (< 600 tokens em `llmSummaryText`, bounding boxes em `mm`, papéis mecânicos, normas sugeridas e iProperties) — sem despejar milhares de floats de vértices na janela do LLM. Caso o `.IPT` use ShapeManager ASM criptografado sem malha exposta, devolve `geometryStatus: "metadata_only_asm_encrypted"` com streams OLE2, tokens e instrução clara de exportação `.STEP`.
+- **MCP HTTP JSON-RPC 2.0 (`POST /api/mcp`)**: Suporta `initialize`, `tools/list` e `tools/call` com execução stateless server-side para `cad_inspect_ipt_step_briefing`, `cad_get_agent_onboarding`, `cad_run_structural_fea`, `cad_evaluate_nurbs_metrics`, `cad_optimize_surface_curvature` e `cad_get_scoobiii_vuc_proof`, além do bridge de cena 3D em `window.__PARAMETRIX_MCP__`.
+
+---
+
+## Auditoria Experimental do Motor CAD / Inventor `.IPT` / CAE / CAM
+
+Todos os submódulos críticos são verificados pela suíte determinística [`scripts/cad_engine_audit.ts`](scripts/cad_engine_audit.ts) (`npm run audit:cad`). Durante a auditoria técnica, **15 bugs reais** foram isolados e corrigidos (evoluindo de **5/20** para **22/22 testes aprovados**, incluindo validação do briefing LLM para `.IPT` / `.STEP`):
+
+### Arquitetura do Decoder Autodesk Inventor (`.IPT`)
+Arquivos `.IPT` modernos usam contêineres compostos Microsoft **OLE2 / CFB** com múltiplos fluxos comprimidos proprietários (*ShapeManager ASM* binário, *B-Rep/ACIS*, e eventualmente *Graphics Display Mesh* pré-tesselado):
+1. **Descompactação OLE2 + `zlib` (`cfb` + `zlib`)**: Varre todas as entradas de diretório CFB e localiza assinaturas `0x78` (`9C`/`DA`/`01`/`5E`), descomprimindo fluxos com **`zlib.inflateSync`** (tolerando *trailing bytes* de bloco OLE após o `ADLER32` antes de recorrer a `Z_SYNC_FLUSH`).
+2. **Extração ACIS SAT / SAB**: Remonta registros multi-linha delimitados por `#`, extrai loops de vértices (`vertex` → `point`) e vértices de malha curva com reconstrução de envoltória *multi-slice* quando faces cilíndricas não possuem laços lineares explícitos.
+3. **Display Mesh Float32 & Nuvens Alinhadas (`.IPT` em `cm`)**: Localiza blocos indexados `[vertCount][vtx Float32×3][triCount][idx Uint32×3]` e nuvens alinhadas por fase (`24B Float64` / `12B Float32`), **preservando vértices em planos datum `X=0 / Y=0 / Z=0`** e convertendo automaticamente a unidade interna padrão do Inventor (**centímetros → milímetros**, `×10`) ou metros (`×1000`).
+4. **Limitação Estrutural Documentada**: Quando um `.IPT` contém apenas fluxos proprietários criptografados/ofuscados do Autodesk ShapeManager ASM **sem** ACIS SAT/SAB nem *Graphics Display Mesh*, nenhum leitor *open-source* pode decodificar a árvore ASM proprietária sem o kernel comercial da Autodesk; o servidor retorna diagnóstico explícito orientando exportação `.STEP/.STP` no Inventor (sem gerar caixas falsas).
+
+### Bugs Descobertos e Corrigidos via Testes
+
+| Módulo | Bug Descoberto nos Testes | Correção Aplicada |
+| :--- | :--- | :--- |
+| **DXF (`parseDXF`)** | Camadas 2D (`CIRCLE`, `LWPOLYLINE`, `LINE`, `ARC`) geravam `0 triângulos` e caíam em `buildBoxTriangles` (placa branca retangular genérica na viewport); `3DFACE` ia só para a 1ª camada. | Extrusão real por camada (anéis concêntricos, colares de furação, prismas poligonais `bulge 42`, fitas 3D de arame) + suporte a `ARC`, `ELLIPSE`, `SPLINE`, `POLYLINE/VERTEX/SEQEND`, `SOLID` e `3DFACE` por camada. Exemplo `CHAVETA` corrigido para perfil DIN 6885 real (`44 tri`). |
+| **Inventor `.IPT` (`zlib` / ACIS / Float32)** | Streams `zlib` com bytes OLE finais falhavam em `Z_SYNC_FLUSH`; registros ACIS multi-linha `#` quebravam; coordenadas em datum `0` (`Math.abs(v) >= 0.05`) eram descartadas; malha indexada em `cm` ficava `10×` menor; parser fallback local só lia `Float64` sem `0`. | `zlib.inflateSync` primário c/ fallback `Z_SYNC_FLUSH`; montador multi-linha ACIS + envoltória de pontos; extração alinhada por fase aceitando datum `v === 0`; auto-escala `cm → mm` (`×10`) em `serverCadParser.ts` e `parseIPT()`. |
+| **STEP & IFC (`parseSTEPorIFC` + OCCT)** | Peças pequenas `< 6mm` com `SI_UNIT(.MILLI.,.METRE.)` eram multiplicadas por `1000×`; `parsePoint3` rejeitava floats ISO sem dígito após o ponto (`0.`, `120.`); comentários `/* ... */` e `;` em strings corrompiam entidades; `IFCFACE`/`IFCPOLYLOOP` retornava `0 tri`; `parseStepWithOcct` re-escalava resultados já convertidos pelo OCCT. | Scanner STEP seguro a strings/comentários, leitura explícita de `SI_UNIT`/`CONVERSION_BASED_UNIT`, regex float ISO `(0. / .5)`, suporte completo `IFCFACE -> IFCFACEOUTERBOUND -> IFCPOLYLOOP`, e trava na re-escala do OCCT quando há unidade explícita. |
+| **OpenNURBS (`.3dm`)** | Chunk NURBS `0x20000002` lia `pos + 8` em vez de `pos + 16`, interpretando `degreeU`/`degreeV` (inteiros) como coordenadas Float32 dos pontos de controle. | Detecção do cabeçalho de 16 bytes (`uC, vC, degreeU, degreeV`), restaurando *round-trip* exato (`-108.281 === -108.281`). |
+| **STL ASCII/Binário (`parseSTL`)** | Cabeçalhos ASCII `solid` com >256 bytes ou arquivos >= 5 MB eram decodificados como lixo Float32 binário. | Checagem exata de tamanho binário `84 + triCount * 50` + varredura *case-insensitive* de `solid` + `facet` até 32 KB sem teto artificial de 5 MB. |
+| **Exportação Isolada (`buildIsolatedEvaluatedMesh`)** | Exportar conjunto importado (`isolationTarget="all"`) devolvia a casca NURBS oculta em vez da montagem importada; parte isolada usava `mesh.boundingBox` global. | Retorna `importedModel` para `'all'`/`'imported'` quando carregado e calcula `computeBounds(matchedImportedPart.positions)` na peça isolada. |
+| **SVG (`parseSVGToCad`)** | Falhava fora do DOM (`DOMParser is not defined`), ignorava `<g transform>` e comandos Bézier suaves `S/s` e `T/t`. | Parser XML/SVG puro em TypeScript com pilha de `<g transform="translate/scale">` e suporte completo a `S/s/T/t`. |
+| **FEA & Curvatura (`structuralFea.ts`, `curvatureOptimizer.ts`)** | Massa de peça importada tinha dupla divisão por `1000` (`0.000018 / 1000`) travada em piso `0.6 kg`; otimizador de curvatura travava redução em `0%` quando havia `importedModel`. | Cálculo físico real de volume de malha fechada (em `cm³`); otimizador de curvatura avalia a casca NURBS paramétrica sem congelar na massa importada. |
+| **CAM Presets (`camRobotics.ts`)** | Preset `preset-cnc-flange` referenciava `tool-flat-12` ausente de `CAM_TOOLS`. | Adicionada `Fresa Topo Plano Ø12mm 4 Cortes` (`tool-flat-12`) à biblioteca `CAM_TOOLS`. |
+| **UI Mobile (`Viewport3D.tsx`)** | HUD superior esquerdo (`max-w-[calc(100%-92px)]`) encostava no cubo D-Pad vermelho em telas estreitas. | Margem ampliada para `max-w-[calc(100%-128px)] sm:max-w-[440px]` com truncamento responsivo. |
+
 ---
 
 ## Stack & Arquitetura
 
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS v4, Three.js (`OrbitControls`, `TransformControls`, `RoomEnvironment`), Lucide Icons.
-- **Backend (`server.ts`, porta `3000`)**: Express + Vite middleware, `occt-import-js` (OpenCASCADE WASM), `cfb` + `zlib` (OLE2 `.ipt`), `@google/genai` (Agente RAG + MCP Tool Calling em `/api/rag-mcp-agent`), rotas estáticas `/gitpage` e `/docs`.
+- **Backend (`server.ts`, porta `3000`)**: Express + Vite middleware, `occt-import-js` (OpenCASCADE WASM), `cfb` + `zlib` (OLE2 `.ipt`), `@google/genai` (Agente RAG + MCP Tool Calling em `/api/rag-mcp-agent`), Onboarding & MCP JSON-RPC (`/llms.txt`, `/api/agent/onboarding`, `/api/cad/llm-briefing`, `/api/mcp`), rotas estáticas `/gitpage` e `/docs`.
 - **Banco & Autenticação**: Firebase Authentication (Google) e Cloud Firestore com isolamento estrito por `uid`.
 
 ## Como Publicar a GitPage no GitHub Pages
@@ -77,9 +110,11 @@ Plataforma paramétrica full-stack para modelagem NURBS, análise estrutural FEA
 ## Scripts
 
 ```bash
-npm run dev      # Inicia server.ts + Vite em http://localhost:3000 (e /gitpage)
-npm run lint     # Verificação de tipos TypeScript (tsc --noEmit)
-npm run build    # Build de produção Vite (dist/)
-npm run start    # Servidor em produção (node server.ts)
+npm run dev        # Inicia server.ts + Vite em http://localhost:3000 (e /gitpage)
+npm run audit:cad  # Executa a suíte de auditoria experimental do motor CAD/IPT/CAE/CAM (22 testes)
+npm run lint       # Verificação de tipos TypeScript (tsc --noEmit)
+npm run build      # Build de produção Vite (dist/)
+npm run start      # Servidor em produção (node server.ts)
 ```
+
 

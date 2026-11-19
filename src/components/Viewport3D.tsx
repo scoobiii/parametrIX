@@ -3464,11 +3464,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         className={`absolute left-2 sm:left-3 z-10 flex flex-col gap-1.5 ${
           compact
             ? 'top-3 max-w-[calc(100%-24px)]'
-            : 'top-14 max-w-[calc(100%-92px)] sm:max-w-[460px]'
+            : 'top-14 max-w-[calc(100%-128px)] sm:max-w-[440px]'
         }`}
       >
-        <div className="pointer-events-none text-xs font-medium text-slate-200 bg-[#0e131c]/95 border border-white/10 rounded-lg px-3 py-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span className="font-semibold text-slate-100 truncate max-w-[220px]">
+        <div className="pointer-events-none text-xs font-medium text-slate-200 bg-[#0e131c]/95 border border-white/10 rounded-lg px-2.5 sm:px-3 py-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 max-w-full">
+          <span className="font-semibold text-slate-100 truncate max-w-[165px] sm:max-w-[220px]">
             {partProfile?.partName || importedModel?.filename || surface.name}
           </span>
           {partProfile?.manufacturer && (

@@ -115,7 +115,12 @@ export async function parseStepWithOcct(
   };
   if (res.root) walkNode(res.root, []);
 
-  // Measure raw span across all vertices to detect meter-exported files (< 6 units)
+  // Measure raw span across all vertices; OCCT already converts explicit STEP units to linearUnit='millimeter'.
+  // Only apply unit rescue if NO explicit millimeter/inch unit is declared and span is obviously meters (< 0.8).
+  const textSnippetHead = buffer.subarray(0, Math.min(buffer.length, 65536)).toString('latin1');
+  const hasExplicitUnit = /SI_UNIT\s*\(\s*\.(MILLI|CENTI|MICRO)\.|CONVERSION_BASED_UNIT\s*\(\s*'(INCH|FOOT|MILLIMETRE|METRE)'/i.test(
+    textSnippetHead
+  );
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
   for (const m of res.meshes) {
@@ -132,7 +137,7 @@ export async function parseStepWithOcct(
     }
   }
   const rawSpan = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 0);
-  const unitScale = rawSpan > 0 && rawSpan < 6 ? 1000 : 1;
+  const unitScale = !hasExplicitUnit && rawSpan > 0 && rawSpan < 0.8 ? 1000 : 1;
 
   // Group excessively fragmented faces (>36 meshes) by resolved name so Object Mask remains navigable
   const grouped = new Map<string, ParsedCadMeshPart>();
@@ -257,16 +262,25 @@ function findEmbeddedZlibStreams(buf: Buffer): Buffer[] {
   const decompressed: Buffer[] = [];
   // Zlib magic headers: 78 9C (default), 78 DA (best), 78 01 (no/low), 78 5E (fast)
   for (let i = 0; i < buf.length - 8 && decompressed.length < 48; i++) {
-    if (buf[i] === 0x78 && (buf[i + 1] === 0x9c || buf[i + 1] === 0xda || buf[i + 1] === 0x5e || buf[i + 1] === 0x01)) {
+    if (
+      buf[i] === 0x78 &&
+      (buf[i + 1] === 0x9c || buf[i + 1] === 0xda || buf[i + 1] === 0x5e || buf[i + 1] === 0x01)
+    ) {
+      const slice = buf.subarray(i, Math.min(buf.length, i + 4_000_000));
+      let out: Buffer | null = null;
       try {
-        const slice = buf.subarray(i, Math.min(buf.length, i + 4_000_000));
-        const out = zlib.inflateSync(slice, { finishFlush: zlib.constants.Z_SYNC_FLUSH });
-        if (out && out.length >= 32) {
-          decompressed.push(out);
-          i += 16;
-        }
+        // Default Z_FINISH stops cleanly at Z_STREAM_END even when trailing OLE bytes follow
+        out = zlib.inflateSync(slice);
       } catch {
-        // Not a valid zlib stream at this offset
+        try {
+          out = zlib.inflateSync(slice, { finishFlush: zlib.constants.Z_SYNC_FLUSH });
+        } catch {
+          out = null;
+        }
+      }
+      if (out && out.length >= 24) {
+        decompressed.push(out);
+        i += 16;
       }
     }
   }
@@ -279,31 +293,43 @@ function parseAcisSatGeometry(satText: string): {
   unitScale: number;
   faceCount: number;
 } | null {
-  const lines = satText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines.length < 5) return null;
+  const rawLines = satText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (rawLines.length < 5) return null;
 
   // ACIS line 2 gives scale mm per model unit (Inventor uses 10 mm/cm)
   let unitScale = 1;
-  const headerFields = lines[1]?.split(/\s+/) ?? [];
+  const headerFields = rawLines[1]?.split(/\s+/) ?? [];
   const maybeScale = parseFloat(headerFields[0] ?? '1');
   if (Number.isFinite(maybeScale) && maybeScale > 0 && maybeScale <= 1000) {
     unitScale = maybeScale;
   }
 
-  const records = new Map<number, { type: string; body: string }>();
-  for (let i = 3; i < lines.length; i++) {
-    const line = lines[i];
+  // Reassemble wrapped multi-line ACIS records terminated by '#'
+  const logicalRecords: string[] = [];
+  let acc = '';
+  for (let i = 3; i < rawLines.length; i++) {
+    const line = rawLines[i];
     if (line === 'End-of-ACIS-data') break;
+    acc = acc ? `${acc} ${line}` : line;
+    if (line.endsWith('#')) {
+      logicalRecords.push(acc);
+      acc = '';
+    }
+  }
+  if (acc) logicalRecords.push(acc);
+
+  const records = new Map<number, { type: string; body: string }>();
+  logicalRecords.forEach((line, idx) => {
     const match = /^(-?\d+)\s+([a-zA-Z0-9_-]+)\s+(.*)$/.exec(line);
     if (match) {
       records.set(parseInt(match[1], 10), { type: match[2], body: match[3] });
     } else if (/^[a-zA-Z]/.test(line)) {
       const sp = line.indexOf(' ');
       if (sp > 0) {
-        records.set(i - 3, { type: line.slice(0, sp), body: line.slice(sp + 1) });
+        records.set(idx, { type: line.slice(0, sp), body: line.slice(sp + 1) });
       }
     }
-  }
+  });
 
   const getPtrs = (body: string): number[] => {
     const out: number[] = [];
@@ -339,7 +365,6 @@ function parseAcisSatGeometry(satText: string): {
     return null;
   };
 
-  // Extract all points directly as fallback point cloud + walk faces/loops
   const allPoints: [number, number, number][] = [];
   for (const [k, rec] of records.entries()) {
     if (rec.type === 'point') {
@@ -368,7 +393,6 @@ function parseAcisSatGeometry(satText: string): {
       const ce = records.get(cur);
       if (!ce || ce.type !== 'coedge') break;
       const ptrs = getPtrs(ce.body);
-      // coedge fields typically: nextCoedge, prevCoedge, partner, edge, sense...
       const edgeIdx = ptrs.find((p) => records.get(p)?.type === 'edge');
       if (edgeIdx !== undefined) {
         const edge = records.get(edgeIdx);
@@ -401,6 +425,19 @@ function parseAcisSatGeometry(satText: string): {
     }
   }
 
+  // Fallback for curved/cylindrical ACIS faces (loops with < 3 vertices): multi-slice envelope from ACIS point records
+  if (positions.length < 9 && allPoints.length >= 4) {
+    const hull = buildMultiSliceEnvelopeFromPoints(allPoints);
+    if (hull.positions.length >= 9) {
+      return {
+        positions: hull.positions,
+        wireSegments: wireSegments.length > 0 ? wireSegments : hull.wireSegments,
+        unitScale,
+        faceCount: Math.max(faceCount, Math.floor(hull.positions.length / 9)),
+      };
+    }
+  }
+
   return positions.length >= 9 ? { positions, wireSegments, unitScale, faceCount } : null;
 }
 
@@ -410,13 +447,13 @@ function scanFloat32MeshOrCloud(buf: Buffer): {
   mode: 'indexed-mesh' | 'point-cloud';
   pointCount: number;
 } | null {
-  // Scan 4-byte aligned IEEE-754 float32 triples (and double float64 triples for ACIS SAB)
+  // Accept valid datum-plane coordinates (0.0) and normal finite CAD range while filtering denormal bit patterns
   const isPlausibleCoord = (v: number) =>
-    Number.isFinite(v) && !Number.isNaN(v) && (v === 0 || (Math.abs(v) >= 1e-4 && Math.abs(v) <= 50000));
+    Number.isFinite(v) && !Number.isNaN(v) && (v === 0 || (Math.abs(v) >= 1e-4 && Math.abs(v) <= 5000));
 
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 
-  // 1) Try to find an explicit indexed float32 mesh block (V vertices followed by T uint32/uint16 triangles)
+  // 1) Try to find an explicit indexed float32 mesh block (V vertices followed by T uint32 triangles)
   for (let off = 0; off + 64 < buf.length; off += 4) {
     const vCount = view.getUint32(off, true);
     if (vCount >= 12 && vCount <= 40000 && off + 8 + vCount * 12 < buf.length) {
@@ -436,18 +473,29 @@ function scanFloat32MeshOrCloud(buf: Buffer): {
       if (validVerts) {
         p = off + 4;
         let allValid = true;
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         for (let i = 0; i < vCount; i++) {
           const x = view.getFloat32(p, true);
-          const y = view.getFloat32(p + 4, true);
-          const z = view.getFloat32(p + 8, true);
-          if (!isPlausibleCoord(x) || !isPlausibleCoord(y) || !isPlausibleCoord(z)) {
+          const yCad = view.getFloat32(p + 4, true);
+          const zUp = view.getFloat32(p + 8, true);
+          if (!isPlausibleCoord(x) || !isPlausibleCoord(yCad) || !isPlausibleCoord(zUp)) {
             allValid = false;
             break;
           }
-          verts.push([x, z, -y]);
+          const wx = x, wy = zUp, wz = -yCad;
+          if (wx < minX) minX = wx;
+          if (wy < minY) minY = wy;
+          if (wz < minZ) minZ = wz;
+          if (wx > maxX) maxX = wx;
+          if (wy > maxY) maxY = wy;
+          if (wz > maxZ) maxZ = wz;
+          verts.push([wx, wy, wz]);
           p += 12;
         }
         if (allValid && p + 4 <= buf.length) {
+          const rawSpan = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 0);
+          const unitScale = rawSpan > 0 && rawSpan < 1.2 ? 1000 : rawSpan >= 1.2 && rawSpan < 26 ? 10 : 1;
           const tCount = view.getUint32(p, true);
           if (tCount >= 4 && tCount <= 120000 && p + 4 + tCount * 12 <= buf.length) {
             const positions: number[] = [];
@@ -461,7 +509,11 @@ function scanFloat32MeshOrCloud(buf: Buffer): {
                 idxOk = false;
                 break;
               }
-              positions.push(...verts[a], ...verts[b], ...verts[c]);
+              positions.push(
+                verts[a][0] * unitScale, verts[a][1] * unitScale, verts[a][2] * unitScale,
+                verts[b][0] * unitScale, verts[b][1] * unitScale, verts[b][2] * unitScale,
+                verts[c][0] * unitScale, verts[c][1] * unitScale, verts[c][2] * unitScale
+              );
               ip += 12;
             }
             if (idxOk && positions.length >= 36) {
@@ -473,40 +525,80 @@ function scanFloat32MeshOrCloud(buf: Buffer): {
     }
   }
 
-  // 2) Extract dense finite Float64 (ACIS SAB) or Float32 (Inventor Graphics) coordinate triples
-  const collected: [number, number, number][] = [];
-  for (let off = 0; off + 24 <= Math.min(buf.length, 600_000); off += 8) {
-    const x = view.getFloat64(off, true);
-    const y = view.getFloat64(off + 8, true);
-    const z = view.getFloat64(off + 16, true);
-    if (
-      Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) &&
-      Math.abs(x) >= 0.01 && Math.abs(x) <= 2000 &&
-      Math.abs(y) >= 0.01 && Math.abs(y) <= 2000 &&
-      Math.abs(z) >= 0.01 && Math.abs(z) <= 2000 &&
-      Math.abs(x) + Math.abs(y) + Math.abs(z) > 0.2
-    ) {
-      collected.push([x, z, -y]);
+  // 2) Extract contiguous phase-aligned Float64 (ACIS SAB) or Float32 (Inventor Graphics) coordinate runs
+  // Preserves datum-plane coordinates (X=0, Y=0, Z=0) while avoiding misaligned cross-float noise!
+  const extractBestStridedRun = (elemSize: 8 | 4): [number, number, number][] => {
+    const tupleBytes = elemSize * 3;
+    const limit = Math.min(buf.length, 600_000);
+    let bestPts: [number, number, number][] = [];
+
+    for (let phase = 0; phase < tupleBytes; phase += elemSize) {
+      let curRun: [number, number, number][] = [];
+      let zeroOriginCount = 0;
+
+      const flushRun = () => {
+        if (curRun.length >= 6 && curRun.length > bestPts.length) {
+          const nonZeroAxes = curRun.some((p) => p[0] !== 0 || p[1] !== 0 || p[2] !== 0);
+          if (nonZeroAxes) bestPts = curRun;
+        }
+        curRun = [];
+        zeroOriginCount = 0;
+      };
+
+      for (let off = phase; off + tupleBytes <= limit; off += tupleBytes) {
+        const x = elemSize === 8 ? view.getFloat64(off, true) : view.getFloat32(off, true);
+        const yCad = elemSize === 8 ? view.getFloat64(off + 8, true) : view.getFloat32(off + 4, true);
+        const zUp = elemSize === 8 ? view.getFloat64(off + 16, true) : view.getFloat32(off + 8, true);
+
+        const valid =
+          isPlausibleCoord(x) &&
+          isPlausibleCoord(yCad) &&
+          isPlausibleCoord(zUp) &&
+          !(x === 0 && yCad === 0 && zUp === 0 && zeroOriginCount >= 1);
+
+        if (valid) {
+          if (x === 0 && yCad === 0 && zUp === 0) zeroOriginCount++;
+          curRun.push([x, zUp, -yCad]);
+        } else {
+          flushRun();
+        }
+      }
+      flushRun();
     }
+    return bestPts;
+  };
+
+  let collected = extractBestStridedRun(8);
+  if (collected.length < 8) {
+    collected = extractBestStridedRun(4);
   }
 
-  if (collected.length < 12) {
-    for (let off = 0; off + 12 <= Math.min(buf.length, 600_000); off += 4) {
-      const x = view.getFloat32(off, true);
-      const y = view.getFloat32(off + 4, true);
-      const z = view.getFloat32(off + 8, true);
-      if (
-        Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) &&
-        Math.abs(x) >= 0.05 && Math.abs(x) <= 2000 &&
-        Math.abs(y) >= 0.05 && Math.abs(y) <= 2000 &&
-        Math.abs(z) >= 0.05 && Math.abs(z) <= 2000
-      ) {
-        collected.push([x, z, -y]);
+  // Fallback loose scan if points are separated by per-vertex header records inside SAB/Graphics streams
+  if (collected.length < 8) {
+    const loose: [number, number, number][] = [];
+    const limit = Math.min(buf.length, 600_000);
+    for (let off = 0; off + 24 <= limit; off += 8) {
+      const x = view.getFloat64(off, true);
+      const y = view.getFloat64(off + 8, true);
+      const z = view.getFloat64(off + 16, true);
+      if (isPlausibleCoord(x) && isPlausibleCoord(y) && isPlausibleCoord(z) && Math.abs(x) + Math.abs(y) + Math.abs(z) > 0.1) {
+        loose.push([x, z, -y]);
       }
     }
+    if (loose.length < 8) {
+      for (let off = 0; off + 12 <= limit; off += 4) {
+        const x = view.getFloat32(off, true);
+        const y = view.getFloat32(off + 4, true);
+        const z = view.getFloat32(off + 8, true);
+        if (isPlausibleCoord(x) && isPlausibleCoord(y) && isPlausibleCoord(z) && Math.abs(x) + Math.abs(y) + Math.abs(z) > 0.1) {
+          loose.push([x, z, -y]);
+        }
+      }
+    }
+    collected = loose;
   }
 
-  if (collected.length < 8) return null;
+  if (collected.length < 6) return null;
 
   // Reject random binary noise using median/IQR spatial coherence filter
   const xs = collected.map((p) => p[0]).sort((a, b) => a - b);
@@ -741,5 +833,491 @@ export async function parseIptWithOle2(
     headerSnippet: allTokens.slice(0, 80).join(' · '),
     extractedTokens: allTokens.slice(0, 40),
     notes: `Arquivo Inventor (.IPT) decodificado via ${extractionEngine} (${streamsToInspect.length} streams OLE2/zlib · ${totalTris} triângulos extraídos dos dados reais)`,
+  };
+}
+
+// ============================================================================
+// LLM CAD Briefing Translator (.IPT / .STEP / .STP -> Token-Safe JSON & Brief)
+// ============================================================================
+
+export interface CadComponentBrief {
+  name: string;
+  sourceLayer: string;
+  colorHex?: string;
+  triangleCount: number;
+  proportionPct: number;
+  boundingBoxMm: {
+    min: [number, number, number];
+    max: [number, number, number];
+    size: [number, number, number];
+    centroid: [number, number, number];
+  };
+  inferredRole: string;
+}
+
+export interface CadLlmBriefing {
+  ok: boolean;
+  filename: string;
+  format: string;
+  byteSize: number;
+  geometryStatus:
+    | 'tessellated'
+    | 'metadata_only_asm_encrypted'
+    | 'metadata_only_no_solids'
+    | 'unreadable';
+  engine: string;
+  units: 'mm';
+  summaryStats: {
+    componentCount: number;
+    totalTriangles: number;
+    totalVertices: number;
+    boundingBoxMm: {
+      min: [number, number, number];
+      max: [number, number, number];
+      size: [number, number, number];
+      centroid: [number, number, number];
+      diagonalMm: number;
+    };
+    estimatedEnvelopeVolumeCm3: number;
+  };
+  components: CadComponentBrief[];
+  metadata: {
+    headerSnippet: string;
+    productNames: string[];
+    ole2Streams?: string[];
+    extractedTokens: string[];
+    inferredSegment: string;
+    standardHints: string[];
+    materialHints: string[];
+  };
+  diagnostics: {
+    rawFileSafeForDirectLlmRead: boolean;
+    reason: string;
+    recommendedFallbackAction?: string;
+  };
+  recommendedMcpWorkflow: string[];
+  llmSummaryText: string;
+  sampleVertices?: [number, number, number][];
+}
+
+function roundVec3(v: [number, number, number]): [number, number, number] {
+  return [Number(v[0].toFixed(2)), Number(v[1].toFixed(2)), Number(v[2].toFixed(2))];
+}
+
+function measurePositionsBox(positions: number[]) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i + 2 < positions.length; i += 3) {
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+  if (!Number.isFinite(minX)) {
+    return {
+      min: [0, 0, 0] as [number, number, number],
+      max: [0, 0, 0] as [number, number, number],
+      size: [0, 0, 0] as [number, number, number],
+      centroid: [0, 0, 0] as [number, number, number],
+    };
+  }
+  return {
+    min: roundVec3([minX, minY, minZ]),
+    max: roundVec3([maxX, maxY, maxZ]),
+    size: roundVec3([maxX - minX, maxY - minY, maxZ - minZ]),
+    centroid: roundVec3([(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2]),
+  };
+}
+
+function inferComponentEngineeringRole(
+  name: string,
+  size: [number, number, number]
+): string {
+  const lower = name.toLowerCase();
+  if (/bolt|screw|nut|washer|parafuso|porca|arruela|pin|pino|rivet/i.test(lower)) {
+    return 'Fixador / Parafuso / Pino de Montagem';
+  }
+  if (/shaft|axle|eixo|spindle|tube|tubo|bengala|canela|rod|haste/i.test(lower)) {
+    return 'Eixo / Tubo Cilíndrico / Elemento Linear';
+  }
+  if (/flange|ring|anel|crown|coroa|bearing|rolamento|collar|bucha/i.test(lower)) {
+    return 'Flange / Anel / Coroa / Acoplamento Radial';
+  }
+  if (/bracket|suporte|plate|chapa|base|cover|tampa|housing|carcaca|frame/i.test(lower)) {
+    return 'Suporte Estrutural / Chapa / Carcaça';
+  }
+  const sorted = [...size].sort((a, b) => a - b);
+  const thin = sorted[0];
+  const mid = sorted[1];
+  const long = sorted[2];
+  if (long > 0 && thin / long < 0.14 && mid / long > 0.28) {
+    return 'Chapa / Placa / Casca Delgada';
+  }
+  if (mid > 0 && long / mid > 3.2 && mid / Math.max(0.1, thin) < 1.5) {
+    return 'Eixo / Barra / Viga Alongada';
+  }
+  return 'Corpo Sólido / Bloco Estrutural';
+}
+
+function inferMetadataHints(corpus: string) {
+  const lower = corpus.toLowerCase();
+  let inferredSegment = 'industrial-cnc';
+  const standardHints: string[] = [];
+  const materialHints: string[] = [];
+
+  if (/rockshox|fork|suspens|bicycle|bike|frame|stem|handlebar|rotor|caliper/i.test(lower)) {
+    inferredSegment = 'ciclismo-mobilidade';
+    standardHints.push('ISO 4210-6 (Fadiga e Impacto)', 'EN 15194');
+  } else if (/bracket|wing|rib|spar|avion|aerospace|turbine|impeller|titanium/i.test(lower)) {
+    inferredSegment = 'aeroespacial';
+    standardHints.push('AS9100D', 'MIL-STD-810');
+  } else if (/brake|chassis|knuckle|piston|engine|automotive|suspension|hub/i.test(lower)) {
+    inferredSegment = 'automotivo';
+    standardHints.push('IATF 16949', 'ISO 26262');
+  } else if (/robot|actuator|gripper|servo|kuka|ur5|joint/i.test(lower)) {
+    inferredSegment = 'robotica';
+    standardHints.push('ISO 10218-1', 'ISO/TS 15066');
+  } else if (/ifc|beam|column|truss|slab|bim|arch/i.test(lower)) {
+    inferredSegment = 'arquitetura-bim';
+    standardHints.push('ABNT NBR 8800', 'Eurocode 3');
+  } else if (/implant|prosthe|medical|orthop|titanium ti-6al-4v/i.test(lower)) {
+    inferredSegment = 'medico';
+    standardHints.push('ISO 13485', 'ASTM F136');
+  } else {
+    standardHints.push('ISO 2768-mK (Tolerâncias Gerais)', 'ISO 1101 (GD&T)');
+  }
+
+  if (/6061|7075|alumin|alum[ií]nio/i.test(lower)) materialHints.push('Alumínio 6061-T6 / 7075-T6');
+  if (/ti-?6al|titanium|tit[aâ]nio/i.test(lower)) materialHints.push('Titânio Ti-6Al-4V');
+  if (/316l|304|steel|a[çc]o|stainless|inox|4140|1045/i.test(lower)) materialHints.push('Aço Estrutural / Inox');
+  if (/carbon|cfrp|composite|fibra de carbono/i.test(lower)) materialHints.push('Compósito Fibra de Carbono');
+  if (/abs|nylon|pa12|peek|pla|poly/i.test(lower)) materialHints.push('Polímero Técnico / Engenharia');
+
+  return { inferredSegment, standardHints, materialHints };
+}
+
+function inspectStepHeaderOnly(buffer: Buffer) {
+  const text = buffer.subarray(0, Math.min(buffer.length, 250_000)).toString('latin1');
+  const headerMatch = /HEADER;([\s\S]*?)ENDSEC;/i.exec(text);
+  const productMatches = Array.from(text.matchAll(/PRODUCT\s*\(\s*'([^']+)'/gi)).map((m) => m[1]);
+  const shapeReps = Array.from(
+    text.matchAll(/\b(MANIFOLD_SOLID_BREP|ADVANCED_BREP_SHAPE_REPRESENTATION|SHELL_BASED_SURFACE_MODEL|FACETED_BREP)\s*\(\s*'([^']*)'/gi)
+  ).map((m) => `${m[1]}:${m[2] || 'unnamed'}`);
+  const units = Array.from(
+    text.matchAll(/\b(SI_UNIT|CONVERSION_BASED_UNIT)\s*\(([^;]{1,80})\)/gi)
+  ).map((m) => `${m[1]}(${m[2].trim()})`);
+
+  return {
+    headerSnippet: (headerMatch?.[1] || text.slice(0, 3000)).slice(0, 3500),
+    productNames: Array.from(new Set(productMatches)).slice(0, 20),
+    extractedTokens: Array.from(new Set([...productMatches, ...shapeReps, ...units])).slice(0, 40),
+  };
+}
+
+function inspectIptMetadataOnly(buffer: Buffer) {
+  const isOle2 =
+    buffer.length >= 8 &&
+    buffer[0] === 0xd0 &&
+    buffer[1] === 0xcf &&
+    buffer[2] === 0x11 &&
+    buffer[3] === 0xe0;
+
+  const streamNames: string[] = [];
+  const tokens: string[] = [];
+
+  if (isOle2) {
+    try {
+      const cfb = CFB.read(buffer, { type: 'buffer' });
+      for (let i = 0; i < cfb.FileIndex.length; i++) {
+        const entry = cfb.FileIndex[i];
+        if (!entry) continue;
+        if (entry.name) streamNames.push(entry.name);
+        if (entry.type === 2 && entry.content && entry.content.length > 0) {
+          const rawBuf = Buffer.from(entry.content as Uint8Array);
+          for (const t of extractReadableTokens(rawBuf, 80)) {
+            if (tokens.length < 80 && !tokens.includes(t)) tokens.push(t);
+          }
+          for (const inf of findEmbeddedZlibStreams(rawBuf).slice(0, 8)) {
+            for (const t of extractReadableTokens(inf, 60)) {
+              if (tokens.length < 100 && !tokens.includes(t)) tokens.push(t);
+            }
+          }
+        }
+      }
+    } catch {
+      // fallback to raw token extraction
+    }
+  }
+
+  if (tokens.length === 0) {
+    tokens.push(...extractReadableTokens(buffer, 60));
+  }
+
+  return {
+    isOle2,
+    ole2Streams: Array.from(new Set(streamNames)).slice(0, 40),
+    extractedTokens: tokens.slice(0, 45),
+    headerSnippet: tokens.slice(0, 30).join(' · '),
+  };
+}
+
+export async function buildCadLlmBriefing(
+  buffer: Buffer,
+  filename: string,
+  options?: { includeSampleVertices?: boolean }
+): Promise<CadLlmBriefing> {
+  const lower = filename.toLowerCase();
+  const ext = path.extname(lower).replace('.', '').toUpperCase() || 'CAD';
+  const includeSampleVertices = Boolean(options?.includeSampleVertices);
+
+  let parsed: ServerParsedCadResult | null = null;
+  let parseError = '';
+
+  if (/\.(step|stp|igs|iges|brep)$/i.test(lower)) {
+    try {
+      parsed = await parseStepWithOcct(buffer, filename);
+    } catch (err) {
+      parseError = err instanceof Error ? err.message : String(err);
+    }
+  } else if (lower.endsWith('.ipt')) {
+    try {
+      parsed = await parseIptWithOle2(buffer, filename);
+    } catch (err) {
+      parseError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  if (parsed && parsed.meshes.length > 0) {
+    let totalTriangles = 0;
+    let totalVertices = 0;
+    const allPositions: number[] = [];
+
+    for (const m of parsed.meshes) {
+      totalTriangles += Math.floor(m.positions.length / 9);
+      totalVertices += Math.floor(m.positions.length / 3);
+      for (let i = 0; i < m.positions.length; i++) {
+        allPositions.push(m.positions[i]);
+      }
+    }
+
+    const globalBox = measurePositionsBox(allPositions);
+    const diagonalMm = Number(
+      Math.hypot(globalBox.size[0], globalBox.size[1], globalBox.size[2]).toFixed(2)
+    );
+    const envelopeVolCm3 = Number(
+      ((globalBox.size[0] * globalBox.size[1] * globalBox.size[2]) / 1000).toFixed(2)
+    );
+
+    const components: CadComponentBrief[] = parsed.meshes.slice(0, 40).map((m) => {
+      const tris = Math.floor(m.positions.length / 9);
+      const box = measurePositionsBox(m.positions);
+      return {
+        name: m.name,
+        sourceLayer: m.sourceLayer,
+        colorHex: m.colorHex,
+        triangleCount: tris,
+        proportionPct:
+          totalTriangles > 0 ? Number(((tris / totalTriangles) * 100).toFixed(1)) : 0,
+        boundingBoxMm: box,
+        inferredRole: inferComponentEngineeringRole(m.name, box.size),
+      };
+    });
+
+    const corpus = [
+      filename,
+      parsed.headerSnippet,
+      ...parsed.extractedTokens,
+      ...components.map((c) => c.name),
+    ].join(' ');
+    const hints = inferMetadataHints(corpus);
+
+    const recommendedMcpWorkflow = [
+      `cad_set_segment_profile({ segment: "${hints.inferredSegment}", partName: "${components[0]?.name || filename}" })`,
+      'cad_run_structural_fea({ loadNewtons: 2500, showHeatmap: true })',
+      'cad_evaluate_nurbs_metrics({})',
+      'cad_get_scoobiii_vuc_proof({})',
+    ];
+
+    const sampleVertices: [number, number, number][] | undefined = includeSampleVertices
+      ? (() => {
+          const pts: [number, number, number][] = [];
+          const stride = Math.max(3, Math.floor(allPositions.length / 3 / 24) * 3);
+          for (let i = 0; i + 2 < allPositions.length && pts.length < 24; i += stride) {
+            pts.push(roundVec3([allPositions[i], allPositions[i + 1], allPositions[i + 2]]));
+          }
+          return pts;
+        })()
+      : undefined;
+
+    const llmSummaryText = [
+      `CAD ENGINEERING BRIEFING — ${filename} (${parsed.format})`,
+      `Motor: ${parsed.engine} | Unidades normalizadas: mm`,
+      `Geometria: ${parsed.meshes.length} componente(s), ${totalTriangles.toLocaleString('en-US')} triângulos reais (${totalVertices.toLocaleString('en-US')} vértices omitidos para economia de tokens).`,
+      `Dimensões Totais (X × Y × Z): ${globalBox.size[0]} × ${globalBox.size[1]} × ${globalBox.size[2]} mm (Diagonal: ${diagonalMm} mm | Envelope: ${envelopeVolCm3} cm³).`,
+      `Segmento sugerido: ${hints.inferredSegment} | Normas: ${hints.standardHints.join(', ')}`,
+      hints.materialHints.length > 0 ? `Indícios de material: ${hints.materialHints.join(', ')}` : '',
+      `Componentes principais:\n${components
+        .slice(0, 8)
+        .map(
+          (c, idx) =>
+            `  ${idx + 1}. ${c.name} [${c.inferredRole}] — ${c.boundingBoxMm.size.join('×')} mm (${c.triangleCount} tris, ${c.proportionPct}%)`
+        )
+        .join('\n')}`,
+      `Fluxo MCP recomendado: ${recommendedMcpWorkflow.join(' -> ')}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    return {
+      ok: true,
+      filename,
+      format: parsed.format,
+      byteSize: buffer.byteLength,
+      geometryStatus: 'tessellated',
+      engine: parsed.engine,
+      units: 'mm',
+      summaryStats: {
+        componentCount: parsed.meshes.length,
+        totalTriangles,
+        totalVertices,
+        boundingBoxMm: {
+          ...globalBox,
+          diagonalMm,
+        },
+        estimatedEnvelopeVolumeCm3: envelopeVolCm3,
+      },
+      components,
+      metadata: {
+        headerSnippet: parsed.headerSnippet.slice(0, 1200),
+        productNames: parsed.extractedTokens.slice(0, 15),
+        extractedTokens: parsed.extractedTokens.slice(0, 35),
+        inferredSegment: hints.inferredSegment,
+        standardHints: hints.standardHints,
+        materialHints: hints.materialHints,
+      },
+      diagnostics: {
+        rawFileSafeForDirectLlmRead: false,
+        reason:
+          'Arquivo binário/B-Rep convertido em resumo estrutural compacto sem dump de arrays Float32 de vértices.',
+      },
+      recommendedMcpWorkflow,
+      llmSummaryText,
+      ...(sampleVertices ? { sampleVertices } : {}),
+    };
+  }
+
+  // Fallback path: geometry could not be tessellated (e.g., encrypted Inventor ShapeManager ASM or header-only STEP)
+  if (lower.endsWith('.ipt')) {
+    const meta = inspectIptMetadataOnly(buffer);
+    const hints = inferMetadataHints([filename, ...meta.extractedTokens].join(' '));
+    const llmSummaryText = [
+      `CAD METADATA BRIEFING — ${filename} (IPT / Inventor OLE2)`,
+      `Status: Geometria B-Rep usa ShapeManager binário criptografado sem malha facetada ou ACIS SAT exposto.`,
+      `Container OLE2 detectado: ${meta.isOle2 ? 'Sim' : 'Não'} (${meta.ole2Streams.length} streams: ${meta.ole2Streams.slice(0, 10).join(', ')})`,
+      `Tokens / iProperties extraídos: ${meta.extractedTokens.slice(0, 16).join(' | ') || 'nenhum token legível'}`,
+      `Ação recomendada para o Agente: Solicitar ao usuário exportação .STEP (AP214/AP203) no Autodesk Inventor para tesselação OpenCASCADE completa, ou prosseguir com estimativa paramétrica no segmento ${hints.inferredSegment}.`,
+    ].join('\n');
+
+    return {
+      ok: false,
+      filename,
+      format: 'IPT',
+      byteSize: buffer.byteLength,
+      geometryStatus: 'metadata_only_asm_encrypted',
+      engine: 'Inventor OLE2 Metadata Inspector',
+      units: 'mm',
+      summaryStats: {
+        componentCount: 0,
+        totalTriangles: 0,
+        totalVertices: 0,
+        boundingBoxMm: {
+          min: [0, 0, 0],
+          max: [0, 0, 0],
+          size: [0, 0, 0],
+          centroid: [0, 0, 0],
+          diagonalMm: 0,
+        },
+        estimatedEnvelopeVolumeCm3: 0,
+      },
+      components: [],
+      metadata: {
+        headerSnippet: meta.headerSnippet,
+        productNames: meta.extractedTokens.slice(0, 10),
+        ole2Streams: meta.ole2Streams,
+        extractedTokens: meta.extractedTokens,
+        inferredSegment: hints.inferredSegment,
+        standardHints: hints.standardHints,
+        materialHints: hints.materialHints,
+      },
+      diagnostics: {
+        rawFileSafeForDirectLlmRead: false,
+        reason:
+          parseError ||
+          'Geometria ShapeManager proprietária sem stream ACIS SAT ou malha display exposta.',
+        recommendedFallbackAction:
+          'Exporte o .IPT como .STEP/.STP no Inventor e reenvie para POST /api/cad/llm-briefing para tesselação B-Rep completa via OpenCASCADE.',
+      },
+      recommendedMcpWorkflow: [
+        `cad_set_segment_profile({ segment: "${hints.inferredSegment}" })`,
+      ],
+      llmSummaryText,
+    };
+  }
+
+  // STEP / IGES / BREP without valid solid B-Rep
+  const stepMeta = inspectStepHeaderOnly(buffer);
+  const hints = inferMetadataHints([filename, stepMeta.headerSnippet, ...stepMeta.extractedTokens].join(' '));
+  return {
+    ok: false,
+    filename,
+    format: ext,
+    byteSize: buffer.byteLength,
+    geometryStatus: /\.(step|stp|igs|iges|brep)$/i.test(lower)
+      ? 'metadata_only_no_solids'
+      : 'unreadable',
+    engine: 'ISO-10303 Header Fallback Inspector',
+    units: 'mm',
+    summaryStats: {
+      componentCount: 0,
+      totalTriangles: 0,
+      totalVertices: 0,
+      boundingBoxMm: {
+        min: [0, 0, 0],
+        max: [0, 0, 0],
+        size: [0, 0, 0],
+        centroid: [0, 0, 0],
+        diagonalMm: 0,
+      },
+      estimatedEnvelopeVolumeCm3: 0,
+    },
+    components: [],
+    metadata: {
+      headerSnippet: stepMeta.headerSnippet,
+      productNames: stepMeta.productNames,
+      extractedTokens: stepMeta.extractedTokens,
+      inferredSegment: hints.inferredSegment,
+      standardHints: hints.standardHints,
+      materialHints: hints.materialHints,
+    },
+    diagnostics: {
+      rawFileSafeForDirectLlmRead: false,
+      reason:
+        parseError ||
+        'Arquivo não contém sólidos B-Rep tesseláveis ou formato não suportado por este briefing server-side.',
+      recommendedFallbackAction:
+        'Verifique se o STEP contém entidades MANIFOLD_SOLID_BREP / SHELL_BASED_SURFACE_MODEL ou envie para importação na aba Arquivos CAD.',
+    },
+    recommendedMcpWorkflow: [
+      `cad_set_segment_profile({ segment: "${hints.inferredSegment}" })`,
+    ],
+    llmSummaryText: [
+      `CAD HEADER BRIEFING — ${filename} (${ext})`,
+      `Status: ${parseError || 'Sem sólidos B-Rep tesseláveis detectados.'}`,
+      `Produtos STEP detectados: ${stepMeta.productNames.join(', ') || 'nenhum'}`,
+      `Entidades/Tokens: ${stepMeta.extractedTokens.slice(0, 15).join(' · ') || 'nenhum'}`,
+    ].join('\n'),
   };
 }
