@@ -245,7 +245,7 @@ export function computeScoobiiiVucProof(params: {
         for (let j = 0; j < surface.vCount; j++) {
           const bv = coxDeBoorBasis(j, surface.degreeV, v, surface.knotsV);
           if (bv === 0) continue;
-          const w = surface.controlPoints[i]?.[j]?.w ?? 1;
+          const w = surface.controlPoints[i][j].w;
           numSum += bu * bv * w;
           denSum += bu * bv * w;
         }

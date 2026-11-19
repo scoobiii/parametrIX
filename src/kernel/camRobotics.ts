@@ -438,7 +438,7 @@ function generatePostProcessorCode(
     `T01 M06`,
     `S${rpm} M03`,
     `G54`,
-    `G00 Z${(points[0]?.z ?? 80).toFixed(3)}`,
+    `G00 Z${points[0].z.toFixed(3)}`,
   ];
 
   for (let i = 0; i < maxLines; i++) {

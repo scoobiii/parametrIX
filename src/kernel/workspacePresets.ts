@@ -27,7 +27,7 @@ export const ACCEPTED_CAD_EXTENSIONS =
  * Parses any uploaded CAD or raster/vector image file into a unified 3D ImportedCadModel.
  */
 export async function parseUploadedCadOrImageFile(file: File): Promise<ImportedCadModel> {
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : '';
   if (ext === 'stl') {
     return parseSTL(await file.arrayBuffer(), file.name);
   }

@@ -592,7 +592,7 @@ export function buildNurbsSurfaceFromParams(params: ParametricDesignParams): Nur
         const rHeight = z * Math.sin(localTwist) + ry * Math.cos(localTwist);
         z = rz;
         y += 28 + rHeight;
-        w = vCentered === 0 ? 1.5 : 1.0;
+        w = Math.abs(vCentered) <= 0.25 ? 1.5 : 1.0;
       } else if (params.preset === 'cavity') {
         // Precision CNC mold cavity block with central NURBS pocket
         const r2 = uCentered * uCentered + vCentered * vCentered;
@@ -603,7 +603,7 @@ export function buildNurbsSurfaceFromParams(params: ParametricDesignParams): Nur
           : 0;
         y += params.archHeight * 0.55 + pocket;
         w = isInterior ? 1.2 : 1.0;
-      } else if (params.preset === 'diagrid') {
+      } else {
         // BIM Parabolic Vault with diagonal wave modulation
         const vault = (1 - uCentered * uCentered) * params.archHeight;
         const diagWave = Math.sin((uNorm + vNorm) * Math.PI * 2) * params.waveAmplitude * 0.7;

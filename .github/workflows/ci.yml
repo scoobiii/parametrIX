@@ -1,0 +1,37 @@
+name: Mandatory CI Gate (100% Coverage + CAD Audit + Build)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  ci-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript Strict Check (lint)
+        run: npm run lint
+
+      - name: Unit & Kernel Tests (100% V8 Coverage Enforced)
+        run: npm run test:coverage
+
+      - name: CAD / IPT / STEP / LLM Briefing Audit Suite
+        run: npm run audit:cad
+
+      - name: Production Bundle Build
+        run: npm run build

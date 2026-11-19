@@ -1,0 +1,1129 @@
+root@localhost:~/parametrIX# cd /root/parametrIX || exit 1
+ 
+echo "=== FEATURE OP: IMPLEMENTAÇÃO E CONSUMIDORES ==="          grep -RniE \
+'onAddFeatureOp|featureOps|CadFeatureOperation|appliedFeature' \
+src --exclude='mcpServer.ts' | head -220                                                                                        echo "=== VOLUME DA MALHA ==="
+sed -n '2150,2290p' src/kernel/cadFormats.ts
+echo "=== NURBS: MÉTRICAS E ESPESSURA ==="
+sed -n '300,390p' src/kernel/nurbs.ts                            sed -n '500,550p' src/kernel/nurbs.ts
+echo "=== IMPORTAÇÃO STEP/STL ==="
+find . -maxdepth 4 -type f \
+\(-iname '*parser*' -o -iname '*format*' -o -iname '*import*'\) \                                                               -not -path './node\_modules/\*' | sort                                                                                            echo "=== DEPENDÊNCIAS CAD ==="
+grep -nE \                                                         'occt|opencascade|three|manifold|csg|cadquery|replicad|brep' \
+package.json
+=== FEATURE OP: IMPLEMENTAÇÃO E CONSUMIDORES ===
+src/components/Viewport3D.tsx:37:  CadFeatureOperation,
+src/components/Viewport3D.tsx:181:  featureOps?: CadFeatureOperation&#91;&#93;;
+src/components/Viewport3D.tsx:182:  onAddFeatureOp?: (op: Omit&lt;CadFeatureOperation, 'id' | 'createdAt'>) => void;
+src/components/Viewport3D.tsx:599:  featureOps = &#91;&#93;,
+src/components/Viewport3D.tsx:600:  onAddFeatureOp,
+src/components/Viewport3D.tsx:804:    featureOpsGroup: THREE.Group;
+src/components/Viewport3D.tsx:983:    const featureOpsGroup = new THREE.Group();
+src/components/Viewport3D.tsx:993:      featureOpsGroup
+src/components/Viewport3D.tsx:1509:      featureOpsGroup,
+src/components/Viewport3D.tsx:2322:    disposeGroupTree(refs.featureOpsGroup);
+src/components/Viewport3D.tsx:2358:    for (const op of featureOps) {
+src/components/Viewport3D.tsx:2475:      refs.featureOpsGroup.add(container);
+src/components/Viewport3D.tsx:2484:  }, &#91;featureOps, display.sectionEnabled, display.sectionRatio, display.sectionAxis, display.sectionFlipped&#93;);
+src/components/Viewport3D.tsx:2633:    if (!magicPenPick || !onAddFeatureOp) return;
+src/components/Viewport3D.tsx:2635:      onAddFeatureOp({
+src/components/Viewport3D.tsx:2649:      onAddFeatureOp({
+src/components/Viewport3D.tsx:2663:      onAddFeatureOp({
+src/components/Viewport3D.tsx:2679:      onAddFeatureOp({
+src/components/Viewport3D.tsx:2692:      onAddFeatureOp({
+src/components/Viewport3D.tsx:4193:              {featureOps.length > 0 &amp;&amp; onRemoveFeatureOp &amp;&amp; (
+src/components/Viewport3D.tsx:4195:                  {featureOps.length} operação(ões) aplicada(s)
+src/components/Viewport3D.tsx:4198:                    onClick={() => onRemoveFeatureOp(featureOps&#91;0&#93;.id)}
+src/kernel/scoobiiiVuc.ts:4:  CadFeatureOperation,
+src/kernel/scoobiiiVuc.ts:121:  featureOps: CadFeatureOperation&#91;&#93;,
+src/kernel/scoobiiiVuc.ts:135:  for (const op of featureOps) {
+src/kernel/scoobiiiVuc.ts:207:  featureOps: CadFeatureOperation&#91;&#93;;
+src/kernel/scoobiiiVuc.ts:218:    featureOps,
+src/kernel/scoobiiiVuc.ts:306:  const featureImpact = computeFeatureVolumeAndKt(featureOps, effectiveWidthMm);
+src/kernel/scoobiiiVuc.ts:421:  const boltOps = featureOps.filter((op) => op.kind === 'threaded-bolt');
+src/kernel/scoobiiiVuc.ts:440:  const rawSeed = `${surface.id}|${feaResult.maxStressMpa}|${feaResult.maxDeflectionMm}|${netVolCm3}|${featureOps.length}|${checks.map((c) => (c.passed ? '1' : '0')).join('')}`;
+src/kernel/structuralFea.ts:2:  CadFeatureOperation,
+src/kernel/structuralFea.ts:110:  featureOps: CadFeatureOperation&#91;&#93; = &#91;&#93;
+src/kernel/structuralFea.ts:200:    if (featureOps.length > 0) {
+src/kernel/structuralFea.ts:201:      for (const op of featureOps) {
+src/kernel/structuralFea.ts:301:  const featureCutRatio = featureOps.reduce((acc, op) => {
+src/kernel/workspacePresets.ts:13:  CadFeatureOperation,
+src/kernel/workspacePresets.ts:79:  initialFeatures?: CadFeatureOperation&#91;&#93;;
+src/types/cad.ts:467:export interface CadFeatureOperation {
+=== VOLUME DA MALHA ===
+if (matchedImportedPart &amp;&amp; matchedImportedPart.positions &amp;&amp; matchedImportedPart.positions.length > 0) {
+const vCount = Math.floor(matchedImportedPart.positions.length / 3);
+const triCount = Math.floor(vCount / 3);
+const indices = new Uint32Array(triCount \* 3);
+for (let i = 0; i &lt; triCount \* 3; i++) indices&#91;i&#93; = i;
+return {
+evaluated: {
+...mesh,
+positions: matchedImportedPart.positions,
+normals: matchedImportedPart.normals ?? new Float32Array(matchedImportedPart.positions.length),
+uvs: new Float32Array(vCount \* 2),
+colors: new Float32Array(vCount \* 3),
+indices,
+triangleCount: triCount,
+vertexCount: vCount,
+isocurves: &#91;&#93;,
+boundingBox: mesh.boundingBox,
+},
+partLabel: matchedImportedPart.name.replace(/&#91;^a-zA-Z0-9\_-&#93;+/g, '\_').toLowerCase(),
+};
+}
+ 
+const targetElements = mesh.bimElements.filter((el) => {
+if (isolationTarget === 'ribs-u') return el.ifcClass === 'IfcBeam';
+if (isolationTarget === 'ribs-v') return el.ifcClass === 'IfcMember';
+return el.id === isolationTarget;
+});
+ 
+if (targetElements.length === 0) {
+return { evaluated: mesh, partLabel: 'conjunto\_completo' };
+}
+ 
+// Tessellate each selected BIM rib box (8 vertices, 12 triangles)
+const vertCount = targetElements.length \* 8;
+const triCount = targetElements.length \* 12;
+const positions = new Float32Array(vertCount \* 3);
+const normals = new Float32Array(vertCount \* 3);
+const uvs = new Float32Array(vertCount \* 2);
+const colors = new Float32Array(vertCount \* 3);
+const indices = new Uint32Array(triCount \* 3);
+ 
+const boxTriIdx = &#91;
+0, 1, 2, 0, 2, 3, // -Z
+4, 6, 5, 4, 7, 6, // +Z
+0, 4, 5, 0, 5, 1, // -Y
+3, 2, 6, 3, 6, 7, // +Y
+0, 3, 7, 0, 7, 4, // -X
+1, 5, 6, 1, 6, 2, // +X
+&#93;;
+ 
+let minX = Infinity, minY = Infinity, minZ = Infinity;
+let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+let areaMm2 = 0;
+let volMm3 = 0;
+ 
+targetElements.forEach((el, eIdx) => {
+const hx = el.size&#91;0&#93; / 2;
+const hy = el.size&#91;1&#93; / 2;
+const hz = el.size&#91;2&#93; / 2;
+const c = Math.cos(el.rotationY);
+const s = Math.sin(el.rotationY);
+const &#91;cx, cy, cz&#93; = el.center;
+ 
+```
+areaMm2 += 2 * (el.size[0] * el.size[1] + el.size[1] * el.size[2] + el.size[0] * el.size[2]);  
+volMm3 += el.size[0] * el.size[1] * el.size[2];  
+
+const localCorners: [number, number, number][] = [  
+  [-hx, -hy, -hz],  
+  [hx, -hy, -hz],  
+  [hx, hy, -hz],  
+  [-hx, hy, -hz],  
+  [-hx, -hy, hz],  
+  [hx, -hy, hz],  
+  [hx, hy, hz],  
+  [-hx, hy, hz],  
+];  
+
+const baseV = eIdx * 8;  
+for (let k = 0; k < 8; k++) {  
+  const [lx, ly, lz] = localCorners[k];  
+  const wx = cx + lx * c + lz * s;  
+  const wy = cy + ly;  
+  const wz = cz - lx * s + lz * c;  
+  const vPtr = (baseV + k) * 3;  
+  positions[vPtr] = wx;  
+  positions[vPtr + 1] = wy;  
+  positions[vPtr + 2] = wz;  
+  normals[vPtr] = 0;  
+  normals[vPtr + 1] = 1;  
+  normals[vPtr + 2] = 0;  
+  minX = Math.min(minX, wx);  
+  minY = Math.min(minY, wy);  
+  minZ = Math.min(minZ, wz);  
+  maxX = Math.max(maxX, wx);  
+  maxY = Math.max(maxY, wy);  
+  maxZ = Math.max(maxZ, wz);  
+}  
+
+const baseI = eIdx * 36;  
+for (let k = 0; k < 36; k++) {  
+  indices[baseI + k] = baseV + boxTriIdx[k];  
+}  
+```
+ 
+});
+ 
+return {
+evaluated: {
+positions,
+normals,
+uvs,
+colors,
+indices,
+triangleCount: triCount,
+vertexCount: vertCount,
+isocurves: &#91;&#93;,
+bimElements: targetElements,
+boundingBox: {
+min: &#91;minX, minY, minZ&#93;,
+max: &#91;maxX, maxY, maxZ&#93;,
+size: &#91;maxX - minX, maxY - minY, maxZ - minZ&#93;,
+},
+surfaceAreaCm2: Number((areaMm2 / 100).toFixed(2)),
+volumeCm3: Number((volMm3 / 1000).toFixed(2)),
+},
+partLabel:
+targetElements.length === 1
+? targetElements&#91;0&#93;.id.toLowerCase()
+: isolationTarget.replace(/&#91;^a-zA-Z0-9\_-&#93;/g, '\_'),
+};
+}
+ 
+/\*\*
+ 
+- Sample CAD files ready to load in 1 click to test multi-format import
+  \*/
+  export const SAMPLE\_CAD\_FILES: {
+  label: string;
+  filename: string;
+  format: 'DXF' | 'OBJ' | 'STEP' | 'IFC';
+  content: string;
+  }&#91;&#93; = &#91;
+  {
+  label: 'Flange Mecânico (DXF)',
+  === NURBS: MÉTRICAS E ESPESSURA ===
+
+ 
+return elements;
+}
+ 
+/\*\*
+ 
+- Tessellates a NURBS surface into a solid thickened BufferGeometry dataset
+- - extracts isocurves and computes accurate area, volume, and bounding box.
+    \*/
+    export function tessellateNurbsSurface(
+    surface: NurbsSurfaceData,
+    ribCountU = 5,
+    ribCountV = 4,
+    ribHeightMm = 14
+    ): EvaluatedMesh {
+    const uSegs = Math.max(8, Math.min(96, surface.uDivisions));
+    const vSegs = Math.max(8, Math.min(96, surface.vDivisions));
+    const cols = uSegs + 1;
+    const rows = vSegs + 1;
+    const layerVerts = cols \* rows;
+    const hasThickness = surface.thicknessMm > 0.5;
+    const totalVerts = hasThickness ? layerVerts \* 2 : layerVerts;
+
+ 
+const positions = new Float32Array(totalVerts \* 3);
+const normals = new Float32Array(totalVerts \* 3);
+const uvs = new Float32Array(totalVerts \* 2);
+const colors = new Float32Array(totalVerts \* 3);
+ 
+let minX = Infinity, minY = Infinity, minZ = Infinity;
+let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+ 
+for (let j = 0; j &lt; rows; j++) {
+const v = j / vSegs;
+for (let i = 0; i &lt; cols; i++) {
+const u = i / uSegs;
+const idx = j \* cols + i;
+const { point, normal, curvature } = evaluateNurbsPointAndNormal(surface, u, v);
+const &#91;r, g, b&#93; = curvatureToRgb(curvature);
+ 
+```
+  positions[idx * 3] = point[0];  
+  positions[idx * 3 + 1] = point[1];  
+  positions[idx * 3 + 2] = point[2];  
+
+  normals[idx * 3] = normal[0];  
+  normals[idx * 3 + 1] = normal[1];  
+  normals[idx * 3 + 2] = normal[2];  
+
+  uvs[idx * 2] = u;  
+  uvs[idx * 2 + 1] = v;  
+
+  colors[idx * 3] = r;  
+  colors[idx * 3 + 1] = g;  
+  colors[idx * 3 + 2] = b;  
+
+  minX = Math.min(minX, point[0]);  
+  minY = Math.min(minY, point[1]);  
+  minZ = Math.min(minZ, point[2]);  
+  maxX = Math.max(maxX, point[0]);  
+  maxY = Math.max(maxY, point[1]);  
+  maxZ = Math.max(maxZ, point[2]);  
+
+  if (hasThickness) {  
+    const bIdx = layerVerts + idx;  
+    const bx = point[0] - normal[0] * surface.thicknessMm;  
+    const by = point[1] - normal[1] * surface.thicknessMm;  
+    const bz = point[2] - normal[2] * surface.thicknessMm;  
+
+    positions[bIdx * 3] = bx;  
+    positions[bIdx * 3 + 1] = by;  
+    positions[bIdx * 3 + 2] = bz;  
+
+    normals[bIdx * 3] = -normal[0];  
+    normals[bIdx * 3 + 1] = -normal[1];  
+    normals[bIdx * 3 + 2] = -normal[2];  
+
+    uvs[bIdx * 2] = u;  
+    uvs[bIdx * 2 + 1] = v;  
+
+    colors[bIdx * 3] = r * 0.75;  
+    colors[bIdx * 3 + 1] = g * 0.75;  
+    colors[bIdx * 3 + 2] = b * 0.75;  
+
+    minX = Math.min(minX, bx);  
+    minY = Math.min(minY, by);  
+    minZ = Math.min(minZ, bz);  
+    maxX = Math.max(maxX, bx);  
+    maxY = Math.max(maxY, by);  
+    maxZ = Math.max(maxZ, bz);  
+  }  
+}  
+```
+ 
+}
+ 
+const isocurves: &#91;number, number, number&#93;&#91;&#93;&#91;&#93; = &#91;&#93;;
+const isoUCount = 7;
+const isoVCount = 7;
+const isoSamples = 36;
+ 
+for (let k = 0; k &lt; isoUCount; k++) {
+const u = k / (isoUCount - 1);
+const curve: &#91;number, number, number&#93;&#91;&#93; = &#91;&#93;;
+for (let s = 0; s &lt;= isoSamples; s++) {
+curve.push(evaluateNurbsPoint(surface, u, s / isoSamples));
+}
+isocurves.push(curve);
+}
+for (let k = 0; k &lt; isoVCount; k++) {
+const v = k / (isoVCount - 1);
+const curve: &#91;number, number, number&#93;&#91;&#93; = &#91;&#93;;
+for (let s = 0; s &lt;= isoSamples; s++) {
+curve.push(evaluateNurbsPoint(surface, s / isoSamples, v));
+}
+isocurves.push(curve);
+}
+ 
+const bimElements = generateBimWaffleElements(surface, ribCountU, ribCountV, ribHeightMm);
+const volumeCm3 = (surfaceAreaMm2 \* Math.max(1, surface.thicknessMm)) / 1000;
+ 
+return {
+positions,
+normals,
+uvs,
+colors,
+indices,
+triangleCount: totalTris,
+vertexCount: totalVerts,
+isocurves,
+bimElements,
+boundingBox: {
+min: &#91;minX, minY, minZ&#93;,
+max: &#91;maxX, maxY, maxZ&#93;,
+size: &#91;maxX - minX, maxY - minY, maxZ - minZ&#93;,
+},
+surfaceAreaCm2: Number((surfaceAreaMm2 / 100).toFixed(2)),
+volumeCm3: Number(volumeCm3.toFixed(2)),
+};
+}
+ 
+/\*\*
+ 
+- Generates a parametric 6x6 NURBS control point grid from engineering presets &amp; parameters
+  \*/
+  export function buildNurbsSurfaceFromParams(params: ParametricDesignParams): NurbsSurfaceData {
+  const uCount = 6;
+  const vCount = 6;
+  === IMPORTAÇÃO STEP/STL ===
+  ./src/kernel/cadFormats.ts
+  === DEPENDÊNCIAS CAD ===
+  18:    "@types/three": "^0.187.0",
+  28:    "three": "^0.187.0",
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+  root@localhost:~/parametrIX#
+
+ 
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX# cd /root/parametrIX || exit 1
+ 
+echo "=== CANETA: RENDERIZAÇÃO DAS OPERAÇÕES ==="
+sed -n '2350,2490p' src/components/Viewport3D.tsx
+sed -n '2610,2710p' src/components/Viewport3D.tsx
+ 
+echo "=== TIPO DA OPERAÇÃO ==="
+sed -n '455,495p' src/types/cad.ts
+ 
+echo "=== VOLUME E FATOR Kt ==="
+sed -n '115,195p' src/kernel/scoobiiiVuc.ts
+sed -n '290,355p' src/kernel/scoobiiiVuc.ts
+ 
+echo "=== FEA E OPERAÇÕES ==="
+sed -n '180,225p' src/kernel/structuralFea.ts
+sed -n '285,335p' src/kernel/structuralFea.ts
+ 
+echo "=== IMPORTADORES E VOLUME ==="
+grep -nE \
+'parseSTL|parseSTEP|parseIGES|volumeCm3|surfaceAreaCm2|occt|STL\_MESH|COMP-' \
+src/kernel/cadFormats.ts | head -160
+=== CANETA: RENDERIZAÇÃO DAS OPERAÇÕES ===
+});
+const gussetMat = new THREE.MeshPhysicalMaterial({
+color: 0x94a3b8,
+metalness: 0.86,
+roughness: 0.24,
+clippingPlanes: activeClip,
+});
+ 
+```
+for (const op of featureOps) {  
+  const container = new THREE.Group();  
+  container.position.set(op.point[0], op.point[1], op.point[2]);  
+  _vec3A.set(op.normal[0], op.normal[1], op.normal[2]).normalize();  
+  if (_vec3A.lengthSq() < 0.01) _vec3A.set(0, 1, 0);  
+  _quatA.setFromUnitVectors(_upVec, _vec3A);  
+  container.quaternion.copy(_quatA);  
+
+  if (op.kind === 'slot-cutout') {  
+    const w = Math.max(3, op.widthMm);  
+    const l = Math.max(4, op.lengthMm);  
+    const d = Math.max(2, op.depthMm);  
+
+    const pocket = new THREE.Mesh(new THREE.BoxGeometry(w, d, l), pocketMat);  
+    pocket.position.y = -d * 0.45 + 0.4;  
+    container.add(pocket);  
+
+    const rimGeo = new THREE.BoxGeometry(w + 1.8, 0.8, l + 1.8);  
+    const rimEdges = new THREE.LineSegments(  
+      new THREE.EdgesGeometry(rimGeo),  
+      new THREE.LineBasicMaterial({ color: 0x38bdf8 })  
+    );  
+    rimEdges.position.y = 0.6;  
+    rimGeo.dispose();  
+    container.add(rimEdges);  
+
+    const collar = new THREE.Mesh(  
+      new THREE.BoxGeometry(w + 2.4, 0.5, l + 2.4),  
+      rimMat  
+    );  
+    collar.position.y = 0.35;  
+    collar.scale.set(1, 1, 0.12);  
+    container.add(collar);  
+  } else if (op.kind === 'through-hole') {  
+    const r = Math.max(1.5, op.diameterMm * 0.5);  
+    const d = Math.max(2, op.depthMm);  
+    const bore = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d, 24), pocketMat);  
+    bore.position.y = -d * 0.45 + 0.4;  
+    container.add(bore);  
+
+    const chamfer = new THREE.Mesh(  
+      new THREE.TorusGeometry(r + 0.6, 0.55, 8, 28),  
+      rimMat  
+    );  
+    chamfer.rotation.x = Math.PI / 2;  
+    chamfer.position.y = 0.5;  
+    container.add(chamfer);  
+  } else if (op.kind === 'threaded-bolt') {  
+    const spec = ISO_METRIC_THREADS[op.threadSpec ?? 'M6'] ?? ISO_METRIC_THREADS.M6;  
+    const r = spec.nominalDiameterMm * 0.5;  
+    const headR = spec.headDiameterMm * 0.5;  
+    const headH = spec.headHeightMm;  
+    const pitch = spec.pitchMm;  
+    const shaftLen = Math.max(6, op.depthMm);  
+
+    const washer = new THREE.Mesh(  
+      new THREE.CylinderGeometry(headR * 1.24, headR * 1.24, 1.1, 24),  
+      steelMat  
+    );  
+    washer.position.y = 0.55;  
+    washer.castShadow = true;  
+    container.add(washer);  
+
+    const headSegs = op.headStyle === 'hex' ? 6 : 24;  
+    const head = new THREE.Mesh(  
+      new THREE.CylinderGeometry(headR, headR, headH, headSegs),  
+      steelMat  
+    );  
+    head.position.y = 1.1 + headH * 0.5;  
+    head.castShadow = true;  
+    container.add(head);  
+
+    if (op.headStyle !== 'hex') {  
+      const hexSocket = new THREE.Mesh(  
+        new THREE.CylinderGeometry(headR * 0.52, headR * 0.52, headH * 0.55, 6),  
+        pocketMat  
+      );  
+      hexSocket.position.y = 1.1 + headH * 0.8;  
+      container.add(hexSocket);  
+    }  
+
+    const shank = new THREE.Mesh(  
+      new THREE.CylinderGeometry(r * 0.84, r * 0.84, shaftLen, 18),  
+      darkThreadMat  
+    );  
+    shank.position.y = -shaftLen * 0.5;  
+    container.add(shank);  
+
+    // Helical/pitched ISO thread ridges  
+    const ringCount = Math.min(18, Math.max(3, Math.floor(shaftLen / Math.max(0.6, pitch))));  
+    for (let t = 0; t < ringCount; t++) {  
+      const ring = new THREE.Mesh(  
+        new THREE.TorusGeometry(r * 0.96, Math.max(0.22, pitch * 0.28), 6, 18),  
+        steelMat  
+      );  
+      ring.rotation.x = Math.PI / 2;  
+      ring.position.y = -1.2 - t * (shaftLen / ringCount);  
+      container.add(ring);  
+    }  
+  } else if (op.kind === 'rib-boss') {  
+    const w = Math.max(3, op.widthMm);  
+    const l = Math.max(6, op.lengthMm);  
+    const h = Math.max(3, op.depthMm);  
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(w, h, l), gussetMat);  
+    rib.position.y = h * 0.5;  
+    rib.castShadow = true;  
+    container.add(rib);  
+  } else {  
+    const c = Math.max(2, op.widthMm);  
+    const cone = new THREE.Mesh(  
+      new THREE.CylinderGeometry(c * 0.7, c, 2.5, 24),  
+      rimMat  
+    );  
+    cone.position.y = 1.2;  
+    container.add(cone);  
+  }  
+
+  refs.featureOpsGroup.add(container);  
+}  
+
+steelMat.dispose();  
+darkThreadMat.dispose();  
+pocketMat.dispose();  
+rimMat.dispose();  
+gussetMat.dispose();  
+refs.requestRender();  
+```
+ 
+}, &#91;featureOps, display.sectionEnabled, display.sectionRatio, display.sectionAxis, display.sectionFlipped&#93;);
+ 
+// Trigger camera preset smooth transition (all 7 GrabCAD Standard Views + perspective)
+useEffect(() => {
+const refs = sceneRefs.current;
+if (!refs || display.cameraTrigger === 0) return;
+ 
+const toggleIxMenu = (tab: IxMenuTab) => {
+setViewsMenuOpen(false);
+setHelpPopoverOpen(false);
+setActiveIxMenu((prev) => (prev === tab ? 'none' : tab));
+};
+ 
+const handleIxFileSelected = async (e: React.ChangeEvent) => {
+const file = e.target.files?.&#91;0&#93;;
+e.target.value = '';
+if (!file || !onUploadFile) return;
+setUploadError(null);
+setUploadBusy(true);
+try {
+await onUploadFile(file);
+} catch (err) {
+setUploadError(err instanceof Error ? err.message : 'Falha ao importar arquivo.');
+} finally {
+setUploadBusy(false);
+}
+};
+ 
+const handleApplyMagicPenFeature = (kind: MagicPenOperationKind) => {
+if (!magicPenPick || !onAddFeatureOp) return;
+if (kind === 'slot-cutout') {
+onAddFeatureOp({
+kind,
+label: `Rasgo ${penSlotW}×${penSlotL}mm`,
+targetComponentId: magicPenPick.componentId,
+point: magicPenPick.point,
+normal: magicPenPick.normal,
+widthMm: penSlotW,
+lengthMm: penSlotL,
+diameterMm: penSlotW,
+depthMm: penDepth,
+slotProfile: penSlotProfile,
+});
+setPenMcpFeedback(`Rasgo paramétrico ${penSlotW}×${penSlotL}×${penDepth}mm aplicado!`);
+} else if (kind === 'through-hole') {
+onAddFeatureOp({
+kind,
+label: `Furo Ø${penHoleD}mm`,
+targetComponentId: magicPenPick.componentId,
+point: magicPenPick.point,
+normal: magicPenPick.normal,
+widthMm: penHoleD,
+lengthMm: penHoleD,
+diameterMm: penHoleD,
+depthMm: penDepth,
+});
+setPenMcpFeedback(`Furo Ø${penHoleD}mm (prof. ${penDepth}mm) aplicado!`);
+} else if (kind === 'threaded-bolt') {
+const tDef = ISO\_METRIC\_THREADS&#91;penThreadSpec&#93;;
+onAddFeatureOp({
+kind,
+label: `Parafuso ${tDef.spec}×${tDef.pitchMm} (L=${penDepth}mm)`,
+targetComponentId: magicPenPick.componentId,
+point: magicPenPick.point,
+normal: magicPenPick.normal,
+widthMm: tDef.headDiameterMm,
+lengthMm: tDef.headDiameterMm,
+diameterMm: tDef.nominalDiameterMm,
+depthMm: Math.max(tDef.nominalDiameterMm \* 1.5, penDepth),
+threadSpec: tDef.spec,
+threadPitchMm: tDef.pitchMm,
+headStyle: penHeadStyle,
+});
+setPenMcpFeedback(`Parafuso com rosca ${tDef.spec}×${tDef.pitchMm}mm inserido!`);
+} else if (kind === 'rib-boss') {
+onAddFeatureOp({
+kind,
+label: `Nervura/Ressalto ${penSlotW}×${penSlotL}mm`,
+targetComponentId: magicPenPick.componentId,
+point: magicPenPick.point,
+normal: magicPenPick.normal,
+widthMm: Math.max(4, penSlotW),
+lengthMm: Math.max(8, penSlotL),
+diameterMm: penSlotW,
+depthMm: Math.max(4, penDepth),
+});
+setPenMcpFeedback(`Nervura/Ressalto de reforço aplicado!`);
+} else {
+onAddFeatureOp({
+kind: 'chamfer-fillet',
+label: `Chanfro/Filete ${Math.max(2, Math.round(penSlotW * 0.4))}mm`,
+targetComponentId: magicPenPick.componentId,
+point: magicPenPick.point,
+normal: magicPenPick.normal,
+widthMm: Math.max(2, Math.round(penSlotW \* 0.4)),
+lengthMm: penSlotL,
+diameterMm: penSlotW,
+depthMm: 3,
+});
+setPenMcpFeedback('Chanfro local aplicado!');
+}
+};
+ 
+const handleRunMagicPenMcp = async (e: React.FormEvent) => {
+e.preventDefault();
+if (!magicPenPick || !penMcpPrompt.trim() || !onExecuteMagicPenMcpPrompt || penMcpBusy) return;
+setPenMcpBusy(true);
+=== TIPO DA OPERAÇÃO ===
+timestamp: string;
+}
+ 
+export type MagicPenOperationKind =
+| 'slot-cutout'
+| 'through-hole'
+| 'threaded-bolt'
+| 'rib-boss'
+| 'chamfer-fillet';
+ 
+export type IsoThreadSpec = 'M3' | 'M4' | 'M5' | 'M6' | 'M8' | 'M10' | 'M12';
+ 
+export interface CadFeatureOperation {
+id: string;
+kind: MagicPenOperationKind;
+label: string;
+targetComponentId: string;
+point: &#91;number, number, number&#93;;
+normal: &#91;number, number, number&#93;;
+widthMm: number;
+lengthMm: number;
+diameterMm: number;
+depthMm: number;
+threadSpec?: IsoThreadSpec;
+threadPitchMm?: number;
+headStyle?: 'hex' | 'allen';
+slotProfile?: 'rectangular' | 'oblong';
+materialFinish?: MaterialFinish;
+mcpCommand?: string;
+createdAt: string;
+}
+ 
+export interface ScoobiiiVucCheckItem {
+id: string;
+domain: 'NURBS' | 'BIM' | 'FISICA' | 'NORMA' | 'ROSCA\_ISO';
+title: string;
+formula: string;
+substitutedValues: string;
+resultText: string;
+limitText: string;
+passed: boolean;
+=== VOLUME E FATOR Kt ===
+if (Math.abs(knots&#91;knots.length - 1 - i&#93; - last) > 1e-9) return false;
+}
+return last > first;
+}
+ 
+export function computeFeatureVolumeAndKt(
+featureOps: CadFeatureOperation&#91;&#93;,
+referenceWidthMm: number
+): {
+removedVolumeCm3: number;
+addedVolumeCm3: number;
+combinedKt: number;
+netSectionRatio: number;
+} {
+let removedMm3 = 0;
+let addedMm3 = 0;
+let totalCutWidth = 0;
+let maxKt = 1.0;
+let stiffnessBoost = 1.0;
+ 
+for (const op of featureOps) {
+if (op.kind === 'slot-cutout') {
+const w = Math.max(2, op.widthMm);
+const l = Math.max(4, op.lengthMm);
+const d = Math.max(1, op.depthMm);
+const areaFactor = op.slotProfile === 'oblong' ? Math.PI \* 0.25 \* w \* w + (l - w) \* w : w \* l;
+removedMm3 += Math.max(w \* d, areaFactor \* d);
+totalCutWidth += Math.min(referenceWidthMm \* 0.45, Math.min(w, l));
+// Peterson's stress concentration for slot with corner fillet rho ~ w/4: Kt = 1 + 2\*sqrt(a/rho)
+const a = Math.max(w, l) \* 0.5;
+const rho = Math.max(1.2, w \* 0.32);
+const kt = Math.min(2.85, 1 + 1.15 \* Math.sqrt(a / rho) \* 0.45);
+maxKt = Math.max(maxKt, kt);
+} else if (op.kind === 'through-hole') {
+const r = Math.max(1, op.diameterMm \* 0.5);
+const d = Math.max(1, op.depthMm);
+removedMm3 += Math.PI \* r \* r \* d;
+totalCutWidth += Math.min(referenceWidthMm \* 0.4, op.diameterMm);
+// Kirsch solution for circular hole in finite plate: Kt ~ 2.1..3.0 reduced by plate ratio
+const ratio = Math.min(0.45, op.diameterMm / Math.max(20, referenceWidthMm));
+const kt = Math.min(2.95, 2.05 - 0.65 \* ratio);
+maxKt = Math.max(maxKt, kt);
+} else if (op.kind === 'chamfer-fillet') {
+const c = Math.max(0.5, op.widthMm);
+const l = Math.max(4, op.lengthMm);
+removedMm3 += 0.5 \* c \* c \* l;
+// Local fillet reduces stress concentration slightly
+stiffnessBoost \*= 1.03;
+} else if (op.kind === 'threaded-bolt') {
+const spec = ISO\_METRIC\_THREADS&#91;op.threadSpec ?? 'M6'&#93; ?? ISO\_METRIC\_THREADS.M6;
+const r = spec.nominalDiameterMm \* 0.5;
+const headR = spec.headDiameterMm \* 0.5;
+const shaftVol = Math.PI \* r \* r \* Math.max(4, op.depthMm);
+const headVol = Math.PI \* headR \* headR \* spec.headHeightMm;
+addedMm3 += shaftVol + headVol;
+stiffnessBoost \*= 1.025;
+} else if (op.kind === 'rib-boss') {
+const w = Math.max(2, op.widthMm);
+const l = Math.max(4, op.lengthMm);
+const h = Math.max(2, op.depthMm);
+addedMm3 += w \* l \* h \* 0.72;
+stiffnessBoost \*= 1.08;
+}
+}
+ 
+const netSectionRatio = Math.max(
+0.45,
+1 - Math.min(0.52, totalCutWidth / Math.max(30, referenceWidthMm))
+);
+const combinedKt = Number(Math.max(0.92, maxKt / stiffnessBoost).toFixed(3));
+ 
+return {
+removedVolumeCm3: Number((removedMm3 / 1000).toFixed(3)),
+addedVolumeCm3: Number((addedMm3 / 1000).toFixed(3)),
+combinedKt,
+netSectionRatio: Number(netSectionRatio.toFixed(3)),
+};
+}
+ 
+/\*\*
+ 
+- Computes a deterministic, zero-guesswork SCOOBIII / VUC mathematical proof report
+  if (!Number.isFinite(minCurv)) minCurv = 0;
+  if (!Number.isFinite(minJacobian)) minJacobian = 0;
+
+ 
+// 2. Physical Solid Mechanics &amp; Net Section Equations
+const activeBounds = importedModel ? importedModel.boundingBox : meshData.boundingBox;
+const bboxSize = activeBounds.size;
+const spanRef = importedModel
+? Math.max(bboxSize&#91;0&#93;, bboxSize&#91;1&#93;, bboxSize&#91;2&#93;)
+: Math.max(designParams.spanX, designParams.spanY);
+const effectiveWidthMm = importedModel
+? Math.max(32, Math.min(bboxSize&#91;0&#93;, Math.max(bboxSize&#91;2&#93;, 35)))
+: Math.max(25, Math.min(designParams.spanX, designParams.spanY));
+const thickness = importedModel
+? Math.max(designParams.thicknessMm, Math.min(18, bboxSize&#91;0&#93; \* 0.045))
+: Math.max(0.8, surface.thicknessMm);
+ 
+const featureImpact = computeFeatureVolumeAndKt(featureOps, effectiveWidthMm);
+const grossVolCm3 = importedModel
+? Number(
+Math.max(
+12,
+(bboxSize&#91;0&#93; \* bboxSize&#91;1&#93; \* bboxSize&#91;2&#93; \* 0.00018)
+).toFixed(2)
+)
+: meshData.volumeCm3;
+const netVolCm3 = Number(
+Math.max(
+1,
+grossVolCm3 - featureImpact.removedVolumeCm3 + featureImpact.addedVolumeCm3
+).toFixed(2)
+);
+ 
+const ribInertiaFactor =
+1 +
+(designParams.ribCountU + designParams.ribCountV) \*
+Math.pow(Math.max(4, designParams.ribHeightMm) / 14, 1.35) \*
+0.11;
+const archRatio = Math.abs(designParams.archHeight) / Math.max(40, spanRef);
+const shellActionDivisor = 1 + archRatio \* 2.8;
+ 
+const baseInertiaMm4 = (effectiveWidthMm \* Math.pow(thickness, 3)) / 12;
+const effectiveInertiaMm4 = Number(
+(baseInertiaMm4 \* ribInertiaFactor \* shellActionDivisor \* featureImpact.netSectionRatio).toFixed(
+1
+)
+);
+const sectionModulusMm3 = Number(
+(effectiveInertiaMm4 / Math.max(0.5, thickness \* 0.5)).toFixed(1)
+);
+ 
+const minReqSf = partProfile.safetyCriteria.minSafetyFactor || feaSettings.targetSafetyFactor;
+const maxDeflLimit = partProfile.safetyCriteria.maxDeflectionMm || 4.5;
+const allowableStressMpa = Number((matSpec.yieldStrengthMpa / Math.max(1, minReqSf)).toFixed(2));
+const netMassKg = Number(
+Math.max(
+0.05,
+feaResult.totalMassKg +
+((featureImpact.addedVolumeCm3 - featureImpact.removedVolumeCm3) \* matSpec.densityGcm3) /
+1000
+).toFixed(3)
+);
+ 
+// 3. Deterministic Verification Matrix (Zero Guessing)
+const nurbsPass = clampedKnotsValid &amp;&amp; maxPartitionResidual &lt; 1e-10 &amp;&amp; minJacobian > 0;
+const yieldPass = feaResult.maxStressMpa &lt;= allowableStressMpa;
+const sfPass = feaResult.safetyFactor >= minReqSf;
+=== FEA E OPERAÇÕES ===
+Math.exp(-Math.pow(1 - Math.abs(nx), 2) \* 5) \*
+Math.exp(-Math.pow(1 - Math.abs(nz), 2) \* 5);
+momentFactor = 0.52 + (1 - 0.35 \* r \* r) \* 0.55 + cornerProx \* 1.15;
+} else {
+const distFromRoot = Math.max(0, 1 - (nx + 1) \* 0.5);
+momentFactor = 0.22 + Math.pow(distFromRoot, 1.35) \* 1.65;
+}
+ 
+```
+let loadFactor = 1.0;  
+if (feaSettings.loadPattern === 'center-point') {  
+  loadFactor = 0.45 + 1.35 * Math.exp(-r * r * 3.8);  
+} else if (feaSettings.loadPattern === 'torsion-tip') {  
+  loadFactor = 0.55 + Math.abs(nx * nz) * 1.65 + (Math.abs(params.twistDeg) / 90) * 0.35;  
+} else {  
+  loadFactor = 0.82 + (1 - 0.3 * r) * 0.42;  
+}  
+
+const curvRed = meshData.colors[i * 3] ?? 0.2;  
+let concentrationKt = 1.0 + curvRed * 0.42;  
+
+if (featureOps.length > 0) {  
+  for (const op of featureOps) {  
+    const dx = px - op.point[0];  
+    const dy = py - op.point[1];  
+    const dz = pz - op.point[2];  
+    const dist = Math.hypot(dx, dy, dz);  
+    const charLen = Math.max(op.diameterMm, op.widthMm, op.lengthMm, 8);  
+    const influenceR = Math.max(12, charLen * 1.45);  
+    if (dist < influenceR) {  
+      const proximity = Math.exp(-Math.pow(dist / (influenceR * 0.52), 2));  
+      if (op.kind === 'slot-cutout' || op.kind === 'through-hole') {  
+        concentrationKt += proximity * 0.95;  
+      } else if (op.kind === 'threaded-bolt') {  
+        concentrationKt += proximity * 0.32;  
+      } else if (op.kind === 'rib-boss') {  
+        concentrationKt = Math.max(0.72, concentrationKt - proximity * 0.22);  
+      }  
+    }  
+  }  
+}  
+
+const sigma = Math.max(0.25, baseBendingMpa * momentFactor * loadFactor * concentrationKt);  
+stresses[i] = sigma;  
+sumStress += sigma;  
+
+if (sigma > maxStress) {  
+    maxStress = Math.max(maxStress, targetRib.maxStressMpa);  
+  }  
+}  
+```
+ 
+}
+ 
+const scaleCeiling = Math.max(1, maxStress);
+for (let i = 0; i &lt; vertexCount; i++) {
+const ratio = stresses&#91;i&#93; / scaleCeiling;
+const &#91;r, g, b&#93; = stressRatioToRgb(ratio);
+stressColors&#91;i \* 3&#93; = r;
+stressColors&#91;i \* 3 + 1&#93; = g;
+stressColors&#91;i \* 3 + 2&#93; = b;
+}
+ 
+const eMpa = spec.youngsModulusGpa \* 1000;
+const shellI = (effectiveWidthMm \* Math.pow(thickness, 3)) / 12;
+const featureCutRatio = featureOps.reduce((acc, op) => {
+if (op.kind === 'slot-cutout' || op.kind === 'through-hole') {
+return Math.max(0.55, acc - 0.045);
+}
+if (op.kind === 'rib-boss') {
+return Math.min(1.35, acc + 0.06);
+}
+return acc;
+}, 1.0);
+const effI = shellI \* ribInertiaFactor \* shellActionDivisor \* featureCutRatio;
+const supportCoeff =
+feaSettings.supportMode === 'cantilever-u'
+? 3
+: feaSettings.supportMode === 'four-corner-pins'
+? 24
+: 48;
+const maxDeflectionMm = Number(
+Math.min(
+95,
+(feaSettings.loadNewtons \* Math.pow(spanRef, 3)) /
+(supportCoeff \* eMpa \* Math.max(1, effI))
+).toFixed(3)
+);
+ 
+const shellMassKg = (meshData.volumeCm3 \* spec.densityGcm3) / 1000;
+const ribsMassKg =
+isolationTarget === 'shell'
+? 0
+: meshData.bimElements.reduce((acc, el) => acc + el.massKg, 0);
+const importedMassEstKg = useImportedBox &amp;&amp; importedModel
+? Math.max(
+0.6,
+(importedModel.boundingBox.size&#91;0&#93; \*
+importedModel.boundingBox.size&#91;1&#93; \*
+importedModel.boundingBox.size&#91;2&#93; \*
+=== IMPORTADORES E VOLUME ===
+147:export function parseSTL(buffer: ArrayBuffer, filename: string): ImportedCadModel {
+193:          id: 'COMP-1',
+208:          sourceLayer: 'STL\_MESH',
+221:    layers: &#91;'STL\_MESH'&#93;,
+225:    detectedProfile: resolvePartEngineeringProfile({ filename, layers: &#91;'STL\_MESH'&#93; }),
+278:      id: `COMP-${cIdx + 1}`,
+450:      id: `COMP-${idx + 1}`,
+585:              id: 'COMP-1',
+614:export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 'IFC'): ImportedCadModel {
+768:          id: `COMP-${idx + 1}`,
+819:          id: `COMP-${pIdx + 1}`,
+1257:      id: `COMP-${idx + 1}`,
+1571:      id: `COMP-${components.length + 1}`,
+1797:        id: 'COMP-1',
+1826:      // Offset y cleanly above relief base if relief was already generated as COMP-1
+1849:        id: `COMP-${components.length + 1}`,
+2270:      surfaceAreaCm2: Number((areaMm2 / 100).toFixed(2)),
+2271:      volumeCm3: Number((volMm3 / 1000).toFixed(2)),
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+root@localhost:~/parametrIX#
+ 
+como um agente recebe uma demanda:
+ 
+Como referencia uma suspa completa como referencia ou uma imagem
+ 
+entrega mesas pronta para usinar agente localiza frezadora mais perto do cliente loca tempo de maquina e ifood entrega
+ 
+1 demanda: um par de mesa para canela de 37
+
+Pensou por 26s
+
+Agora temos uma demanda concreta para testar o fluxo do agente:
+
+### Ordem de serviço 001 — Par de mesas para bengalas Ø37 mm
+
+![Wholesale Custom Motorcycle Front Forks Inverted Fork Design | Alibaba.com](https://images.openai.com/static-rsc-4/ORdjStl3r87YKbieIxfTxVU2GyiT8Q1m1wJRexySbIrKeeqBbOvDA6K2XphE2fENV_5wO4wliAAWq6TXvO5G_JNJumoPJQzqtRIGM0SIsfHFe5KTX5LWlgBDLc9o1ja0qVoCq3c-A0wA8H5Blq5_m4quJ5bA3zHHJR6IKoTFeIVoGGSMI6Z63VhXevMRbNvt?purpose=fullsize)
+
+Referência visual: a imagem enviada.
+
+Serve para orientar o desenho: peça usinada, alívios triangulares, nervuras, contornos arredondados e abraçadeiras bipartidas.
+
+![2023 RockShox Boxxer Select C2 200mm For Sale](https://images.openai.com/static-rsc-4/IRJuogkEPWiQCYP3z7-Uwk0RRtb02R3LumE4L2xpsamc71GLu4QX8CxNIxr4CGo-7vNGRvUGqM6x3nS0zILJRev0S5kZCGBDPfVvhdrYtnyuvD1cL2MOPoyr4n7Jv4nnWANbdVSEPjf6cSFAeXypsGZl1jKGU6bwYmEdvr2xf2lx69A7uswOCVbPnWT7_e9V?purpose=fullsize)
+
+Referência geométrica: `RockShox Boxxer Ultimate 27 (1).stp`.
+
+O arquivo foi lido: aproximadamente 24,8 MB, com 18 entidades `MANIFOLD_SOLID_BREP` e unidade declarada em milímetros. Contém componentes identificados como mesa superior, mesa inferior, bengalas e outros elementos do conjunto.
+
+Importante: a montagem Boxxer é uma referência de conjunto e posicionamento. Não vou presumir que seus diâmetros ou cotas sejam os da suspensão de 37 mm. A imagem também não fornece cotas de fabricação.
+
+### Como o agente deve receber e executar a demanda
+
+* Recepção do pedido
+
+    Cliente solicita um par de mesas para bengalas Ø37 mm. Anexa foto, STEP da suspensão e, quando possível, medidas reais.
+
+* Identificação e inspeção CAD
+
+    O agente abre o STEP, identifica os sólidos, separa mesa superior, inferior, bengalas e espiga. Confere unidades, eixos, furos, centros e interferências.
+
+* Seleção de regiões
+
+    A máscara identifica as áreas modificáveis e as áreas protegidas. O cliente seleciona a região com a Magic Pen e confirma cada operação. A IA não escolhe sozinha onde cortar.
+
+* Projeto paramétrico
+
+    Produz as duas mesas separadamente, com furos Ø37 mm, furo da espiga, distância entre eixos, espessuras, abraçadeiras e alívios.
+
+* Validação de engenharia
+
+    Verifica sólidos, cotas, tolerâncias, espessuras mínimas, interferências e consistência geométrica. FEA e resistência precisam de condições de contorno e material reais; estimativas não são certificação.
+
+* Entrega para orçamento
+
+    Gera STEP e STL individuais, desenho técnico PDF/DXF cotado, material e especificação de usinagem. O cliente aprova o orçamento antes da fabricação.
+
+* Fabricação local
+
+    Pesquisa fresadoras próximas ao endereço do cliente, compara capacidade, material, prazo e preço, consulta disponibilidade de máquina e solicita orçamento. Após aprovação, agenda a usinagem e a entrega.
+
+### O que a auditoria do parametrIX revelou
+
+O código atual ainda não executa esse fluxo de ponta a ponta:
+
+* Magic Pen: renderiza operações como geometrias visuais Three.js. Isso não demonstra que o STEP foi efetivamente cortado ou unido por operações B-Rep.
+
+* Volume NURBS: calcula área × espessura como aproximação, inclusive quando não existe camada de espessura.
+
+* BIM: soma volumes de caixas individuais, sem calcular necessariamente a união geométrica entre elas.
+
+* FEA/VUC: aplica fatores estimados às operações; não equivale a uma análise de engenharia validada sobre o sólido usinado.
+
+* Motor CAD: no `package.json` só aparecem Three.js e seus tipos entre as dependências CAD identificadas. Não há evidência de kernel B-Rep real integrado.
+
+Portanto, a primeira entrega do agente deve ser um modelo geométrico real e verificável, não uma representação visual que pareça pronta.
+
+### Dados da primeira ordem
+
+| Parâmetro               | Situação                    |
+| ----------------------- | --------------------------- |
+| Quantidade              | 1 par — superior e inferior |
+| Bengalas                | Ø37 mm                      |
+| Referência estética     | Imagem enviada              |
+| Referência de montagem  | STEP Boxxer                 |
+| Material                | A definir                   |
+| Distância entre centros | Confirmar                   |
+| Furo da espiga          | Confirmar                   |
+| Espessuras e fixações   | A definir após inspeção     |
+
+Uma pergunta para avançar: confirmamos a distância entre centros das bengalas em 130 mm, como medida preliminar já informada anteriormente?
+
+Com essa confirmação, o próximo passo é transformar a ordem 001 em requisitos paramétricos e critérios de aceite para o agente local — sem modificar o STEP original.
+

@@ -166,8 +166,8 @@ export function evaluateStructuralFea(
     const py = meshData.positions[i * 3 + 1];
     const pz = meshData.positions[i * 3 + 2];
 
-    const nx = mHalfX > 0 ? (px - (minX + maxX) * 0.5) / mHalfX : 0;
-    const nz = mHalfZ > 0 ? (pz - (minZ + maxZ) * 0.5) / mHalfZ : 0;
+    const nx = (px - (minX + maxX) * 0.5) / mHalfX;
+    const nz = (pz - (minZ + maxZ) * 0.5) / mHalfZ;
     const r = Math.min(1.42, Math.hypot(nx, nz));
 
     let momentFactor = 1.0;
@@ -331,7 +331,6 @@ export function evaluateStructuralFea(
   let importedMassEstKg = 0;
   if (useImportedBox && importedModel) {
     const computeMeshVolCm3 = (pos: Float32Array): number => {
-      if (pos.length < 9) return 0;
       const ox = pos[0], oy = pos[1], oz = pos[2];
       let signedMm3 = 0;
       for (let t = 0; t + 8 < pos.length; t += 9) {

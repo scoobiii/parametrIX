@@ -220,7 +220,7 @@ export async function convertImageToCadModel(params: {
     `Especificações:\n- ${(blueprint.specifications || []).join('\n- ')}`,
     `Certificações aplicáveis:\n- ${(blueprint.certifications || []).join('\n- ')}`,
     `Critério FEA: Carga recomendada ${blueprint.recommendedLoadN} N · SF mínimo ${blueprint.minSafetyFactor} · Flecha máx ${blueprint.maxDeflectionMm} mm`,
-    `Sub-componentes 3D (${model.components?.length ?? 0}): ${(model.components || []).map((c) => `${c.name} [${c.family} / ${c.inferredMaterial}]`).join('; ')}`,
+    `Sub-componentes 3D (${model.components!.length}): ${model.components!.map((c) => `${c.name} [${c.family} / ${c.inferredMaterial}]`).join('; ')}`,
   ].join('\n');
 
   return { model, ragTextSummary };

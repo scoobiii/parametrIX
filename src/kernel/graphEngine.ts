@@ -244,7 +244,7 @@ export function evaluateGraphPipeline(
   for (const w of wires) {
     if (nodeMap.has(w.fromNodeId) && nodeMap.has(w.toNodeId)) {
       adj.get(w.fromNodeId)!.push(w);
-      inDegree.set(w.toNodeId, (inDegree.get(w.toNodeId) ?? 0) + 1);
+      inDegree.set(w.toNodeId, inDegree.get(w.toNodeId)! + 1);
     }
   }
 
@@ -257,8 +257,8 @@ export function evaluateGraphPipeline(
   while (queue.length > 0) {
     const id = queue.shift()!;
     order.push(id);
-    for (const w of adj.get(id) ?? []) {
-      const nextDeg = (inDegree.get(w.toNodeId) ?? 1) - 1;
+    for (const w of adj.get(id)!) {
+      const nextDeg = inDegree.get(w.toNodeId)! - 1;
       inDegree.set(w.toNodeId, nextDeg);
       if (nextDeg === 0) queue.push(w.toNodeId);
     }

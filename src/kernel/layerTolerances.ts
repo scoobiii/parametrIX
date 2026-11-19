@@ -67,7 +67,11 @@ export function inferDefaultLayerSpecs(params: {
       linearToleranceMm: chosenPreset.linearMm,
       profileToleranceMm: chosenPreset.profileMm,
       flatnessMm: chosenPreset.flatnessMm,
-      criticalGdtSymbol: isCriticalBoreOrShaft ? 'position' : preset === chosenPreset ? 'profile' : 'flatness',
+      criticalGdtSymbol: isCriticalBoreOrShaft
+        ? 'position'
+        : /flat|plan|placa|base|plate|face|slab/i.test(layerName)
+          ? 'flatness'
+          : 'profile',
       enabled: true,
     };
   });
