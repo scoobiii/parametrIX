@@ -1,34 +1,48 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Activity,
   Award,
   Box,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Eye,
   EyeOff,
   Focus,
+  Layers,
   RotateCcw,
+  Ruler,
+  ShieldAlert,
   ShieldCheck,
+  Sigma,
   Sparkles,
+  Trash2,
+  Wand2,
 } from 'lucide-react';
 import { SEGMENT_CATALOG } from '../kernel/componentClassifier';
+import { ISO_2768_CLASS_DEFAULTS } from '../kernel/layerTolerances';
 import type { OptimizationObjective } from '../kernel/structuralFea';
 import type {
   ApplicationSegment,
   BimElement,
   CadComponentPart,
+  CadFeatureOperation,
   ControlPoint4D,
+  CurvatureOptimizationReport,
   FeaComparisonReport,
   FeaLoadPattern,
   FeaResult,
   FeaSettings,
   FeaSupportMode,
+  LayerToleranceClass,
+  LayerToleranceComplianceReport,
+  LayerToleranceSpec,
   MaterialFinish,
   NurbsSurfaceData,
   ParametricDesignParams,
   PartEngineeringProfile,
   PresetId,
+  ScoobiiiVucProofReport,
   ViewportDisplayState,
 } from '../types/cad';
 
@@ -58,6 +72,16 @@ interface ParametricSidebarProps {
   feaComparison: FeaComparisonReport | null;
   onToggleHeatmap: () => void;
   onOptimizeGeometry: (objective: OptimizationObjective) => void;
+  featureOps: CadFeatureOperation[];
+  onRemoveFeatureOp: (id: string) => void;
+  scoobiiiProof: ScoobiiiVucProofReport;
+  onOpenScoobiiiModal: () => void;
+  curvatureOptReport: CurvatureOptimizationReport;
+  onApplyCurvatureOptimization: () => void;
+  layerToleranceSpecs: LayerToleranceSpec[];
+  onUpdateLayerTolerance: (layerName: string, patch: Partial<LayerToleranceSpec>) => void;
+  layerComplianceReport: LayerToleranceComplianceReport;
+  onRefineNurbsForTolerances: () => void;
 }
 
 const PRESET_OPTIONS: { id: PresetId; label: string; subtitle: string }[] = [
@@ -103,14 +127,26 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
   feaComparison,
   onToggleHeatmap,
   onOptimizeGeometry,
+  featureOps,
+  onRemoveFeatureOp,
+  scoobiiiProof,
+  onOpenScoobiiiModal,
+  curvatureOptReport,
+  onApplyCurvatureOptimization,
+  layerToleranceSpecs,
+  onUpdateLayerTolerance,
+  layerComplianceReport,
+  onRefineNurbsForTolerances,
 }) => {
+  const [expandedLayerName, setExpandedLayerName] = useState<string | null>(null);
+
   if (collapsed) {
     return (
       <div className="h-full border-r border-white/10 bg-[#111620] flex flex-col items-center py-3 px-1.5 shrink-0">
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="Expandir Inspetor CAD, Componentes & FEA"
+          title="Expandir Inspetor IX, Componentes & FEA"
           className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
         >
           <ChevronRight className="w-4 h-4" />
@@ -143,20 +179,26 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
   };
 
   return (
-    <aside className="fixed md:static inset-y-12 left-0 z-30 w-[310px] sm:w-[328px] h-[calc(100%-3rem)] md:h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden shadow-2xl md:shadow-none">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-        <h2 className="font-display text-sm font-semibold text-slate-100">
-          Inspetor GrabCAD, Contexto & FEA
-        </h2>
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          title="Recolher Painel"
-          className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-      </div>
+    <>
+      <div
+        onClick={onToggleCollapse}
+        aria-hidden="true"
+        className="fixed inset-0 top-12 z-20 bg-black/60 md:hidden"
+      />
+      <aside className="fixed md:static inset-y-12 left-0 z-30 w-[86vw] max-w-[330px] md:w-[328px] h-[calc(100%-3rem)] md:h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden shadow-2xl md:shadow-none">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+          <h2 className="font-display text-sm font-semibold text-slate-100">
+            Inspetor IX, Contexto & FEA
+          </h2>
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            title="Recolher Painel"
+            className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+        </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
         {/* Part Engineering Identity & Certification Context */}
@@ -242,7 +284,7 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
           </button>
         </section>
 
-        {/* GrabCAD Assembly Tree, Explode, Rotate, Object Mask & Per-Component Materials */}
+        {/* IX Assembly Tree, Explode, Rotate, Object Mask & Per-Component Materials */}
         <section className="space-y-3 pt-2 border-t border-white/8">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
@@ -269,7 +311,7 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
           </div>
 
           <SliderRow
-            label="Vista Explodida (GrabCAD)"
+            label="Vista Explodida"
             value={Math.round(display.explodeFactor * 100)}
             min={0}
             max={100}
@@ -607,6 +649,310 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
           )}
         </section>
 
+        {/* SCOOBIII / VUC Mathematical Proof & Magic Pen Operations */}
+        <section className="space-y-2.5 pt-3 border-t border-white/8">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
+              <Sigma className="w-3.5 h-3.5 text-sky-400" />
+              Prova SCOOBIII / VUC & Features
+            </span>
+            <span
+              className={`px-1.5 py-0.5 text-[10px] font-mono-tabular rounded border ${
+                scoobiiiProof.allPassed
+                  ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300'
+                  : 'border-amber-400/40 bg-amber-500/15 text-amber-300'
+              }`}
+            >
+              {scoobiiiProof.allPassed ? 'APROVADO' : 'AJUSTAR'}
+            </span>
+          </div>
+
+          <div className="p-2.5 bg-[#0c1017] border border-white/10 rounded-lg space-y-2 text-[11px]">
+            <div className="flex items-center justify-between text-[10px] text-slate-400">
+              <span>Certificado:</span>
+              <span className="font-mono-tabular text-sky-300">
+                {scoobiiiProof.certificateId}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-400">
+              <span>Partição Cox-de Boor / Jₘᵢₙ:</span>
+              <span className="font-mono-tabular text-emerald-300">
+                {scoobiiiProof.nurbsProof.maxPartitionUnityResidual} ·{' '}
+                {scoobiiiProof.nurbsProof.minJacobian}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenScoobiiiModal}
+              className="w-full py-1.5 text-[11px] font-medium bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded-md cursor-pointer"
+            >
+              Abrir Certificado SCOOBIII / VUC
+            </button>
+          </div>
+
+          {featureOps.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1 text-[10px] font-medium text-amber-300">
+                <Wand2 className="w-3 h-3" />
+                Operações Caneta Mágica ({featureOps.length})
+              </div>
+              <div className="max-h-36 overflow-y-auto space-y-1 pr-0.5">
+                {featureOps.map((op) => (
+                  <div
+                    key={op.id}
+                    className="flex items-center justify-between gap-2 px-2 py-1.5 bg-[#0c1017] border border-white/8 rounded-md text-[10px]"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-slate-200 font-medium truncate">{op.label}</div>
+                      <div className="text-slate-500 font-mono-tabular">
+                        {op.targetComponentId} · {op.widthMm}×{op.lengthMm}×{op.depthMm}mm
+                        {op.threadSpec ? ` · ${op.threadSpec}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveFeatureOp(op.id)}
+                      title="Remover operação paramétrica"
+                      className="p-1 text-slate-400 hover:text-rose-400 shrink-0 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* NURBS Curvature Analysis & Automatic Weight Optimization */}
+        <section className="space-y-2.5 pt-3 border-t border-white/8">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              Curvatura NURBS & Otimização Peso
+            </span>
+            <span className="text-[10px] font-mono-tabular text-emerald-300">
+              -{curvatureOptReport.weightReductionPct}% massa
+            </span>
+          </div>
+
+          <div className="p-2.5 bg-[#0c1017] border border-emerald-500/25 rounded-lg space-y-2 text-[11px]">
+            <div className="grid grid-cols-2 gap-1.5 font-mono-tabular text-[10px]">
+              <div>
+                <div className="text-slate-500">Gaussiana |K̄|</div>
+                <div className="text-slate-200">{curvatureOptReport.meanGaussianK} mm⁻²</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Média |H̄| · Willmore</div>
+                <div className="text-slate-200">
+                  {curvatureOptReport.meanAbsH} · {curvatureOptReport.willmoreEnergy}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">Peso Antes → Depois</div>
+                <div className="text-emerald-300 font-semibold">
+                  {curvatureOptReport.weightBeforeKg} → {curvatureOptReport.weightAfterKg} kg
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">Segurança SF</div>
+                <div className="text-sky-300 font-semibold">
+                  {curvatureOptReport.safetyFactorBefore} → {curvatureOptReport.safetyFactorAfter}×
+                </div>
+              </div>
+            </div>
+
+            <div className="text-[10px] text-slate-400 leading-snug">
+              {curvatureOptReport.engineeringRationale}
+            </div>
+
+            <button
+              type="button"
+              onClick={onApplyCurvatureOptimization}
+              disabled={hasImportedModel}
+              className="w-full py-1.5 text-[11px] font-semibold bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-45 rounded-md cursor-pointer"
+            >
+              {hasImportedModel
+                ? 'Otimização NURBS (Disponível em Peça Paramétrica)'
+                : `Aplicar Otimização de Peso (-${curvatureOptReport.weightReductionPct}%)`}
+            </button>
+          </div>
+        </section>
+
+        {/* Per-Layer GD&T Geometric Tolerances & Technical Norm Compliance */}
+        <section className="space-y-2.5 pt-3 border-t border-white/8">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
+              <Layers className="w-3.5 h-3.5 text-amber-400" />
+              Tolerâncias GD&T por Layer ({layerComplianceReport.passCount}/
+              {layerComplianceReport.totalLayers})
+            </span>
+            <span
+              className={`inline-flex items-center gap-1 text-[10px] font-mono-tabular font-semibold ${
+                layerComplianceReport.overallStatus === 'conforme'
+                  ? 'text-emerald-400'
+                  : layerComplianceReport.overallStatus === 'atencao'
+                    ? 'text-amber-300'
+                    : 'text-rose-400'
+              }`}
+            >
+              {layerComplianceReport.overallStatus === 'conforme' ? (
+                <CheckCircle2 className="w-3 h-3" />
+              ) : (
+                <ShieldAlert className="w-3 h-3" />
+              )}
+              {layerComplianceReport.overallStatus.toUpperCase()}
+            </span>
+          </div>
+
+          <div className="text-[10px] text-slate-400">
+            Norma ativa:{' '}
+            <span className="text-slate-200">
+              {layerComplianceReport.activeStandards[0] ?? 'ISO 2768'}
+            </span>{' '}
+            · Discretização NURBS ({surface.uDivisions}×{surface.vDivisions})
+          </div>
+
+          <div className="max-h-56 overflow-y-auto space-y-1.5 pr-0.5">
+            {layerToleranceSpecs.map((spec) => {
+              const check = layerComplianceReport.results.find(
+                (r) => r.layerName === spec.layerName
+              );
+              const isOpen = expandedLayerName === spec.layerName;
+              const badgeStyle =
+                check?.status === 'conforme'
+                  ? 'text-emerald-300 border-emerald-500/35 bg-emerald-500/10'
+                  : check?.status === 'atencao'
+                    ? 'text-amber-300 border-amber-500/35 bg-amber-500/10'
+                    : 'text-rose-300 border-rose-500/35 bg-rose-500/10';
+
+              return (
+                <div
+                  key={spec.layerName}
+                  className="p-2 bg-[#0c1017] border border-white/10 rounded-lg space-y-1.5 text-[10px]"
+                >
+                  <div className="flex items-center justify-between gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedLayerName(isOpen ? null : spec.layerName)
+                      }
+                      className="flex items-center gap-1.5 min-w-0 text-left cursor-pointer"
+                    >
+                      <Ruler className="w-3 h-3 text-amber-300 shrink-0" />
+                      <span className="font-medium text-slate-100 truncate">
+                        {spec.layerName}
+                      </span>
+                    </button>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <select
+                        aria-label={`Classe ISO 2768 da camada ${spec.layerName}`}
+                        value={spec.toleranceClass}
+                        onChange={(e) => {
+                          const cls = e.target.value as LayerToleranceClass;
+                          if (cls === 'custom') {
+                            onUpdateLayerTolerance(spec.layerName, { toleranceClass: 'custom' });
+                          } else {
+                            const def = ISO_2768_CLASS_DEFAULTS[cls];
+                            onUpdateLayerTolerance(spec.layerName, {
+                              toleranceClass: cls,
+                              linearToleranceMm: def.linearMm,
+                              profileToleranceMm: def.profileMm,
+                              flatnessMm: def.flatnessMm,
+                            });
+                          }
+                        }}
+                        className="px-1.5 py-0.5 text-[10px] bg-[#111620] border border-white/15 rounded text-slate-200"
+                      >
+                        <option value="f">f (±0.05)</option>
+                        <option value="m">m (±0.15)</option>
+                        <option value="c">c (±0.40)</option>
+                        <option value="v">v (±1.00)</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                      {check && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded border font-mono-tabular ${badgeStyle}`}
+                        >
+                          {check.totalGeometricDeviationMm.toFixed(3)}mm
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {check && (
+                    <div className="text-[10px] text-slate-400 leading-snug">
+                      Erro NURBS {check.nurbsChordalErrorMm.toFixed(3)} + FEA{' '}
+                      {check.feaElasticDeflectionMm.toFixed(3)} ≤{' '}
+                      <span className="text-slate-200 font-mono-tabular">
+                        {spec.profileToleranceMm.toFixed(2)} mm
+                      </span>{' '}
+                      ({check.utilizationPct}%)
+                    </div>
+                  )}
+
+                  {isOpen && (
+                    <div className="pt-1.5 border-t border-white/8 grid grid-cols-2 gap-1.5">
+                      <label className="text-[10px] text-slate-400">
+                        Perfil Máx (mm)
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          max="5"
+                          value={spec.profileToleranceMm}
+                          onChange={(e) =>
+                            onUpdateLayerTolerance(spec.layerName, {
+                              toleranceClass: 'custom',
+                              profileToleranceMm: Math.max(
+                                0.01,
+                                parseFloat(e.target.value) || 0.05
+                              ),
+                            })
+                          }
+                          className="mt-0.5 w-full px-1.5 py-1 bg-[#111620] border border-white/15 rounded text-slate-100 font-mono-tabular"
+                        />
+                      </label>
+                      <label className="text-[10px] text-slate-400">
+                        Linear ± (mm)
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          max="5"
+                          value={spec.linearToleranceMm}
+                          onChange={(e) =>
+                            onUpdateLayerTolerance(spec.layerName, {
+                              toleranceClass: 'custom',
+                              linearToleranceMm: Math.max(
+                                0.01,
+                                parseFloat(e.target.value) || 0.05
+                              ),
+                            })
+                          }
+                          className="mt-0.5 w-full px-1.5 py-1 bg-[#111620] border border-white/15 rounded text-slate-100 font-mono-tabular"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {layerComplianceReport.overallStatus !== 'conforme' && (
+            <button
+              type="button"
+              onClick={onRefineNurbsForTolerances}
+              className="w-full py-1.5 text-[11px] font-semibold bg-amber-500/20 border border-amber-400/50 text-amber-200 hover:bg-amber-500/30 rounded-md cursor-pointer"
+            >
+              Refinar Malha NURBS ({layerComplianceReport.suggestedMinDivisions}×
+              {layerComplianceReport.suggestedMinDivisions}) p/ Norma
+            </button>
+          )}
+        </section>
+
         {/* Parametric NURBS Presets & Sliders */}
         {!hasImportedModel && (
           <section className="space-y-3 pt-3 border-t border-white/8">
@@ -781,6 +1127,7 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
         )}
       </div>
     </aside>
+    </>
   );
 };
 

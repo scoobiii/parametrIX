@@ -1,9 +1,9 @@
 import {
   parse3DM,
   parseDXF,
-  parseIPT,
+  parseIPTAsync,
   parseOBJ,
-  parseSTEPorIFC,
+  parseSTEPAsync,
   parseSTL,
   parseSVGToCad,
 } from './cadFormats';
@@ -41,10 +41,10 @@ export async function parseUploadedCadOrImageFile(file: File): Promise<ImportedC
     return parse3DM(await file.arrayBuffer(), file.name);
   }
   if (ext === 'step' || ext === 'stp' || ext === 'ifc') {
-    return parseSTEPorIFC(await file.text(), file.name, ext === 'ifc' ? 'IFC' : 'STEP');
+    return parseSTEPAsync(await file.arrayBuffer(), file.name, ext === 'ifc' ? 'IFC' : 'STEP');
   }
   if (ext === 'ipt') {
-    return parseIPT(await file.arrayBuffer(), file.name);
+    return parseIPTAsync(await file.arrayBuffer(), file.name);
   }
   if (ext === 'svg') {
     return parseSVGToCad(await file.text(), file.name);
@@ -79,30 +79,35 @@ export interface FullWorkspacePreset {
   initialFeatures?: CadFeatureOperation[];
 }
 
-const ROCKSHOX_SAMPLE_STEP = [
-  'ISO-10303-21;',
-  'HEADER;',
-  "FILE_DESCRIPTION(('RockShox BoXXer Ultimate 27.5 DH Dual Crown Fork'),'2;1');",
-  "FILE_NAME('RockShox_BoXXer_DH.stp','2026-11-18',('Engenharia DH'),('RockShox / SRAM LLC'),'Parametrix','','');",
-  'ENDSEC;',
-  'DATA;',
-  "#10=PRODUCT('BOXXER-275','RockShox BoXXer Ultimate Dual Crown','',(#1));",
-  "#20=PRODUCT_DEFINITION_SHAPE('Stanchion_Tube_Left','',#10);",
-  "#21=PRODUCT_DEFINITION_SHAPE('Stanchion_Tube_Right','',#10);",
-  "#22=PRODUCT_DEFINITION_SHAPE('Lower_Cast_Arch','',#10);",
-  "#23=PRODUCT_DEFINITION_SHAPE('Upper_Crown_Forged','',#10);",
-  "#24=PRODUCT_DEFINITION_SHAPE('Lower_Crown_CNC','',#10);",
-  "#25=PRODUCT_DEFINITION_SHAPE('Maxle_Axle_20x110','',#10);",
-  "#30=CARTESIAN_POINT('P1',(-62.0,-32.0,4.0));",
-  "#31=CARTESIAN_POINT('P2',(62.0,-32.0,4.0));",
-  "#32=CARTESIAN_POINT('P3',(62.0,32.0,4.0));",
-  "#33=CARTESIAN_POINT('P4',(-62.0,32.0,4.0));",
-  "#34=CARTESIAN_POINT('P5',(-62.0,-32.0,220.0));",
-  "#35=CARTESIAN_POINT('P6',(62.0,-32.0,220.0));",
-  "#36=CARTESIAN_POINT('P7',(62.0,32.0,220.0));",
-  "#37=CARTESIAN_POINT('P8',(-62.0,32.0,220.0));",
-  'ENDSEC;',
-  'END-ISO-10303-21;',
+const ROCKSHOX_FORK_ASSEMBLY_OBJ = [
+  'o Canela_Esquerda_Lower_Leg_L',
+  'v -68 0 -18', 'v -38 0 -18', 'v -38 0 18', 'v -68 0 18',
+  'v -68 125 -18', 'v -38 125 -18', 'v -38 125 18', 'v -68 125 18',
+  'f 1 2 3 4', 'f 5 8 7 6', 'f 1 5 6 2', 'f 2 6 7 3', 'f 3 7 8 4', 'f 4 8 5 1',
+  'o Canela_Direita_Lower_Leg_R',
+  'v 38 0 -18', 'v 68 0 -18', 'v 68 0 18', 'v 38 0 18',
+  'v 38 125 -18', 'v 68 125 -18', 'v 68 125 18', 'v 38 125 18',
+  'f 9 10 11 12', 'f 13 16 15 14', 'f 9 13 14 10', 'f 10 14 15 11', 'f 11 15 16 12', 'f 12 16 13 9',
+  'o Coroa_Inferior_CNC',
+  'v -72 126 -24', 'v 72 126 -24', 'v 72 126 16', 'v -72 126 16',
+  'v -72 142 -24', 'v 72 142 -24', 'v 72 142 16', 'v -72 142 16',
+  'f 17 18 19 20', 'f 21 24 23 22', 'f 17 21 22 18', 'f 18 22 23 19', 'f 19 23 24 20', 'f 20 24 21 17',
+  'o Bengala_Superior_L',
+  'v -64 115 -14', 'v -42 115 -14', 'v -42 115 14', 'v -64 115 14',
+  'v -64 235 -14', 'v -42 235 -14', 'v -42 235 14', 'v -64 235 14',
+  'f 25 26 27 28', 'f 29 32 31 30', 'f 25 29 30 26', 'f 26 30 31 27', 'f 27 31 32 28', 'f 28 32 29 25',
+  'o Bengala_Superior_R',
+  'v 42 115 -14', 'v 64 115 -14', 'v 64 115 14', 'v 42 115 14',
+  'v 42 235 -14', 'v 64 235 -14', 'v 64 235 14', 'v 42 235 14',
+  'f 33 34 35 36', 'f 37 40 39 38', 'f 33 37 38 34', 'f 34 38 39 35', 'f 35 39 40 36', 'f 36 40 37 33',
+  'o Coroa_Superior_Forged',
+  'v -72 214 -24', 'v 72 214 -24', 'v 72 214 16', 'v -72 214 16',
+  'v -72 228 -24', 'v 72 228 -24', 'v 72 228 16', 'v -72 228 16',
+  'f 41 42 43 44', 'f 45 48 47 46', 'f 41 45 46 42', 'f 42 46 47 43', 'f 43 47 48 44', 'f 44 48 45 41',
+  'o Eixo_Passante_Maxle_20x110',
+  'v -74 8 -8', 'v 74 8 -8', 'v 74 8 8', 'v -74 8 8',
+  'v -74 22 -8', 'v 74 22 -8', 'v 74 22 8', 'v -74 22 8',
+  'f 49 50 51 52', 'f 53 56 55 54', 'f 49 53 54 50', 'f 50 54 55 51', 'f 51 55 56 52', 'f 52 56 53 49',
 ].join('\n');
 
 const FLANGE_CNC_DXF = [
@@ -119,7 +124,7 @@ const FLANGE_CNC_DXF = [
 export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
   {
     id: 'preset-dh-fork',
-    title: 'Garfo Downhill Dupla Coroa (STEP)',
+    title: 'Garfo Downhill Dupla Coroa (Conjunto 3D)',
     badge: 'ISO 4210 · Ciclismo',
     subtitle: 'Preenche conjunto multi-peça, Object Mask, FEA 5400 N, parafusos M6 e CAM 5-eixos.',
     segment: 'ciclismo-mobilidade',
@@ -159,7 +164,7 @@ export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
     materialFinish: 'aluminum',
     displayMode: 'component-pbr',
     buildImportedModel: () =>
-      parseSTEPorIFC(ROCKSHOX_SAMPLE_STEP, 'RockShox_BoXXer_DH.stp', 'STEP'),
+      parseOBJ(ROCKSHOX_FORK_ASSEMBLY_OBJ, 'RockShox_BoXXer_DH.obj'),
     initialFeatures: [
       {
         id: 'feat-init-m6',

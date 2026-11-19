@@ -28,6 +28,7 @@ import {
   base64ToArrayBuffer,
   retrieveTopRagChunks,
   tryBuildCadAndRagDoc,
+  tryBuildCadAndRagDocAsync,
 } from '../kernel/ragEngine';
 import type {
   AgentChatMessage,
@@ -164,11 +165,15 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
       }
 
       const isBinary =
-        lower.endsWith('.stl') || lower.endsWith('.3dm') || lower.endsWith('.ipt');
+        lower.endsWith('.stl') ||
+        lower.endsWith('.3dm') ||
+        lower.endsWith('.ipt') ||
+        lower.endsWith('.step') ||
+        lower.endsWith('.stp');
       const buffer = isBinary ? await file.arrayBuffer() : undefined;
       const extractedText = isBinary ? undefined : await file.text();
 
-      const { ragDoc, importedCad } = tryBuildCadAndRagDoc({
+      const { ragDoc, importedCad } = await tryBuildCadAndRagDocAsync({
         title: file.name,
         kind: 'upload',
         mimeType: file.type || 'application/octet-stream',
@@ -230,7 +235,7 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
         extractedText = converted.ragTextSummary;
       }
 
-      const { ragDoc, importedCad } = tryBuildCadAndRagDoc({
+      const { ragDoc, importedCad } = await tryBuildCadAndRagDocAsync({
         title: sourceTitle,
         kind: data.isGoogleDrive ? 'gdrive' : 'url',
         originUrl: String(data.originUrl || target),

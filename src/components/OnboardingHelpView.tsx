@@ -6,8 +6,10 @@ import {
   Cpu,
   Download,
   FileText,
+  FileUp,
   FolderOpen,
   Layers,
+  Loader2,
   LogIn,
   LogOut,
   Pause,
@@ -15,6 +17,8 @@ import {
   Puzzle,
   Save,
   ShieldCheck,
+  Sigma,
+  Sparkles,
   Square,
   Terminal,
   Trash2,
@@ -25,10 +29,16 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { triggerBlobDownload } from '../kernel/cadFormats';
 import { buildLocalIcsCalendarBlob } from '../kernel/mcpServer';
+import {
+  ACCEPTED_CAD_EXTENSIONS,
+  type FullWorkspacePreset,
+  WORKSPACE_PROJECT_PRESETS,
+} from '../kernel/workspacePresets';
 import type { SavedCadProject } from '../services/userWorkspaceStore';
 import type {
   EvaluatedMesh,
   NurbsSurfaceData,
+  ScoobiiiVucProofReport,
   SessionDeliverable,
   WorkspaceTab,
 } from '../types/cad';
@@ -46,6 +56,9 @@ interface OnboardingHelpViewProps {
   onSaveCloudProject: (projectName: string) => Promise<void>;
   onLoadCloudProject: (project: SavedCadProject) => void;
   onDeleteCloudProject: (projectId: string) => Promise<void>;
+  onUploadFile: (file: File) => Promise<void>;
+  onApplyPreset: (preset: FullWorkspacePreset, openEditor?: boolean) => void;
+  scoobiiiProof: ScoobiiiVucProofReport;
 }
 
 interface VoiceGuideTopic {
@@ -98,6 +111,20 @@ const VOICE_GUIDE_TOPICS: VoiceGuideTopic[] = [
     script:
       'Módulo 6: Automação Grasshopper, SDK de Plugins e Fabricação Digital CAM. Conecte nós paramétricos no grafo visual para deformar superfícies NURBS em tempo real, escreva modificadores JavaScript em Plugins SDK e configure fresa, avanço e pós-processamento para CNC 3 ou 5 eixos, usinagem manual ou robô KUKA de 6 eixos, exportando em 3DM, STL, DXF, NC ou SRC.',
   },
+  {
+    id: 'magic_pen_menu',
+    title: '07. Caneta Mágica, Rasgo Paramétrico & Parafuso ISO',
+    targetTab: 'viewport',
+    script:
+      'Módulo 7: Caneta Mágica na Barra IX. Ative a Caneta Mágica no Editor 3D IX e clique ou arraste sobre qualquer região da peça ou imagem convertida para abrir o menu suspenso translúcido. Nele você aplica recortes e rasgos paramétricos, furos passantes, parafusos métricos ISO M3 a M12 com rosca helicoidal real, nervuras estruturais, troca de material ou digita um comando direto para execução via agente MCP.',
+  },
+  {
+    id: 'scoobiii_vuc',
+    title: '08. SCOOBIII / VUC — Prova Matemática Determinística',
+    targetTab: 'viewport',
+    script:
+      'Módulo 8: Motor SCOOBIII VUC sem chute. Cada cálculo de superfície e resistência estrutural gera uma certificação matemática explícita com partição da unidade Cox-de Boor, determinante Jacobiano, curvatura Gaussiana, tensão de Von Mises, fator de concentração geométrica Kt de furos e rasgos, passo de rosca ISO e verificação contra a norma selecionada, exportável em Markdown e JSON.',
+  },
 ];
 
 function formatDuration(totalSeconds: number): string {
@@ -120,10 +147,16 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
   onSaveCloudProject,
   onLoadCloudProject,
   onDeleteCloudProject,
+  onUploadFile,
+  onApplyPreset,
+  scoobiiiProof,
 }) => {
   const { user, authReady, authBusy, authError, signInWithGoogle, logout, clearAuthError } =
     useAuth();
   const [projectNameInput, setProjectNameInput] = useState(surface.name);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Voice synthesis guidance state
   const speechSupported =
@@ -240,50 +273,139 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
   const activeVoiceTopic = VOICE_GUIDE_TOPICS.find((t) => t.id === speakingTopicId) ?? null;
 
   return (
-    <div className="w-full h-full overflow-y-auto bg-[#0b0e14] text-slate-100">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-10 space-y-10">
+    <div className="w-full h-full overflow-y-auto overflow-x-hidden bg-[#0b0e14] text-slate-100">
+      <div className="max-w-5xl mx-auto px-3.5 sm:px-6 py-5 sm:py-10 space-y-7 sm:space-y-10">
         {/* Hero Header */}
-        <section className="space-y-4 pb-8 border-b border-white/10">
-          <p className="text-xs font-medium text-sky-400">
+        <section className="space-y-4 pb-6 sm:pb-8 border-b border-white/10">
+          <p className="text-xs font-medium text-sky-400 leading-snug">
             Guia de Início, Ajuda por Voz & Documentação · Engenheiros, Devs e Agentes
           </p>
           <h1
-            className="font-display text-2xl sm:text-4xl font-bold tracking-tight text-slate-100 max-w-3xl"
+            className="font-display text-2xl sm:text-4xl font-bold tracking-tight text-slate-100 max-w-3xl leading-[1.15]"
             style={{ textWrap: 'balance' }}
           >
-            Ambiente Paramétrico NURBS, GrabCAD 3D, FEA & MCP por Segmento
+            Ambiente Paramétrico NURBS, Editor 3D IX, FEA & MCP por Segmento
           </h1>
           <p className="text-sm sm:text-base text-slate-400 max-w-2xl leading-relaxed">
-            Receba arquivos CAD (STEP, STL, OBJ, DXF, 3DM, IFC), visualize com explosão, rotação e
-            Object Mask por família, calcule resistência estrutural Antes vs Depois segundo normas de
-            certificação e acione explicações guiadas por voz para cada recurso.
+            Suba arquivos CAD (.STP/.STEP via OpenCASCADE, .IPT, .STL, .OBJ, .DXF, .3DM, .IFC, .SVG) ou
+            imagens (.PNG, .JPG, .WEBP), edite com a Caneta Mágica, valide tolerâncias GD&T, pegada
+            de carbono e certifique tudo com a prova matemática SCOOBIII/VUC.
           </p>
 
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => onNavigate('viewport')}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2.5 pt-2">
+            <div className="grid grid-cols-2 gap-2.5 sm:flex sm:gap-2.5">
+              <button
+                type="button"
+                onClick={() => onNavigate('viewport')}
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Editor 3D IX
+                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+              </button>
+              <button
+                type="button"
+                disabled={uploadBusy}
+                onClick={() => fileInputRef.current?.click()}
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {uploadBusy ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                ) : (
+                  <FileUp className="w-3.5 h-3.5 shrink-0" />
+                )}
+                <span>{uploadBusy ? 'Importando...' : 'Subir Arquivo'}</span>
+              </button>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPTED_CAD_EXTENSIONS}
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (!file) return;
+                setUploadError(null);
+                setUploadBusy(true);
+                try {
+                  await onUploadFile(file);
+                } catch (err) {
+                  setUploadError(
+                    err instanceof Error ? err.message : 'Falha ao processar o arquivo.'
+                  );
+                } finally {
+                  setUploadBusy(false);
+                }
+              }}
+            />
+            <div className="grid grid-cols-2 gap-2.5 sm:flex sm:gap-2.5">
+              <button
+                type="button"
+                onClick={() => onNavigate('mcp')}
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 rounded-lg hover:border-sky-400/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Terminal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                Agente MCP
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('sustainability')}
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 rounded-lg hover:border-emerald-400/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Sigma className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                CO₂ & VUC ({scoobiiiProof.allPassed ? 'OK' : 'VER'})
+              </button>
+            </div>
+            <a
+              href="/gitpage/"
+              target="_blank"
+              rel="noreferrer"
+              className="min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-[#0e131c] border border-white/10 text-sky-300 hover:border-sky-400/50 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
-              Abrir Editor 3D GrabCAD
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('mcp')}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 rounded-lg hover:border-sky-400/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Terminal className="w-3.5 h-3.5 text-amber-400" />
-              Agente RAG + MCP
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('files')}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 rounded-lg hover:border-sky-400/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
-              Importar Arquivo CAD
-            </button>
+              GitPage Dinâmica
+              <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+            </a>
+          </div>
+
+          {uploadError && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/35 rounded-lg text-xs text-rose-300">
+              {uploadError}
+            </div>
+          )}
+        </section>
+
+        {/* Quick Full-Workspace Preset Auto-Fill Section */}
+        <section className="p-4 sm:p-6 bg-[#111620] border border-emerald-500/25 rounded-xl space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-sm sm:text-base font-semibold text-slate-100 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
+                Projetos Completos em 1 Clique
+              </h2>
+              <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                Preenche automaticamente parâmetros NURBS, segmento, normas, critérios FEA, ferramentas CAM e abre o Editor 3D IX.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {WORKSPACE_PROJECT_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => onApplyPreset(preset, true)}
+                className="min-h-[44px] text-left p-4 bg-[#0c1017] border border-white/10 hover:border-emerald-400/60 rounded-xl space-y-2 transition-colors cursor-pointer group"
+              >
+                <div className="flex items-center justify-between gap-2 text-[11px] font-mono-tabular text-sky-300">
+                  <span>{preset.badge}</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-emerald-400 transition-colors shrink-0" />
+                </div>
+                <div className="font-display text-xs font-semibold text-slate-100">
+                  {preset.title}
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">{preset.subtitle}</p>
+              </button>
+            ))}
           </div>
         </section>
 
@@ -624,7 +746,7 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
             <p className="text-xs text-slate-400 leading-relaxed">
               Conecte agentes de IA com <strong className="text-slate-200">RAG (Upload, URL e Google Drive)</strong> e{' '}
               <strong className="text-slate-200">Model Context Protocol (MCP)</strong> por segmento,
-              com explosão GrabCAD, Object Mask, cálculo FEA e mapa de calor Antes vs Depois.
+              com explosão IX, Object Mask, Caneta Mágica, cálculo FEA e mapa de calor Antes vs Depois.
             </p>
             <div className="pt-2 flex flex-wrap gap-2">
               <button
@@ -653,8 +775,8 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <HelpTile
               icon={<Layers className="w-4 h-4 text-sky-400" />}
-              title="01. Modelagem 3D"
-              desc="GrabCAD Explodir/Rotacionar, Máscara de Objetos, PBR por componente e FEA."
+              title="01. Modelagem 3D IX"
+              desc="Explodir/Rotacionar, Caneta Mágica, Máscara de Objetos, PBR por componente, Tolerâncias GD&T e FEA."
               onClick={() => onNavigate('viewport')}
             />
             <HelpTile

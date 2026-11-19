@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI, Type, type Content, type FunctionDeclaration } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { parseIptWithOle2, parseStepWithOcct } from './serverCadParser';
 
 const PORT = 3000;
 const MAX_FETCH_BYTES = 12 * 1024 * 1024;
@@ -440,7 +441,39 @@ function getGeminiClient(): GoogleGenAI {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '25mb' }));
+  app.use(express.json({ limit: '50mb' }));
+
+  app.post('/api/cad/parse-step', async (req, res) => {
+    try {
+      const filename = typeof req.body?.filename === 'string' ? req.body.filename : 'modelo.stp';
+      const base64Data = typeof req.body?.base64Data === 'string' ? req.body.base64Data : '';
+      if (!base64Data) {
+        return res.status(400).json({ error: 'Conteúdo base64 do arquivo STEP ausente.' });
+      }
+      const buffer = Buffer.from(base64Data, 'base64');
+      const result = await parseStepWithOcct(buffer, filename);
+      return res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(422).json({ error: msg });
+    }
+  });
+
+  app.post('/api/cad/parse-ipt', async (req, res) => {
+    try {
+      const filename = typeof req.body?.filename === 'string' ? req.body.filename : 'peca.ipt';
+      const base64Data = typeof req.body?.base64Data === 'string' ? req.body.base64Data : '';
+      if (!base64Data) {
+        return res.status(400).json({ error: 'Conteúdo base64 do arquivo IPT ausente.' });
+      }
+      const buffer = Buffer.from(base64Data, 'base64');
+      const result = await parseIptWithOle2(buffer, filename);
+      return res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(422).json({ error: msg });
+    }
+  });
 
   app.post('/api/ingest-source', async (req, res) => {
     try {
@@ -838,6 +871,12 @@ ${ragBlock}`;
       return res.status(friendly.status).json({ error: friendly.message });
     }
   });
+
+  const docsDir = path.resolve(process.cwd(), 'docs');
+  if (fs.existsSync(docsDir)) {
+    app.use('/gitpage', express.static(docsDir));
+    app.use('/docs', express.static(docsDir));
+  }
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

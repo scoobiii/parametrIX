@@ -1846,7 +1846,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const iso = display.isolationTarget || 'all';
     const isShellIsolatedOut = iso !== 'all' && iso !== 'shell';
 
-    // Clipping plane update (supports GrabCAD X / Y / Z orientation + Flip + visual green-framed plane)
+    // Clipping plane update (supports IX X / Y / Z orientation + Flip + visual green-framed plane)
     if (display.sectionEnabled) {
       const b = hasImported && importedModel ? importedModel.boundingBox : meshData.boundingBox;
       const axisIdx = display.sectionAxis === 'x' ? 0 : display.sectionAxis === 'z' ? 2 : 1;
@@ -2483,7 +2483,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     refs.requestRender();
   }, [featureOps, display.sectionEnabled, display.sectionRatio, display.sectionAxis, display.sectionFlipped]);
 
-  // Trigger camera preset smooth transition (all 7 GrabCAD Standard Views + perspective)
+  // Trigger camera preset smooth transition (all 7 IX Standard Views + perspective)
   useEffect(() => {
     const refs = sceneRefs.current;
     if (!refs || display.cameraTrigger === 0) return;
@@ -2525,7 +2525,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     sceneRefs.current?.requestRender();
   }, [simPlaying, simProgress]);
 
-  // GrabCAD D-Pad Camera Orbit & Zoom Helpers
+  // IX D-Pad Camera Orbit & Zoom Helpers
   const nudgeOrbit = (deltaTheta: number, deltaPhi: number) => {
     const refs = sceneRefs.current;
     if (!refs) return;
@@ -2776,8 +2776,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       {/* Menu IX Top Viewer Bar */}
       {!compact && (
         <div className="absolute top-0 left-0 right-0 z-20 flex flex-col items-center pointer-events-none">
-          <div className="w-full h-11 bg-[#161b24]/95 border-b border-white/10 flex items-center justify-between sm:justify-center gap-0.5 sm:gap-1.5 px-2 overflow-x-auto pointer-events-auto shadow-md">
-            <span className="font-display text-xs font-extrabold tracking-widest text-rose-400 px-2 py-0.5 rounded bg-rose-500/12 border border-rose-500/30 shrink-0 mr-1">
+          <div className="w-full h-12 sm:h-11 bg-[#161b24]/95 border-b border-white/10 flex items-center justify-between sm:justify-center gap-1 sm:gap-1.5 px-2 overflow-x-auto pointer-events-auto shadow-md">
+            <span className="font-display text-xs font-extrabold tracking-widest text-rose-400 px-2 py-0.5 rounded bg-rose-500/12 border border-rose-500/30 shrink-0 mr-0.5">
               IX
             </span>
 
@@ -2787,12 +2787,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 disabled={uploadBusy}
                 title="Subir Arquivo CAD (.STP, .IPT, .SVG, .STL, .DXF, .OBJ) ou Imagem (.PNG, .JPG, .WEBP)"
                 onClick={() => uploadInputRef.current?.click()}
-                className="h-8 px-2.5 sm:px-3 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 transition-colors shrink-0 cursor-pointer disabled:opacity-60"
+                className="h-9 sm:h-8 px-2.5 sm:px-3 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 transition-colors shrink-0 cursor-pointer disabled:opacity-60"
               >
                 {uploadBusy ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Loader2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 animate-spin" />
                 ) : (
-                  <FileUp className="w-3.5 h-3.5" />
+                  <FileUp className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                 )}
                 <span className="hidden sm:inline">{uploadBusy ? 'Importando...' : 'Subir Arquivo'}</span>
               </button>
@@ -2917,7 +2917,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
           {/* IX Popover 1: Models Tree Browser */}
           {activeIxMenu === 'models' && (
-            <div className="mt-2 ml-3 self-start sm:self-center sm:ml-0 w-[calc(100%-104px)] sm:w-80 max-h-[60vh] overflow-y-auto bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 pointer-events-auto">
+            <div className="mt-2 ml-2 self-start sm:self-center sm:ml-0 w-[min(320px,calc(100vw-96px))] sm:w-80 max-h-[58vh] overflow-y-auto bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 pointer-events-auto">
               <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10">
                 <div className="flex items-center gap-2">
                   <button
@@ -3045,7 +3045,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
           {/* IX Popover 2: Section Plane Orientations (X | Y | Z + Flip + Slider) */}
           {activeIxMenu === 'section' && (
-            <div className="mt-2 w-72 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2.5 pointer-events-auto">
+            <div className="mt-2 ml-2 self-start sm:self-center sm:ml-0 w-[min(288px,calc(100vw-96px))] sm:w-72 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2.5 pointer-events-auto">
               <div className="flex items-center justify-between">
                 <span className="font-medium text-slate-200">Orientação do plano de corte</span>
                 <button
@@ -3141,7 +3141,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
           {/* IX Popover 3: Explode Slider */}
           {activeIxMenu === 'explode' && (
-            <div className="mt-2 w-72 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl px-3.5 py-2.5 text-xs text-slate-200 pointer-events-auto">
+            <div className="mt-2 ml-2 self-start sm:self-center sm:ml-0 w-[min(288px,calc(100vw-96px))] sm:w-72 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl px-3.5 py-2.5 text-xs text-slate-200 pointer-events-auto">
               <div className="flex items-center gap-2.5">
                 <button
                   type="button"
@@ -3188,7 +3188,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
           {/* IX Popover 4: Measure Tools (6-grid + Clear + Unit Selector) */}
           {activeIxMenu === 'measure' && (
-            <div className="mt-2 w-[calc(100%-104px)] sm:w-80 max-h-[68vh] overflow-y-auto bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2.5 pointer-events-auto">
+            <div className="mt-2 ml-2 self-start sm:self-center sm:ml-0 w-[min(320px,calc(100vw-96px))] sm:w-80 max-h-[60vh] overflow-y-auto bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2.5 pointer-events-auto">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-slate-100">Ferramenta de Medição 3D</span>
                 <button
@@ -3288,9 +3288,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         </div>
       )}
 
-      {/* Right-Side GrabCAD Red D-Pad + Zoom + VIEWS Menu */}
+      {/* Right-Side IX Red D-Pad + Zoom + VIEWS Menu */}
       {!compact && (
-        <div className="absolute top-14 right-3 z-20 flex flex-col items-end gap-2">
+        <div className="absolute top-14 right-2 sm:right-3 z-20 flex flex-col items-end gap-2">
           <div className="bg-red-600 rounded-xl p-1.5 shadow-xl border border-red-400/40 flex flex-col items-center gap-1">
             <div className="grid grid-cols-3 gap-0.5">
               <div />
@@ -3410,7 +3410,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
       {/* Bottom-Right IX Quick Help (?) FAB */}
       {!compact && (
-        <div className="absolute bottom-14 sm:bottom-4 right-3 z-20 flex flex-col items-end gap-2">
+        <div className="absolute bottom-3 sm:bottom-4 right-2.5 sm:right-3 z-20 flex flex-col items-end gap-2">
           {helpPopoverOpen && (
             <div className="w-64 bg-[#1a1f29]/95 border border-white/15 rounded-xl shadow-2xl p-3 text-xs text-slate-200 space-y-2">
               <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
@@ -3459,12 +3459,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         </div>
       )}
 
-      {/* Top-Left Part Identity, Spec Readout & Selected Component Bar (safely below GrabCAD top strip) */}
+      {/* Top-Left Part Identity, Spec Readout & Selected Component Bar (safely below IX top strip) */}
       <div
-        className={`absolute left-3 z-10 flex flex-col gap-1.5 ${
+        className={`absolute left-2 sm:left-3 z-10 flex flex-col gap-1.5 ${
           compact
             ? 'top-3 max-w-[calc(100%-24px)]'
-            : 'top-14 max-w-[calc(100%-108px)] sm:max-w-[460px]'
+            : 'top-14 max-w-[calc(100%-92px)] sm:max-w-[460px]'
         }`}
       >
         <div className="pointer-events-none text-xs font-medium text-slate-200 bg-[#0e131c]/95 border border-white/10 rounded-lg px-3 py-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -3694,7 +3694,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
       {/* Collapsible Engineering Shaders, Materials & Gizmo Dock */}
       {!compact && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center max-w-[calc(100vw-110px)] sm:max-w-[90vw]">
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center max-w-[calc(100vw-116px)] sm:max-w-[90vw]">
           <button
             type="button"
             onClick={() => setDockCollapsed((v) => !v)}

@@ -3,6 +3,7 @@ export type WorkspaceTab =
   | 'viewport'
   | 'grasshopper'
   | 'cam'
+  | 'sustainability'
   | 'mcp'
   | 'plugins'
   | 'files';
@@ -536,4 +537,108 @@ export interface ScoobiiiVucProofReport {
   allPassed: boolean;
   verdict: string;
 }
+
+export type LayerToleranceClass = 'f' | 'm' | 'c' | 'v' | 'custom';
+
+export interface LayerToleranceSpec {
+  layerName: string;
+  toleranceClass: LayerToleranceClass;
+  linearToleranceMm: number;
+  profileToleranceMm: number;
+  flatnessMm: number;
+  criticalGdtSymbol: 'profile' | 'flatness' | 'position' | 'perpendicularity';
+  enabled: boolean;
+}
+
+export interface LayerToleranceCheckResult {
+  layerName: string;
+  toleranceClass: LayerToleranceClass;
+  spec: LayerToleranceSpec;
+  nurbsChordalErrorMm: number;
+  feaElasticDeflectionMm: number;
+  totalGeometricDeviationMm: number;
+  utilizationPct: number;
+  status: 'conforme' | 'atencao' | 'nao-conforme';
+  normReference: string;
+  recommendation: string;
+}
+
+export interface LayerToleranceComplianceReport {
+  segmentLabel: string;
+  activeStandards: string[];
+  evaluatedAt: string;
+  overallStatus: 'conforme' | 'atencao' | 'nao-conforme';
+  passCount: number;
+  totalLayers: number;
+  suggestedMinDivisions: number;
+  results: LayerToleranceCheckResult[];
+}
+
+export interface CurvatureAnalysisZone {
+  uNorm: number;
+  vNorm: number;
+  gaussianK: number;
+  meanH: number;
+  maxPrincipalKappa: number;
+  membraneStiffnessGain: number;
+}
+
+export interface CurvatureOptimizationReport {
+  meanGaussianK: number;
+  maxGaussianK: number;
+  meanAbsH: number;
+  willmoreEnergy: number;
+  doubleCurvatureCoveragePct: number;
+  recommendedThicknessMm: number;
+  recommendedRibCountU: number;
+  recommendedRibCountV: number;
+  recommendedRibHeightMm: number;
+  recommendedArchHeightMm: number;
+  weightBeforeKg: number;
+  weightAfterKg: number;
+  weightReductionPct: number;
+  safetyFactorBefore: number;
+  safetyFactorAfter: number;
+  deflectionBeforeMm: number;
+  deflectionAfterMm: number;
+  integrityPreserved: boolean;
+  suggestedParams: ParametricDesignParams;
+  engineeringRationale: string;
+}
+
+export interface MachineCarbonBenchmark {
+  machineType: MachineType;
+  label: string;
+  energyKwh: number;
+  energyCo2Kg: number;
+  cycleMinutes: number;
+  efficiencyScore: number;
+}
+
+export interface CarbonFootprintReport {
+  materialName: string;
+  densityGcm3: number;
+  embodiedFactorKgCo2PerKg: number;
+  recyclingCreditKgCo2PerKg: number;
+  partNetVolumeCm3: number;
+  partNetMassKg: number;
+  billetRawVolumeCm3: number;
+  billetRawMassKg: number;
+  wasteVolumeCm3: number;
+  wasteMassKg: number;
+  buyToFlyRatio: number;
+  machiningWasteRatePct: number;
+  materialEmbodiedCo2Kg: number;
+  wasteNetCo2Kg: number;
+  energyKwh: number;
+  spindlePowerKw: number;
+  robotOrAxisEfficiencyPct: number;
+  gridEmissionFactorKgPerKwh: number;
+  energyCo2Kg: number;
+  totalCo2Kg: number;
+  ecoGrade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'E';
+  machineBenchmarks: MachineCarbonBenchmark[];
+  optimizationTips: string[];
+}
+
 

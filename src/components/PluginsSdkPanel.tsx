@@ -23,6 +23,7 @@ export const PluginsSdkPanel: React.FC<PluginsSdkPanelProps> = ({
   const [selectedId, setSelectedId] = useState<string>(plugins[0]?.id ?? '');
   const [draftName, setDraftName] = useState('');
   const [showNewForm, setShowNewForm] = useState(false);
+  const [mobilePane, setMobilePane] = useState<'list' | 'editor'>('list');
 
   const selected = plugins.find((p) => p.id === selectedId) ?? plugins[0] ?? null;
   const activeLog = selected
@@ -90,9 +91,39 @@ return { summary: 'Modulação cosseno aplicada' };`,
   };
 
   return (
-    <div className="w-full h-full flex bg-[#0b0e14] overflow-hidden">
+    <div className="w-full h-full flex flex-col md:flex-row bg-[#0b0e14] overflow-hidden">
+      {/* Mobile Pane Toggle */}
+      <div className="md:hidden grid grid-cols-2 gap-1 p-1.5 bg-[#0f141d] border-b border-white/10 shrink-0">
+        <button
+          type="button"
+          onClick={() => setMobilePane('list')}
+          className={`min-h-[40px] text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+            mobilePane === 'list'
+              ? 'bg-sky-500 text-slate-950 font-semibold'
+              : 'text-slate-300 bg-[#141a24]'
+          }`}
+        >
+          Plugins ({plugins.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobilePane('editor')}
+          className={`min-h-[40px] text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+            mobilePane === 'editor'
+              ? 'bg-sky-500 text-slate-950 font-semibold'
+              : 'text-slate-300 bg-[#141a24]'
+          }`}
+        >
+          Editor SDK
+        </button>
+      </div>
+
       {/* Left: Plugin Registry */}
-      <div className="w-[360px] h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0">
+      <div
+        className={`${
+          mobilePane === 'list' ? 'flex' : 'hidden md:flex'
+        } w-full md:w-[330px] lg:w-[360px] flex-1 md:flex-none md:h-full border-r border-white/10 bg-[#111620] flex-col shrink-0 min-h-0`}
+      >
         <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Puzzle className="w-4 h-4 text-sky-400" />
@@ -163,7 +194,10 @@ return { summary: 'Modulação cosseno aplicada' };`,
             return (
               <div
                 key={plugin.id}
-                onClick={() => setSelectedId(plugin.id)}
+                onClick={() => {
+                  setSelectedId(plugin.id);
+                  setMobilePane('editor');
+                }}
                 className={`p-3 rounded-xl border transition-colors cursor-pointer ${
                   isSel
                     ? 'border-sky-400/70 bg-sky-500/10'
@@ -213,10 +247,14 @@ return { summary: 'Modulação cosseno aplicada' };`,
       </div>
 
       {/* Right: Live Plugin SDK Editor */}
-      <div className="flex-1 h-full flex flex-col overflow-hidden bg-[#0b0e14]">
+      <div
+        className={`${
+          mobilePane === 'editor' ? 'flex' : 'hidden md:flex'
+        } flex-1 min-h-0 h-full flex-col overflow-hidden bg-[#0b0e14]`}
+      >
         {selected ? (
           <>
-            <div className="px-6 py-3.5 border-b border-white/10 bg-[#111620] flex flex-wrap items-center justify-between gap-3">
+            <div className="px-4 sm:px-6 py-3.5 border-b border-white/10 bg-[#111620] flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <Code2 className="w-4 h-4 text-amber-400" />
                 <div>

@@ -8,8 +8,9 @@ import {
   exportOpenNurbs3DM,
   parse3DM,
   parseDXF,
-  parseIPT,
+  parseIPTAsync,
   parseOBJ,
+  parseSTEPAsync,
   parseSTEPorIFC,
   parseSTL,
   parseSVGToCad,
@@ -80,13 +81,15 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
         onSetImportedModel(model);
         setStatusMsg(model.notes);
       } else if (ext === 'step' || ext === 'stp' || ext === 'ifc') {
-        const text = await file.text();
-        const model = parseSTEPorIFC(text, file.name, ext === 'ifc' ? 'IFC' : 'STEP');
+        setStatusMsg('Tesselando geometria B-Rep via OpenCASCADE...');
+        const buf = await file.arrayBuffer();
+        const model = await parseSTEPAsync(buf, file.name, ext === 'ifc' ? 'IFC' : 'STEP');
         onSetImportedModel(model);
         setStatusMsg(model.notes);
       } else if (ext === 'ipt') {
+        setStatusMsg('Decodificando streams OLE2 / ACIS do Inventor (.IPT)...');
         const buf = await file.arrayBuffer();
-        const model = parseIPT(buf, file.name);
+        const model = await parseIPTAsync(buf, file.name);
         onSetImportedModel(model);
         setStatusMsg(model.notes);
       } else if (ext === 'svg') {

@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LogIn, LogOut, Save, ShieldCheck, X } from 'lucide-react';
+import {
+  Box,
+  Cpu,
+  ExternalLink,
+  FolderOpen,
+  Home,
+  Leaf,
+  LogIn,
+  LogOut,
+  MoreHorizontal,
+  Network,
+  Puzzle,
+  Save,
+  ShieldCheck,
+  Sigma,
+  Terminal,
+  X,
+} from 'lucide-react';
 import { CadFilesPanel } from './components/CadFilesPanel';
 import { CamRoboticsPanel } from './components/CamRoboticsPanel';
 import { GrasshopperCanvas } from './components/GrasshopperCanvas';
@@ -7,6 +24,8 @@ import { McpToolsPanel } from './components/McpToolsPanel';
 import { OnboardingHelpView } from './components/OnboardingHelpView';
 import { ParametricSidebar } from './components/ParametricSidebar';
 import { PluginsSdkPanel } from './components/PluginsSdkPanel';
+import { ScoobiiiVucModal } from './components/ScoobiiiVucModal';
+import { SustainabilityDashboard } from './components/SustainabilityDashboard';
 import { Viewport3D } from './components/Viewport3D';
 import { useAuth } from './contexts/AuthContext';
 import {
@@ -22,7 +41,12 @@ import {
   buildParametricComponentParts,
   resolvePartEngineeringProfile,
 } from './kernel/componentClassifier';
+import { analyzeCurvatureAndOptimizeWeight } from './kernel/curvatureOptimizer';
 import { GRAPH_TEMPLATES, evaluateGraphPipeline } from './kernel/graphEngine';
+import {
+  evaluateLayerToleranceCompliance,
+  inferDefaultLayerSpecs,
+} from './kernel/layerTolerances';
 import {
   MCP_TOOLS_CATALOG,
   type McpRuntimeContext,
@@ -30,12 +54,17 @@ import {
 } from './kernel/mcpServer';
 import { buildNurbsSurfaceFromParams, tessellateNurbsSurface } from './kernel/nurbs';
 import { DEFAULT_PLUGINS, applyActivePlugins } from './kernel/plugins';
+import { computeScoobiiiVucProof } from './kernel/scoobiiiVuc';
 import {
   type OptimizationObjective,
   buildFeaComparisonReport,
   evaluateStructuralFea,
   synthesizeOptimizedParams,
 } from './kernel/structuralFea';
+import {
+  type FullWorkspacePreset,
+  parseUploadedCadOrImageFile,
+} from './kernel/workspacePresets';
 import {
   type SavedCadProject,
   deleteUserCadProject,
@@ -48,6 +77,7 @@ import type {
   AgentChatMessage,
   ApplicationSegment,
   CadComponentPart,
+  CadFeatureOperation,
   CadPlugin,
   CamSettings,
   ControlPoint4D,
@@ -57,6 +87,10 @@ import type {
   GraphNode,
   GraphWire,
   ImportedCadModel,
+  IsoThreadSpec,
+  LayerToleranceSpec,
+  MachineType,
+  MaterialFinish,
   ParametricDesignParams,
   PartEngineeringProfile,
   RagSourceDocument,
@@ -69,10 +103,14 @@ export default function App() {
   const { user, authReady, authBusy, signInWithGoogle, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('onboarding');
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.innerWidth < 768
+    () => typeof window !== 'undefined' && window.innerWidth < 1024
   );
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [scoobiiiModalOpen, setScoobiiiModalOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [mobileCamPane, setMobileCamPane] = useState<'viewport' | 'panel'>('viewport');
+  const [mobileGraphMode, setMobileGraphMode] = useState<'split' | 'graph' | 'viewport'>('split');
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const [deliverables, setDeliverables] = useState<SessionDeliverable[]>([]);
   const [savedProjects, setSavedProjects] = useState<SavedCadProject[]>([]);
@@ -140,12 +178,16 @@ export default function App() {
   } | null>(null);
   const [feaComparison, setFeaComparison] = useState<FeaComparisonReport | null>(null);
 
-  // RAG + Agent MCP state
+  // RAG + Agent MCP + Magic Pen & Per-Layer GD&T state
   const [ragDocs, setRagDocs] = useState<RagSourceDocument[]>([]);
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [exportIsolatedOnly, setExportIsolatedOnly] = useState(true);
+  const [featureOps, setFeatureOps] = useState<CadFeatureOperation[]>([]);
+  const [layerToleranceOverrides, setLayerToleranceOverrides] = useState<
+    Record<string, LayerToleranceSpec>
+  >({});
 
-  // 3D GrabCAD Viewport Display state
+  // 3D IX Viewport Display state
   const [display, setDisplay] = useState<ViewportDisplayState>({
     mode: 'component-pbr',
     materialFinish: 'aluminum',
@@ -262,7 +304,7 @@ export default function App() {
     [surface, meshData, effectiveCamSettings]
   );
 
-  // 6. Evaluate Structural FEA with Certification Thresholds
+  // 6. Evaluate Structural FEA with Certification Thresholds & Magic Pen Features
   const feaResult = useMemo(
     () =>
       evaluateStructuralFea(
@@ -273,7 +315,8 @@ export default function App() {
         feaSettings,
         display.isolationTarget,
         partProfile,
-        importedModel
+        importedModel,
+        featureOps
       ),
     [
       surface,
@@ -284,16 +327,98 @@ export default function App() {
       display.isolationTarget,
       partProfile,
       importedModel,
+      featureOps,
     ]
   );
 
-  // Unified handler whenever any CAD file is loaded (via RAG Upload/URL/GDrive OR Files Tab)
-  // Automatically opens GrabCAD 3D Viewer & Editor, frames the geometry, and sets context!
+  // 7. NURBS Curvature Analysis & Automatic Weight Optimization Report
+  const curvatureOptReport = useMemo(
+    () =>
+      analyzeCurvatureAndOptimizeWeight({
+        surface,
+        meshData,
+        designParams: effectiveDesignParams,
+        materialFinish: display.materialFinish,
+        feaSettings,
+        feaResult,
+        partProfile,
+        isolationTarget: display.isolationTarget,
+        importedModel,
+        featureOps,
+      }),
+    [
+      surface,
+      meshData,
+      effectiveDesignParams,
+      display.materialFinish,
+      feaSettings,
+      feaResult,
+      partProfile,
+      display.isolationTarget,
+      importedModel,
+      featureOps,
+    ]
+  );
+
+  // 8. Per-Layer GD&T Tolerances & NURBS Norm Compliance
+  const layerToleranceSpecs = useMemo(
+    () =>
+      inferDefaultLayerSpecs({
+        importedModel,
+        components,
+        partProfile,
+        existingSpecs: layerToleranceOverrides,
+      }),
+    [importedModel, components, partProfile, layerToleranceOverrides]
+  );
+
+  const layerComplianceReport = useMemo(
+    () =>
+      evaluateLayerToleranceCompliance({
+        surface,
+        specs: layerToleranceSpecs,
+        feaResult,
+        partProfile,
+      }),
+    [surface, layerToleranceSpecs, feaResult, partProfile]
+  );
+
+  // 9. Deterministic SCOOBIII / VUC Mathematical Proof
+  const scoobiiiProof = useMemo(
+    () =>
+      computeScoobiiiVucProof({
+        surface,
+        meshData,
+        designParams: effectiveDesignParams,
+        materialFinish: display.materialFinish,
+        feaSettings,
+        feaResult,
+        partProfile,
+        featureOps,
+        importedModel,
+      }),
+    [
+      surface,
+      meshData,
+      effectiveDesignParams,
+      display.materialFinish,
+      feaSettings,
+      feaResult,
+      partProfile,
+      featureOps,
+      importedModel,
+    ]
+  );
+
+  // Unified handler whenever any CAD file is loaded (via IX Menu, Onboarding, RAG, or Files Tab)
+  // Automatically opens the 3D Viewer & Editor, frames the geometry, and sets context!
   const handleLoadImportedModel = (model: ImportedCadModel | null) => {
     setImportedModel(model);
     setPartProfileOverride({});
     setFeaBaseline(null);
     setFeaComparison(null);
+    setFeatureOps([]);
+    setLayerToleranceOverrides({});
 
     if (model) {
       const detected = model.detectedProfile;
@@ -331,6 +456,147 @@ export default function App() {
         fitViewTrigger: d.fitViewTrigger + 1,
       }));
     }
+  };
+
+  const handleUnifiedFileUpload = async (file: File) => {
+    const model = await parseUploadedCadOrImageFile(file);
+    handleLoadImportedModel(model);
+    recordDeliverable({
+      filename: file.name,
+      kind: 'REPORT',
+      summary: `Importado (${model.format}) · ${model.triangleCount.toLocaleString('pt-BR')} triângulos · ${model.components?.length ?? 1} peças`,
+    });
+  };
+
+  const handleApplyFullPreset = (preset: FullWorkspacePreset, openEditor = true) => {
+    setDesignParams({ ...preset.designParams });
+    setActiveSegment(preset.segment);
+    setPartProfileOverride(preset.partProfileOverride ?? {});
+    setFeaSettings({ ...preset.feaSettings });
+    setCamSettings({ ...preset.camSettings });
+    setFeaBaseline(null);
+    setFeaComparison(null);
+    setLayerToleranceOverrides({});
+
+    const tpl = GRAPH_TEMPLATES.find((t) => t.id === preset.graphTemplateId);
+    if (tpl) {
+      setGraphNodes(tpl.nodes.map((n) => ({ ...n, params: { ...n.params } })));
+      setGraphWires(tpl.wires.map((w) => ({ ...w })));
+    }
+
+    const model = preset.buildImportedModel ? preset.buildImportedModel() : null;
+    setImportedModel(model);
+    setFeatureOps(preset.initialFeatures ? [...preset.initialFeatures] : []);
+    setDisplay((d) => ({
+      ...d,
+      mode: preset.displayMode,
+      materialFinish: preset.materialFinish,
+      showImportedOverlay: Boolean(model),
+      isolationTarget: 'all',
+      selectedComponentId: null,
+      hiddenComponentIds: [],
+      componentMaterials: {},
+      componentRotations: {},
+      assemblyRotationDeg: [0, 0, 0],
+      explodeFactor: 0,
+      perComponentPbr: true,
+      fitViewTrigger: d.fitViewTrigger + 1,
+    }));
+
+    if (openEditor) {
+      setActiveTab('viewport');
+    }
+  };
+
+  const handleAddFeatureOp = (
+    op: Omit<CadFeatureOperation, 'id' | 'createdAt'>
+  ): CadFeatureOperation => {
+    const created: CadFeatureOperation = {
+      ...op,
+      id: `feat-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      createdAt: new Date().toLocaleTimeString('pt-BR'),
+    };
+    setFeatureOps((prev) => [created, ...prev]);
+    return created;
+  };
+
+  const handleRemoveFeatureOp = (id: string) => {
+    setFeatureOps((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleApplyCurvatureOptimization = () => {
+    const beforeFea = feaResult;
+    const beforeParams = effectiveDesignParams;
+    const nextParams = curvatureOptReport.suggestedParams;
+
+    const afterSurface = buildNurbsSurfaceFromParams(nextParams);
+    const afterMesh = tessellateNurbsSurface(
+      afterSurface,
+      nextParams.ribCountU,
+      nextParams.ribCountV,
+      nextParams.ribHeightMm
+    );
+    const afterFea = evaluateStructuralFea(
+      afterSurface,
+      afterMesh,
+      nextParams,
+      display.materialFinish,
+      feaSettings,
+      display.isolationTarget,
+      partProfile,
+      importedModel,
+      featureOps
+    );
+
+    const report = buildFeaComparisonReport(
+      beforeFea,
+      afterFea,
+      beforeParams,
+      nextParams,
+      curvatureOptReport.engineeringRationale,
+      partProfile
+    );
+    setFeaBaseline({ fea: beforeFea, params: beforeParams });
+    setFeaComparison(report);
+    setDesignParams(nextParams);
+    recordDeliverable({
+      filename: `${afterSurface.id}_otimizacao_curvatura.md`,
+      kind: 'REPORT',
+      summary: `Curvatura NURBS: massa -${curvatureOptReport.weightReductionPct}% (${beforeFea.totalMassKg}→${afterFea.totalMassKg} kg · SF ${afterFea.safetyFactor}×)`,
+    });
+  };
+
+  const handleUpdateLayerTolerance = (
+    layerName: string,
+    patch: Partial<LayerToleranceSpec>
+  ) => {
+    const current =
+      layerToleranceSpecs.find((s) => s.layerName === layerName) ?? {
+        layerName,
+        toleranceClass: 'm' as const,
+        linearToleranceMm: 0.15,
+        profileToleranceMm: 0.25,
+        flatnessMm: 0.15,
+        criticalGdtSymbol: 'profile' as const,
+        enabled: true,
+      };
+    setLayerToleranceOverrides((prev) => ({
+      ...prev,
+      [layerName]: { ...current, ...patch, layerName },
+    }));
+  };
+
+  const handleRefineNurbsForTolerances = () => {
+    const targetDiv = Math.max(
+      designParams.uDivisions,
+      designParams.vDivisions,
+      layerComplianceReport.suggestedMinDivisions
+    );
+    setDesignParams((prev) => ({
+      ...prev,
+      uDivisions: targetDiv,
+      vDivisions: targetDiv,
+    }));
   };
 
   const handleSetSegment = (seg: ApplicationSegment) => {
@@ -490,7 +756,8 @@ export default function App() {
       nextFeaSettings,
       display.isolationTarget,
       partProfile,
-      importedModel
+      importedModel,
+      featureOps
     );
     if (!feaBaseline) {
       setFeaBaseline({ fea: evaluatedFea, params: effectiveDesignParams });
@@ -550,7 +817,8 @@ export default function App() {
       feaSettings,
       display.isolationTarget,
       partProfile,
-      importedModel
+      importedModel,
+      featureOps
     );
 
     const report = buildFeaComparisonReport(
@@ -654,6 +922,8 @@ export default function App() {
     activeSegment,
     partProfile,
     components,
+    featureOps,
+    scoobiiiProof,
     sessionSeconds,
     deliverables,
     onUpdateDesignParams: (patch) =>
@@ -664,6 +934,7 @@ export default function App() {
     onSetSegment: handleSetSegment,
     onUpdatePartProfile: (patch) =>
       setPartProfileOverride((prev) => ({ ...prev, ...patch })),
+    onAddFeatureOp: handleAddFeatureOp,
     onRunFea: handleRunFea,
     onGenerateOptimizedGeometry: handleGenerateOptimizedGeometry,
     onExportFormat: handleExportFormat,
@@ -690,6 +961,160 @@ export default function App() {
   const mcpContextRef = useRef(mcpContext);
   mcpContextRef.current = mcpContext;
 
+  const handleExecuteMagicPenMcpPrompt = async (
+    prompt: string,
+    pick: {
+      point: [number, number, number];
+      normal: [number, number, number];
+      componentId: string;
+      componentName: string;
+      widthMm: number;
+      lengthMm: number;
+    }
+  ): Promise<{ summary: string }> => {
+    const lower = prompt.toLowerCase();
+    const threadMatch = lower.match(/\bm(3|4|5|6|8|10|12)\b/i);
+    const threadSpec = (
+      threadMatch ? `M${threadMatch[1]}` : 'M6'
+    ) as IsoThreadSpec;
+
+    if (/parafuso|rosca|bolt|screw|fixa/i.test(lower)) {
+      const log = executeMcpToolCall(
+        'cad_magic_pen_operation',
+        {
+          kind: 'threaded-bolt',
+          targetComponentId: pick.componentId,
+          point: pick.point,
+          normal: pick.normal,
+          threadSpec,
+          depthMm: 16,
+          label: `Parafuso ${threadSpec} (${pick.componentName})`,
+        },
+        mcpContextRef.current
+      );
+      if (log.status === 'ok') {
+        return {
+          summary: `Parafuso métrico ${threadSpec} inserido em ${pick.componentName} e verificado no VUC.`,
+        };
+      }
+    }
+
+    if (/rasgo|slot|recorte|corte|chaveta/i.test(lower)) {
+      const log = executeMcpToolCall(
+        'cad_magic_pen_operation',
+        {
+          kind: 'slot-cutout',
+          targetComponentId: pick.componentId,
+          point: pick.point,
+          normal: pick.normal,
+          widthMm: Math.max(8, Math.round(pick.widthMm)),
+          lengthMm: Math.max(16, Math.round(pick.lengthMm)),
+          depthMm: 10,
+          label: `Rasgo Paramétrico (${pick.componentName})`,
+        },
+        mcpContextRef.current
+      );
+      if (log.status === 'ok') {
+        return {
+          summary: `Rasgo paramétrico aplicado em ${pick.componentName} (${Math.round(pick.widthMm)}×${Math.round(pick.lengthMm)}mm).`,
+        };
+      }
+    }
+
+    if (/furo|hole|broca|perfur/i.test(lower)) {
+      const log = executeMcpToolCall(
+        'cad_magic_pen_operation',
+        {
+          kind: 'through-hole',
+          targetComponentId: pick.componentId,
+          point: pick.point,
+          normal: pick.normal,
+          diameterMm: 10,
+          depthMm: 18,
+          label: `Furo Ø10mm (${pick.componentName})`,
+        },
+        mcpContextRef.current
+      );
+      if (log.status === 'ok') {
+        return {
+          summary: `Furo passante Ø10mm aplicado em ${pick.componentName}.`,
+        };
+      }
+    }
+
+    // Fallback to full Gemini + MCP Agent backend with spatial coordinates
+    try {
+      const resp = await fetch('/api/rag-mcp-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: `Na peça ${pick.componentName} (ID ${pick.componentId}) no ponto [${pick.point.map((n) => n.toFixed(1)).join(', ')}] com área ${pick.widthMm.toFixed(1)}x${pick.lengthMm.toFixed(1)}mm: ${prompt}`,
+          ragDocs: ragDocs.map((d) => ({
+            title: d.title,
+            sourceType: d.kind,
+            excerpt: d.summary,
+          })),
+          cadState: {
+            activeSegment,
+            partProfile,
+            components: components.map((c) => ({
+              id: c.id,
+              name: c.name,
+              family: c.family,
+              subFamily: c.subFamily,
+            })),
+            designParams,
+            feaResult: {
+              maxStressMpa: feaResult.maxStressMpa,
+              safetyFactor: feaResult.safetyFactor,
+              status: feaResult.status,
+            },
+          },
+        }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          answer?: string;
+          toolCalls?: { name: string; arguments: Record<string, unknown> }[];
+        };
+        const executed: string[] = [];
+        for (const tc of data.toolCalls ?? []) {
+          const log = executeMcpToolCall(tc.name, tc.arguments ?? {}, mcpContextRef.current);
+          if (log.status === 'ok') executed.push(tc.name);
+        }
+        return {
+          summary:
+            executed.length > 0
+              ? `MCP (${executed.join(', ')}): ${data.answer || 'Operação concluída.'}`
+              : data.answer || 'Comando analisado via agente MCP.',
+        };
+      }
+    } catch {
+      // Deterministic safety net if offline/rate-limited
+    }
+
+    const fallbackLog = executeMcpToolCall(
+      'cad_magic_pen_operation',
+      {
+        kind: 'rib-boss',
+        targetComponentId: pick.componentId,
+        point: pick.point,
+        normal: pick.normal,
+        widthMm: Math.max(8, Math.round(pick.widthMm)),
+        lengthMm: Math.max(12, Math.round(pick.lengthMm)),
+        depthMm: 10,
+        label: `Reforço / Feature MCP (${pick.componentName})`,
+      },
+      mcpContextRef.current
+    );
+    return {
+      summary:
+        fallbackLog.status === 'ok'
+          ? `Reforço paramétrico local criado em ${pick.componentName} conforme pedido.`
+          : 'Não foi possível aplicar a operação no componente.',
+    };
+  };
+
   useEffect(() => {
     (window as unknown as Record<string, unknown>).__PARAMETRIX_MCP__ = {
       protocol: '2024-11-05',
@@ -704,6 +1129,7 @@ export default function App() {
     { id: 'viewport', label: 'Modelagem 3D' },
     { id: 'grasshopper', label: 'Grasshopper' },
     { id: 'cam', label: 'CAM & Robô' },
+    { id: 'sustainability', label: 'Pegada CO₂' },
     { id: 'mcp', label: 'MCP Tools' },
     { id: 'plugins', label: 'Plugins SDK' },
     { id: 'files', label: 'Arquivos CAD' },
@@ -711,20 +1137,28 @@ export default function App() {
 
   const handleTabSwitch = (tab: WorkspaceTab) => {
     setActiveTab(tab);
+    setMobileMoreOpen(false);
     if (tab === 'cam') {
       setDisplay((d) => ({ ...d, showToolpath: true, showMachine: true }));
     }
   };
 
+  const activeNavLabel = navItems.find((item) => item.id === activeTab)?.label ?? 'Início';
+
   return (
     <div className="w-full h-full flex flex-col bg-[#0b0e14] text-slate-100 overflow-hidden">
-      {/* Top Navigation Bar */}
-      <header className="h-12 px-3 sm:px-5 border-b border-white/10 bg-[#0f141d] flex items-center justify-between gap-3 sm:gap-8 shrink-0">
-        <span className="font-display text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0">
-          Parametrix CAD
-        </span>
+      {/* Top Navigation Bar (Mobile-First 3-zone header) */}
+      <header className="h-12 px-3 sm:px-5 border-b border-white/10 bg-[#0f141d] flex items-center justify-between gap-2 sm:gap-6 shrink-0">
+        <div className="flex items-center gap-2 min-w-0 shrink-0">
+          <span className="font-display text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
+            Parametrix CAD
+          </span>
+          <span className="md:hidden text-[11px] font-medium text-sky-300 bg-sky-500/10 border border-sky-400/25 rounded px-1.5 py-0.5 truncate max-w-[104px]">
+            {activeNavLabel}
+          </span>
+        </div>
 
-        <nav className="flex items-center gap-4 sm:gap-6 overflow-x-auto">
+        <nav className="hidden md:flex items-center gap-4 lg:gap-6 overflow-x-auto min-w-0 flex-1">
           {navItems.map((item) => {
             const active = activeTab === item.id;
             return (
@@ -744,13 +1178,13 @@ export default function App() {
           })}
         </nav>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {authReady &&
             (user ? (
               <button
                 type="button"
                 onClick={() => setAccountModalOpen(true)}
-                className="flex items-center gap-2 px-2.5 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="min-h-[38px] flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 title={`Conta isolada: ${user.email || ''}`}
               >
                 {user.photoURL ? (
@@ -763,7 +1197,7 @@ export default function App() {
                 ) : (
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                 )}
-                <span className="max-w-[80px] sm:max-w-[110px] truncate hidden sm:inline">
+                <span className="max-w-[70px] sm:max-w-[110px] truncate hidden sm:inline">
                   {user.displayName?.split(' ')[0] || 'Conta'}
                 </span>
               </button>
@@ -772,7 +1206,7 @@ export default function App() {
                 type="button"
                 disabled={authBusy}
                 onClick={() => void signInWithGoogle()}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-white/30 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-white/30 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <LogIn className="w-3.5 h-3.5 text-sky-400" />
                 <span className="hidden sm:inline">{authBusy ? 'Entrando...' : 'Entrar Google'}</span>
@@ -782,7 +1216,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setExportModalOpen(true)}
-            className="px-3 sm:px-4 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="min-h-[38px] px-3 sm:px-4 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Exportar
           </button>
@@ -805,6 +1239,9 @@ export default function App() {
             onSaveCloudProject={handleSaveCloudProject}
             onLoadCloudProject={handleLoadCloudProject}
             onDeleteCloudProject={handleDeleteCloudProject}
+            onUploadFile={handleUnifiedFileUpload}
+            onApplyPreset={handleApplyFullPreset}
+            scoobiiiProof={scoobiiiProof}
           />
         )}
 
@@ -851,6 +1288,16 @@ export default function App() {
                 }
               }}
               onOptimizeGeometry={(obj) => handleGenerateOptimizedGeometry(obj)}
+              featureOps={featureOps}
+              onRemoveFeatureOp={handleRemoveFeatureOp}
+              scoobiiiProof={scoobiiiProof}
+              onOpenScoobiiiModal={() => setScoobiiiModalOpen(true)}
+              curvatureOptReport={curvatureOptReport}
+              onApplyCurvatureOptimization={handleApplyCurvatureOptimization}
+              layerToleranceSpecs={layerToleranceSpecs}
+              onUpdateLayerTolerance={handleUpdateLayerTolerance}
+              layerComplianceReport={layerComplianceReport}
+              onRefineNurbsForTolerances={handleRefineNurbsForTolerances}
             />
             <div className="flex-1 min-w-0 h-full">
               <Viewport3D
@@ -870,6 +1317,15 @@ export default function App() {
                 partProfile={partProfile}
                 feaResult={feaResult}
                 beforeFeaResult={feaBaseline?.fea ?? null}
+                featureOps={featureOps}
+                onAddFeatureOp={handleAddFeatureOp}
+                onRemoveFeatureOp={handleRemoveFeatureOp}
+                scoobiiiProof={scoobiiiProof}
+                onUploadFile={handleUnifiedFileUpload}
+                onExecuteMagicPenMcpPrompt={handleExecuteMagicPenMcpPrompt}
+                onExportCertificate={(filename, kind, summary) =>
+                  recordDeliverable({ filename, kind, summary })
+                }
                 onOpenHelp={() => setActiveTab('onboarding')}
               />
             </div>
@@ -877,91 +1333,208 @@ export default function App() {
         )}
 
         {activeTab === 'grasshopper' && (
-          <div className="w-full h-full flex flex-col md:flex-row overflow-hidden">
-            <div className="w-full md:w-[58%] h-1/2 md:h-full border-b md:border-b-0 md:border-r border-white/10 min-w-0">
-              <GrasshopperCanvas
-                nodes={graphNodes}
-                wires={graphWires}
-                nodeSummaries={graphEval.nodeSummaries}
-                evalMs={graphEval.evalMs}
-                onChangeNodes={handleGraphNodesChange}
-                onChangeWires={handleGraphWiresChange}
-                onLoadTemplate={handleLoadTemplate}
-              />
+          <div className="w-full h-full flex flex-col overflow-hidden">
+            <div className="md:hidden grid grid-cols-3 gap-1 p-1.5 bg-[#0f141d] border-b border-white/10 shrink-0">
+              {(
+                [
+                  { id: 'split', label: 'Dividido' },
+                  { id: 'graph', label: 'Grafo Nodal' },
+                  { id: 'viewport', label: 'Preview 3D' },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setMobileGraphMode(m.id)}
+                  className={`min-h-[38px] text-[11px] font-semibold rounded-lg transition-colors cursor-pointer ${
+                    mobileGraphMode === m.id
+                      ? 'bg-sky-500 text-slate-950'
+                      : 'bg-[#141a24] text-slate-300'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
             </div>
-            <div className="w-full md:w-[42%] h-1/2 md:h-full min-w-0">
-              <Viewport3D
-                surface={surface}
-                meshData={meshData}
-                display={display}
-                onUpdateDisplay={(patch) => setDisplay((d) => ({ ...d, ...patch }))}
-                toolpath={toolpath}
-                machineType={effectiveCamSettings.machineType}
-                simPlaying={simPlaying}
-                simProgress={simProgress}
-                onSimProgressChange={setSimProgress}
-                selectedControlPoint={selectedControlPoint}
-                onSelectControlPoint={setSelectedControlPoint}
-                importedModel={importedModel}
-                components={components}
-                partProfile={partProfile}
-                feaResult={feaResult}
-                beforeFeaResult={feaBaseline?.fea ?? null}
-                compact
-              />
+            <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+              <div
+                className={`w-full md:w-[58%] min-w-0 md:border-r border-white/10 ${
+                  mobileGraphMode === 'viewport'
+                    ? 'hidden md:block md:h-full'
+                    : mobileGraphMode === 'graph'
+                      ? 'h-full'
+                      : 'h-1/2 md:h-full border-b md:border-b-0'
+                }`}
+              >
+                <GrasshopperCanvas
+                  nodes={graphNodes}
+                  wires={graphWires}
+                  nodeSummaries={graphEval.nodeSummaries}
+                  evalMs={graphEval.evalMs}
+                  onChangeNodes={handleGraphNodesChange}
+                  onChangeWires={handleGraphWiresChange}
+                  onLoadTemplate={handleLoadTemplate}
+                />
+              </div>
+              <div
+                className={`w-full md:w-[42%] min-w-0 ${
+                  mobileGraphMode === 'graph'
+                    ? 'hidden md:block md:h-full'
+                    : mobileGraphMode === 'viewport'
+                      ? 'h-full'
+                      : 'h-1/2 md:h-full'
+                }`}
+              >
+                <Viewport3D
+                  surface={surface}
+                  meshData={meshData}
+                  display={display}
+                  onUpdateDisplay={(patch) => setDisplay((d) => ({ ...d, ...patch }))}
+                  toolpath={toolpath}
+                  machineType={effectiveCamSettings.machineType}
+                  simPlaying={simPlaying}
+                  simProgress={simProgress}
+                  onSimProgressChange={setSimProgress}
+                  selectedControlPoint={selectedControlPoint}
+                  onSelectControlPoint={setSelectedControlPoint}
+                  importedModel={importedModel}
+                  components={components}
+                  partProfile={partProfile}
+                  feaResult={feaResult}
+                  beforeFeaResult={feaBaseline?.fea ?? null}
+                  featureOps={featureOps}
+                  onAddFeatureOp={handleAddFeatureOp}
+                  onRemoveFeatureOp={handleRemoveFeatureOp}
+                  scoobiiiProof={scoobiiiProof}
+                  onUploadFile={handleUnifiedFileUpload}
+                  onExecuteMagicPenMcpPrompt={handleExecuteMagicPenMcpPrompt}
+                  onExportCertificate={(filename, kind, summary) =>
+                    recordDeliverable({ filename, kind, summary })
+                  }
+                  compact
+                />
+              </div>
             </div>
           </div>
         )}
 
         {activeTab === 'cam' && (
-          <>
-            <CamRoboticsPanel
-              settings={camSettings}
-              onChangeSettings={(patch) =>
-                setCamSettings((prev) => ({ ...prev, ...patch }))
-              }
-              toolpath={toolpath}
-              simPlaying={simPlaying}
-              simProgress={simProgress}
-              onTogglePlay={() => {
-                setDisplay((d) => ({ ...d, showMachine: true, showToolpath: true }));
-                setSimPlaying((p) => !p);
-              }}
-              onScrub={(val) => {
-                setSimPlaying(false);
-                setSimProgress(val);
-              }}
-              showToolpath={display.showToolpath}
-              showMachine={display.showMachine}
-              onToggleToolpath={() =>
-                setDisplay((d) => ({ ...d, showToolpath: !d.showToolpath }))
-              }
-              onToggleMachine={() =>
-                setDisplay((d) => ({ ...d, showMachine: !d.showMachine }))
-              }
-            />
-            <div className="flex-1 min-w-0 h-full">
-              <Viewport3D
-                surface={surface}
-                meshData={meshData}
-                display={display}
-                onUpdateDisplay={(patch) => setDisplay((d) => ({ ...d, ...patch }))}
-                toolpath={toolpath}
-                machineType={camSettings.machineType}
-                simPlaying={simPlaying}
-                simProgress={simProgress}
-                onSimProgressChange={setSimProgress}
-                selectedControlPoint={selectedControlPoint}
-                onSelectControlPoint={setSelectedControlPoint}
-                importedModel={importedModel}
-                components={components}
-                partProfile={partProfile}
-                feaResult={feaResult}
-                beforeFeaResult={feaBaseline?.fea ?? null}
-                onOpenHelp={() => setActiveTab('onboarding')}
-              />
+          <div className="w-full h-full flex flex-col overflow-hidden">
+            <div className="md:hidden grid grid-cols-2 gap-1 p-1.5 bg-[#0f141d] border-b border-white/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => setMobileCamPane('viewport')}
+                className={`min-h-[38px] text-[11px] font-semibold rounded-lg transition-colors cursor-pointer ${
+                  mobileCamPane === 'viewport'
+                    ? 'bg-sky-500 text-slate-950'
+                    : 'bg-[#141a24] text-slate-300'
+                }`}
+              >
+                Simulação 3D & Robô
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileCamPane('panel')}
+                className={`min-h-[38px] text-[11px] font-semibold rounded-lg transition-colors cursor-pointer ${
+                  mobileCamPane === 'panel'
+                    ? 'bg-sky-500 text-slate-950'
+                    : 'bg-[#141a24] text-slate-300'
+                }`}
+              >
+                Parâmetros CNC / KUKA
+              </button>
             </div>
-          </>
+            <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+              <div
+                className={`h-full min-h-0 ${
+                  mobileCamPane === 'panel' ? 'flex w-full md:w-auto' : 'hidden md:flex'
+                }`}
+              >
+                <CamRoboticsPanel
+                  settings={camSettings}
+                  onChangeSettings={(patch) =>
+                    setCamSettings((prev) => ({ ...prev, ...patch }))
+                  }
+                  toolpath={toolpath}
+                  simPlaying={simPlaying}
+                  simProgress={simProgress}
+                  onTogglePlay={() => {
+                    setDisplay((d) => ({ ...d, showMachine: true, showToolpath: true }));
+                    setSimPlaying((p) => !p);
+                  }}
+                  onScrub={(val) => {
+                    setSimPlaying(false);
+                    setSimProgress(val);
+                  }}
+                  showToolpath={display.showToolpath}
+                  showMachine={display.showMachine}
+                  onToggleToolpath={() =>
+                    setDisplay((d) => ({ ...d, showToolpath: !d.showToolpath }))
+                  }
+                  onToggleMachine={() =>
+                    setDisplay((d) => ({ ...d, showMachine: !d.showMachine }))
+                  }
+                />
+              </div>
+              <div
+                className={`flex-1 min-w-0 h-full ${
+                  mobileCamPane === 'viewport' ? 'block' : 'hidden md:block'
+                }`}
+              >
+                <Viewport3D
+                  surface={surface}
+                  meshData={meshData}
+                  display={display}
+                  onUpdateDisplay={(patch) => setDisplay((d) => ({ ...d, ...patch }))}
+                  toolpath={toolpath}
+                  machineType={camSettings.machineType}
+                  simPlaying={simPlaying}
+                  simProgress={simProgress}
+                  onSimProgressChange={setSimProgress}
+                  selectedControlPoint={selectedControlPoint}
+                  onSelectControlPoint={setSelectedControlPoint}
+                  importedModel={importedModel}
+                  components={components}
+                  partProfile={partProfile}
+                  feaResult={feaResult}
+                  beforeFeaResult={feaBaseline?.fea ?? null}
+                  featureOps={featureOps}
+                  onAddFeatureOp={handleAddFeatureOp}
+                  onRemoveFeatureOp={handleRemoveFeatureOp}
+                  scoobiiiProof={scoobiiiProof}
+                  onUploadFile={handleUnifiedFileUpload}
+                  onExecuteMagicPenMcpPrompt={handleExecuteMagicPenMcpPrompt}
+                  onExportCertificate={(filename, kind, summary) =>
+                    recordDeliverable({ filename, kind, summary })
+                  }
+                  onOpenHelp={() => setActiveTab('onboarding')}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'sustainability' && (
+          <SustainabilityDashboard
+            surface={surface}
+            meshData={meshData}
+            importedModel={importedModel}
+            materialFinish={display.materialFinish}
+            camSettings={effectiveCamSettings}
+            toolpath={toolpath}
+            featureOps={featureOps}
+            onSwitchMachine={(machineType: MachineType) =>
+              setCamSettings((prev) => ({
+                ...prev,
+                machineType,
+                postFormat: machineType === 'robot-6axis' ? 'kuka-krl' : 'fanuc-nc',
+              }))
+            }
+            onChangeMaterial={(material: MaterialFinish) =>
+              setDisplay((d) => ({ ...d, materialFinish: material }))
+            }
+            onNavigate={handleTabSwitch}
+          />
         )}
 
         {activeTab === 'mcp' && (
@@ -1026,6 +1599,142 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Mobile Thumb-Zone Bottom Navigation Bar (< 768px) */}
+      <nav
+        aria-label="Navegação Mobile"
+        className="md:hidden grid grid-cols-5 h-14 shrink-0 border-t border-white/10 bg-[#0f141d] z-30"
+      >
+        {(
+          [
+            { id: 'onboarding', label: 'Início', icon: Home },
+            { id: 'viewport', label: '3D IX', icon: Box },
+            { id: 'cam', label: 'CAM', icon: Cpu },
+            { id: 'sustainability', label: 'CO₂', icon: Leaf },
+          ] as const
+        ).map((item) => {
+          const Icon = item.icon;
+          const active = activeTab === item.id && !mobileMoreOpen;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => handleTabSwitch(item.id)}
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                active ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => setMobileMoreOpen((v) => !v)}
+          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+            mobileMoreOpen ||
+            activeTab === 'grasshopper' ||
+            activeTab === 'mcp' ||
+            activeTab === 'plugins' ||
+            activeTab === 'files'
+              ? 'text-sky-400'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <MoreHorizontal className="w-4 h-4" />
+          <span>Mais</span>
+        </button>
+      </nav>
+
+      {/* Mobile Slide-Up Modules Sheet Drawer */}
+      {mobileMoreOpen && (
+        <div className="md:hidden fixed inset-0 z-40 flex flex-col justify-end">
+          <div
+            className="absolute inset-0 bg-black/65"
+            onClick={() => setMobileMoreOpen(false)}
+          />
+          <div className="relative bg-[#111620] border-t border-white/15 rounded-t-2xl p-4 space-y-3 shadow-2xl max-h-[82vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2 border-b border-white/10">
+              <span className="font-display text-sm font-semibold text-slate-100">
+                Módulos & Ferramentas
+              </span>
+              <button
+                type="button"
+                aria-label="Fechar menu de módulos"
+                onClick={() => setMobileMoreOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  { id: 'grasshopper', label: 'Grasshopper Nodal', icon: Network },
+                  { id: 'mcp', label: 'Agente RAG + MCP', icon: Terminal },
+                  { id: 'plugins', label: 'Plugins SDK', icon: Puzzle },
+                  { id: 'files', label: 'Arquivos CAD', icon: FolderOpen },
+                ] as const
+              ).map((mod) => {
+                const Icon = mod.icon;
+                const active = activeTab === mod.id;
+                return (
+                  <button
+                    key={mod.id}
+                    type="button"
+                    onClick={() => handleTabSwitch(mod.id)}
+                    className={`min-h-[48px] px-3 py-2.5 rounded-xl border flex items-center gap-2.5 text-left text-xs font-medium transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-sky-500/15 border-sky-400/50 text-sky-200'
+                        : 'bg-[#0c1017] border-white/10 text-slate-200 hover:border-white/25'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span className="truncate">{mod.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMoreOpen(false);
+                  setScoobiiiModalOpen(true);
+                }}
+                className="min-h-[44px] px-3 py-2 rounded-xl border border-emerald-400/35 bg-emerald-500/10 text-emerald-200 text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Sigma className="w-4 h-4 shrink-0" />
+                <span>Prova SCOOBIII/VUC</span>
+              </button>
+
+              <a
+                href="/gitpage/"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMobileMoreOpen(false)}
+                className="min-h-[44px] px-3 py-2 rounded-xl border border-sky-400/35 bg-sky-500/10 text-sky-200 text-xs font-semibold flex items-center justify-center gap-2"
+              >
+                <ExternalLink className="w-4 h-4 shrink-0" />
+                <span>GitPage Dinâmica</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {scoobiiiModalOpen && (
+        <ScoobiiiVucModal
+          report={scoobiiiProof}
+          onClose={() => setScoobiiiModalOpen(false)}
+          onExportCertificate={(filename, kind, summary) =>
+            recordDeliverable({ filename, kind, summary })
+          }
+        />
+      )}
 
       {/* Quick Export Modal triggered by Top Bar CTA */}
       {exportModalOpen && (

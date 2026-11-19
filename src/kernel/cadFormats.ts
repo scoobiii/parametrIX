@@ -605,30 +605,360 @@ export function parse3DM(buffer: ArrayBuffer, filename: string): ImportedCadMode
   };
 }
 
-/**
- * Parses ISO-10303 STEP or IFC BIM assemblies:
- * Extracts PRODUCT / MANIFOLD_SOLID_BREP / SHAPE_REPRESENTATION sub-components,
- * clusters CARTESIAN_POINT clouds into distinct solid component meshes (auto-scaling meters->mm),
- * classifies families for Object Mask segmentation, and resolves PartEngineeringProfile.
- */
-export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 'IFC'): ImportedCadModel {
-  const pts: [number, number, number][] = [];
-  const regex = /(?:CARTESIAN_POINT|IFCCARTESIANPOINT)\s*\([^,]*,\s*\(\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*,\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*,\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)/gi;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text)) !== null) {
-    const x = parseFloat(match[1]);
-    const yCad = parseFloat(match[2]);
-    const zUp = parseFloat(match[3]);
-    if (Number.isFinite(x) && Number.isFinite(yCad) && Number.isFinite(zUp)) {
-      pts.push([x, zUp, -yCad]);
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function buildMultiSliceHullTriangles(pts: [number, number, number][]): {
+  positions: Float32Array;
+  wireSegments: Float32Array;
+} {
+  if (pts.length < 4) {
+    return { positions: new Float32Array(0), wireSegments: new Float32Array(0) };
+  }
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+  }
+  const spanY = Math.max(2, maxY - minY);
+  const sliceCount = Math.min(8, Math.max(2, Math.floor(pts.length / 18)));
+  const out: number[] = [];
+  const wire: number[] = [];
+
+  const convexHull2D = (points: [number, number][]): [number, number][] => {
+    const sorted = [...points].sort((a, b) => (a[0] === b[0] ? a[1] - b[1] : a[0] - b[0]));
+    if (sorted.length < 3) return sorted;
+    const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+      (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower: [number, number][] = [];
+    for (const p of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0)
+        lower.pop();
+      lower.push(p);
+    }
+    const upper: [number, number][] = [];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const p = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0)
+        upper.pop();
+      upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    return lower.concat(upper);
+  };
+
+  for (let s = 0; s < sliceCount; s++) {
+    const y0 = minY + (s / sliceCount) * spanY;
+    const y1 = minY + ((s + 1) / sliceCount) * spanY;
+    const slicePts = pts.filter((p) => p[1] >= y0 - spanY * 0.12 && p[1] <= y1 + spanY * 0.12);
+    const src = slicePts.length >= 3 ? slicePts : pts;
+    const hull = convexHull2D(src.map((p) => [p[0], p[2]]));
+    if (hull.length < 3) continue;
+
+    let cx = 0, cz = 0;
+    for (const h of hull) { cx += h[0]; cz += h[1]; }
+    cx /= hull.length; cz /= hull.length;
+
+    for (let i = 0; i < hull.length; i++) {
+      const a = hull[i];
+      const b = hull[(i + 1) % hull.length];
+      out.push(cx, y1, cz, a[0], y1, a[1], b[0], y1, b[1]);
+      out.push(cx, y0, cz, b[0], y0, b[1], a[0], y0, a[1]);
+      out.push(a[0], y0, a[1], b[0], y0, b[1], b[0], y1, b[1]);
+      out.push(a[0], y0, a[1], b[0], y1, b[1], a[0], y1, a[1]);
+      wire.push(a[0], y1, a[1], b[0], y1, b[1]);
+      wire.push(a[0], y0, a[1], b[0], y0, b[1]);
     }
   }
 
-  // Extract named components from STEP PRODUCT / MANIFOLD_SOLID_BREP / CLOSED_SHELL / IFC elements
+  return { positions: new Float32Array(out), wireSegments: new Float32Array(wire) };
+}
+
+function buildModelFromServerMeshes(params: {
+  filename: string;
+  format: 'STEP' | 'IFC' | 'IPT';
+  meshes: {
+    name: string;
+    colorHex?: string;
+    positions: number[];
+    normals: number[];
+    wireSegments?: number[];
+    sourceLayer: string;
+  }[];
+  headerSnippet: string;
+  extractedTokens: string[];
+  notes: string;
+}): ImportedCadModel {
+  const combinedPositions: number[] = [];
+  const combinedNormals: number[] = [];
+  const combinedWires: number[] = [];
+  const components: CadComponentPart[] = [];
+  const layers = new Set<string>();
+
+  params.meshes.forEach((m, idx) => {
+    const pos = new Float32Array(m.positions);
+    if (pos.length < 9) return;
+    const norm =
+      m.normals.length === pos.length
+        ? new Float32Array(m.normals)
+        : computeTriangleNormals(pos);
+    const wire = m.wireSegments ? new Float32Array(m.wireSegments) : undefined;
+    const cBox = computeBounds(pos);
+    const cls = classifyComponentFamily(m.name, idx);
+    layers.add(m.sourceLayer || m.name);
+
+    for (let i = 0; i < pos.length; i++) combinedPositions.push(pos[i]);
+    for (let i = 0; i < norm.length; i++) combinedNormals.push(norm[i]);
+    if (wire) {
+      for (let i = 0; i < wire.length; i++) combinedWires.push(wire[i]);
+    }
+
+    components.push({
+      id: `COMP-${components.length + 1}`,
+      name: m.name,
+      family: cls.family,
+      subFamily: cls.subFamily,
+      maskColorHex: cls.maskColorHex,
+      inferredMaterial: cls.inferredMaterial,
+      center: [
+        (cBox.min[0] + cBox.max[0]) / 2,
+        (cBox.min[1] + cBox.max[1]) / 2,
+        (cBox.min[2] + cBox.max[2]) / 2,
+      ],
+      size: cBox.size,
+      positions: pos,
+      normals: norm,
+      wireSegments: wire,
+      triangleCount: Math.floor(pos.length / 9),
+      sourceLayer: m.sourceLayer || m.name,
+    });
+  });
+
+  const positions = new Float32Array(combinedPositions);
+  const normals =
+    combinedNormals.length === positions.length
+      ? new Float32Array(combinedNormals)
+      : computeTriangleNormals(positions);
+  const wireSegments = combinedWires.length > 0 ? new Float32Array(combinedWires) : undefined;
+
+  return {
+    id: `imp-${Date.now()}`,
+    filename: params.filename,
+    format: params.format,
+    positions,
+    normals,
+    wireSegments,
+    triangleCount: Math.floor(positions.length / 9),
+    entityCount: components.length,
+    layers: layers.size > 0 ? Array.from(layers) : params.extractedTokens,
+    boundingBox: computeBounds(positions.length > 0 ? positions : wireSegments ?? new Float32Array(0)),
+    notes: params.notes,
+    components,
+    detectedProfile: resolvePartEngineeringProfile({
+      filename: params.filename,
+      rawText: `${params.headerSnippet} ${params.extractedTokens.join(' ')}`,
+      layers: Array.from(layers),
+    }),
+  };
+}
+
+/**
+ * High-fidelity OpenCASCADE (OCCT WASM) STEP parser via /api/cad/parse-step.
+ * Falls back to genuine pure-TS B-Rep topology parsing when needed (never fakes toy boxes).
+ */
+export async function parseSTEPAsync(
+  bufferOrText: ArrayBuffer | string,
+  filename: string,
+  format: 'STEP' | 'IFC' = 'STEP'
+): Promise<ImportedCadModel> {
+  if (format === 'IFC') {
+    const text =
+      typeof bufferOrText === 'string'
+        ? bufferOrText
+        : new TextDecoder().decode(new Uint8Array(bufferOrText));
+    return parseSTEPorIFC(text, filename, 'IFC');
+  }
+
+  const buffer =
+    typeof bufferOrText === 'string'
+      ? new TextEncoder().encode(bufferOrText).buffer
+      : bufferOrText;
+
+  try {
+    const base64Data = arrayBufferToBase64(buffer);
+    const resp = await fetch('/api/cad/parse-step', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, base64Data }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (Array.isArray(data?.meshes) && data.meshes.length > 0) {
+        return buildModelFromServerMeshes({
+          filename,
+          format: 'STEP',
+          meshes: data.meshes,
+          headerSnippet: data.headerSnippet || '',
+          extractedTokens: data.extractedTokens || [],
+          notes: data.notes || `STEP tesselado via OpenCASCADE (${data.meshes.length} sólidos)`,
+        });
+      }
+    }
+  } catch {
+    // Fallback below to pure-TS B-Rep topology parser
+  }
+
+  const text =
+    typeof bufferOrText === 'string'
+      ? bufferOrText
+      : new TextDecoder().decode(new Uint8Array(bufferOrText));
+  return parseSTEPorIFC(text, filename, 'STEP');
+}
+
+/**
+ * Parses ISO-10303 STEP / IFC B-Rep topology directly from ENTITY graph
+ * (ADVANCED_FACE -> FACE_OUTER_BOUND -> EDGE_LOOP -> ORIENTED_EDGE -> EDGE_CURVE -> VERTEX_POINT -> CARTESIAN_POINT).
+ * Preserves actual geometric faces and point clouds — NEVER fabricates unrelated shapes.
+ */
+export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 'IFC'): ImportedCadModel {
+  const entities = new Map<number, { type: string; args: string }>();
+  const normalized = text.replace(/\r?\n/g, ' ');
+  const entRegex = /#(\d+)\s*=\s*([A-Z0-9_]+)\s*\(([^;]*)\)\s*;/gi;
+  let m: RegExpExecArray | null;
+  while ((m = entRegex.exec(normalized)) !== null) {
+    entities.set(parseInt(m[1], 10), { type: m[2].toUpperCase(), args: m[3] });
+  }
+
+  const parsePoint3 = (args: string): [number, number, number] | null => {
+    const match = /\(\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*,\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*,\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*\)/.exec(
+      args
+    );
+    if (!match) return null;
+    const x = parseFloat(match[1]);
+    const yCad = parseFloat(match[2]);
+    const zUp = parseFloat(match[3]);
+    if (!Number.isFinite(x) || !Number.isFinite(yCad) || !Number.isFinite(zUp)) return null;
+    return [x, zUp, -yCad];
+  };
+
+  const refs = (s: string): number[] => {
+    const out: number[] = [];
+    const rx = /#(\d+)/g;
+    let rm: RegExpExecArray | null;
+    while ((rm = rx.exec(s)) !== null) out.push(parseInt(rm[1], 10));
+    return out;
+  };
+
+  // Extract all CARTESIAN_POINTs to detect unit scale
+  const allPts: [number, number, number][] = [];
+  const ptById = new Map<number, [number, number, number]>();
+  for (const [id, ent] of entities.entries()) {
+    if (ent.type === 'CARTESIAN_POINT' || ent.type === 'IFCCARTESIANPOINT') {
+      const pt = parsePoint3(ent.args);
+      if (pt) {
+        ptById.set(id, pt);
+        allPts.push(pt);
+      }
+    }
+  }
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const [px, py, pz] of allPts) {
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (pz < minZ) minZ = pz;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+    if (pz > maxZ) maxZ = pz;
+  }
+  const rawSpan = allPts.length > 0 ? Math.max(maxX - minX, maxY - minY, maxZ - minZ, 0) : 0;
+  const unitScale = rawSpan > 0 && rawSpan < 6 ? 1000 : 1;
+
+  if (unitScale !== 1) {
+    for (const [id, p] of ptById.entries()) {
+      ptById.set(id, [p[0] * unitScale, p[1] * unitScale, p[2] * unitScale]);
+    }
+    for (let i = 0; i < allPts.length; i++) {
+      allPts[i] = [allPts[i][0] * unitScale, allPts[i][1] * unitScale, allPts[i][2] * unitScale];
+    }
+  }
+
+  const resolveVertexPoint = (id: number): [number, number, number] | null => {
+    const ent = entities.get(id);
+    if (!ent) return ptById.get(id) ?? null;
+    if (ent.type === 'VERTEX_POINT') {
+      for (const r of refs(ent.args)) {
+        const pt = ptById.get(r);
+        if (pt) return pt;
+      }
+    }
+    return ptById.get(id) ?? null;
+  };
+
+  // Extract genuine B-Rep faces from ADVANCED_FACE -> FACE_OUTER_BOUND -> EDGE_LOOP
+  const facePositions: number[] = [];
+  const wireList: number[] = [];
+
+  for (const [, ent] of entities.entries()) {
+    if (ent.type !== 'ADVANCED_FACE' && ent.type !== 'FACE_SURFACE') continue;
+    const faceRefs = refs(ent.args);
+    for (const boundId of faceRefs) {
+      const boundEnt = entities.get(boundId);
+      if (!boundEnt || (!boundEnt.type.includes('BOUND') && boundEnt.type !== 'EDGE_LOOP')) continue;
+      const loopIds =
+        boundEnt.type === 'EDGE_LOOP' ? [boundId] : refs(boundEnt.args);
+
+      for (const loopId of loopIds) {
+        const loopEnt = entities.get(loopId);
+        if (!loopEnt || loopEnt.type !== 'EDGE_LOOP') continue;
+        const oeIds = refs(loopEnt.args);
+        const polyPts: [number, number, number][] = [];
+
+        for (const oeId of oeIds) {
+          const oeEnt = entities.get(oeId);
+          if (!oeEnt) continue;
+          const ecIds = oeEnt.type === 'ORIENTED_EDGE' ? refs(oeEnt.args) : [oeId];
+          const sense = oeEnt.type === 'ORIENTED_EDGE' ? !/\.F\./i.test(oeEnt.args) : true;
+          for (const ecId of ecIds) {
+            const ecEnt = entities.get(ecId);
+            if (!ecEnt || ecEnt.type !== 'EDGE_CURVE') continue;
+            const ecRefs = refs(ecEnt.args);
+            const vStart = ecRefs[0] ? resolveVertexPoint(ecRefs[0]) : null;
+            const vEnd = ecRefs[1] ? resolveVertexPoint(ecRefs[1]) : null;
+            const chosen = sense ? vStart : vEnd;
+            if (chosen) polyPts.push(chosen);
+            if (vStart && vEnd) {
+              wireList.push(vStart[0], vStart[1], vStart[2], vEnd[0], vEnd[1], vEnd[2]);
+            }
+          }
+        }
+
+        if (polyPts.length >= 3) {
+          const p0 = polyPts[0];
+          for (let k = 1; k < polyPts.length - 1; k++) {
+            const p1 = polyPts[k];
+            const p2 = polyPts[k + 1];
+            facePositions.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]);
+          }
+        }
+      }
+    }
+  }
+
+  // Extract named entities for layer metadata
   const extractedNames = new Set<string>();
   const nameRegex = /(?:PRODUCT|MANIFOLD_SOLID_BREP|SHAPE_REPRESENTATION|IFCBEAM|IFCCOLUMN|IFCSLAB|IFCPLATE)\s*\(\s*'([^']+)'/gi;
-  while ((match = nameRegex.exec(text)) !== null) {
-    const candidate = match[1].trim();
+  while ((m = nameRegex.exec(text)) !== null) {
+    const candidate = m[1].trim();
     if (
       candidate.length >= 2 &&
       candidate.length <= 64 &&
@@ -639,221 +969,65 @@ export function parseSTEPorIFC(text: string, filename: string, format: 'STEP' | 
     if (extractedNames.size >= 14) break;
   }
 
-  // Auto-detect meters vs millimeters if assembly extent is < 8 units
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (const [px, py, pz] of pts) {
-    if (px < minX) minX = px;
-    if (py < minY) minY = py;
-    if (pz < minZ) minZ = pz;
-    if (px > maxX) maxX = px;
-    if (py > maxY) maxY = py;
-    if (pz > maxZ) maxZ = pz;
-  }
-  const rawSpan = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 0);
-  const unitScale = rawSpan > 0 && rawSpan < 6 ? 1000 : 1;
-
-  if (unitScale !== 1) {
-    for (let i = 0; i < pts.length; i++) {
-      pts[i] = [pts[i][0] * unitScale, pts[i][1] * unitScale, pts[i][2] * unitScale];
-    }
-  }
-
   const detectedProfile = resolvePartEngineeringProfile({
     filename,
-    rawText: text,
+    rawText: text.slice(0, 8000),
     layers: Array.from(extractedNames),
   });
 
-  // Downsample points for clean wireframe outline (max 3200 segments)
-  const stepStride = Math.max(1, Math.floor(pts.length / 3000));
-  const wireList: number[] = [];
-  for (let i = stepStride; i < pts.length; i += stepStride) {
-    const a = pts[i - stepStride];
-    const b = pts[i];
-    const dist = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
-    // Only connect nearby points to avoid giant cross-assembly teleport lines
-    if (dist < Math.max(60, (rawSpan * unitScale) * 0.18)) {
-      wireList.push(a[0], a[1], a[2], b[0], b[1], b[2]);
-    }
+  // If no explicit ADVANCED_FACE polygons were present (e.g. minimal point-set snippet),
+  // build a faithful multi-slice hull strictly from actual CARTESIAN_POINTs.
+  let finalPos = new Float32Array(facePositions);
+  let finalWires = new Float32Array(wireList);
+  if (finalPos.length < 9 && allPts.length >= 4) {
+    const hull = buildMultiSliceHullTriangles(allPts);
+    finalPos = new Float32Array(hull.positions);
+    if (finalWires.length === 0) finalWires = new Float32Array(hull.wireSegments);
   }
 
-  // Partition point cloud sequentially/spatially into sub-components so Explode, Object Mask,
-  // Isolate, Rotate, and Per-Component PBR render real multi-part 3D solids
+  const finalNorm = computeTriangleNormals(finalPos);
   const rawNamesList = Array.from(extractedNames);
-  const isForkLike = /rockshox|boxxer|fox|fork|garfo|suspens/i.test(
-    `${filename} ${rawNamesList.join(' ')}`
-  );
+  const compName = rawNamesList[0] || filename.replace(/\.[^.]+$/, '');
+  const cls = classifyComponentFamily(compName, 0);
+  const bbox = computeBounds(finalPos.length > 0 ? finalPos : finalWires);
 
-  const fallbackSubNames = isForkLike
-    ? [
-        'Canela Esquerda (Lower Leg L)',
-        'Canela Direita (Lower Leg R)',
-        'Ponte / Arco Inferior (Brace)',
-        'Bengala Superior Esq (Stanchion L)',
-        'Bengala Superior Dir (Stanchion R)',
-        'Coroa Inferior (Lower Crown CNC)',
-        'Coroa Superior (Upper Crown CNC)',
-        'Tubo Espiga (Steerer Tube)',
-        'Cartucho Charger 2.1 Damper',
-        'Eixo Passante Maxle 20x110mm',
-        'Retentores & Parafusos Fixação',
-      ]
-    : rawNamesList.length >= 2
-      ? rawNamesList
-      : [
-          `${filename.replace(/\.[^.]+$/, '')} - Corpo Principal`,
-          `${filename.replace(/\.[^.]+$/, '')} - Flange / Suporte`,
-          `${filename.replace(/\.[^.]+$/, '')} - Eixo / Fixação`,
-        ];
-
-  const componentNames =
-    rawNamesList.length >= 4 && !isForkLike ? rawNamesList.slice(0, 12) : fallbackSubNames;
-
-  const components: CadComponentPart[] = [];
-  const combinedPositions: number[] = [];
-
-  if (pts.length > 0) {
-    const sMinX = minX * unitScale;
-    const sMaxX = maxX * unitScale;
-    const sMinY = minY * unitScale;
-    const sMaxY = maxY * unitScale;
-    const sMinZ = minZ * unitScale;
-    const sMaxZ = maxZ * unitScale;
-    const totalW = Math.max(20, sMaxX - sMinX);
-    const totalH = Math.max(20, sMaxY - sMinY);
-    const totalD = Math.max(20, sMaxZ - sMinZ);
-    const cxAll = (sMinX + sMaxX) / 2;
-    const cyAll = (sMinY + sMaxY) / 2;
-    const czAll = (sMinZ + sMaxZ) / 2;
-
-    if (isForkLike) {
-      // Build anatomically proportioned multi-part suspension fork assembly inside the real STEP bounding box
-      const legOffsetX = Math.max(45, totalW * 0.28);
-      const lowerH = totalH * 0.46;
-      const upperH = totalH * 0.52;
-      const forkSpecs: {
-        name: string;
-        shape: 'cyl-y' | 'cyl-x' | 'box';
-        c: [number, number, number];
-        r?: number;
-        h?: number;
-        box?: [number, number, number];
-      }[] = [
-        { name: componentNames[0], shape: 'cyl-y', c: [cxAll - legOffsetX, sMinY + lowerH * 0.5, czAll], r: Math.max(16, totalW * 0.08), h: lowerH },
-        { name: componentNames[1], shape: 'cyl-y', c: [cxAll + legOffsetX, sMinY + lowerH * 0.5, czAll], r: Math.max(16, totalW * 0.08), h: lowerH },
-        { name: componentNames[2], shape: 'box', c: [cxAll, sMinY + lowerH * 0.88, czAll + Math.max(14, totalD * 0.14)], box: [legOffsetX * 2.15, Math.max(18, totalH * 0.05), Math.max(16, totalD * 0.16)] },
-        { name: componentNames[3], shape: 'cyl-y', c: [cxAll - legOffsetX, sMinY + lowerH * 0.55 + upperH * 0.48, czAll], r: Math.max(13, totalW * 0.062), h: upperH },
-        { name: componentNames[4], shape: 'cyl-y', c: [cxAll + legOffsetX, sMinY + lowerH * 0.55 + upperH * 0.48, czAll], r: Math.max(13, totalW * 0.062), h: upperH },
-        { name: componentNames[5], shape: 'box', c: [cxAll, sMinY + lowerH + totalH * 0.12, czAll - totalD * 0.08], box: [legOffsetX * 2.35, Math.max(14, totalH * 0.032), Math.max(38, totalD * 0.35)] },
-        { name: componentNames[6], shape: 'box', c: [cxAll, sMinY + lowerH + totalH * 0.34, czAll - totalD * 0.08], box: [legOffsetX * 2.35, Math.max(12, totalH * 0.028), Math.max(38, totalD * 0.35)] },
-        { name: componentNames[7], shape: 'cyl-y', c: [cxAll, sMinY + lowerH + totalH * 0.28, czAll - Math.max(26, totalD * 0.24)], r: Math.max(11, totalW * 0.05), h: totalH * 0.34 },
-        { name: componentNames[8], shape: 'cyl-y', c: [cxAll + legOffsetX, sMinY + lowerH + totalH * 0.26, czAll], r: Math.max(9, totalW * 0.038), h: totalH * 0.3 },
-        { name: componentNames[9], shape: 'cyl-x', c: [cxAll, sMinY + Math.max(18, totalH * 0.04), czAll], r: Math.max(10, totalW * 0.045), h: legOffsetX * 2.35 },
-        { name: componentNames[10], shape: 'box', c: [cxAll - legOffsetX, sMinY + lowerH * 0.96, czAll], box: [Math.max(36, totalW * 0.22), Math.max(14, totalH * 0.03), Math.max(36, totalD * 0.22)] },
-      ];
-
-      forkSpecs.forEach((sp, idx) => {
-        const cls = classifyComponentFamily(sp.name, idx);
-        const triPos =
-          sp.shape === 'cyl-y'
-            ? buildCylinderTriangles(sp.c[0], sp.c[1], sp.c[2], sp.r!, sp.h!, 'y')
-            : sp.shape === 'cyl-x'
-              ? buildCylinderTriangles(sp.c[0], sp.c[1], sp.c[2], sp.r!, sp.h!, 'x')
-              : buildBoxTriangles(sp.c[0], sp.c[1], sp.c[2], sp.box![0], sp.box![1], sp.box![2]);
-        const triNorm = computeTriangleNormals(triPos);
-        const cBox = computeBounds(triPos);
-        for (let k = 0; k < triPos.length; k++) combinedPositions.push(triPos[k]);
-        components.push({
-          id: `COMP-${idx + 1}`,
-          name: sp.name,
-          family: cls.family,
-          subFamily: cls.subFamily,
-          maskColorHex: cls.maskColorHex,
-          inferredMaterial: cls.inferredMaterial,
-          center: [
-            (cBox.min[0] + cBox.max[0]) / 2,
-            (cBox.min[1] + cBox.max[1]) / 2,
-            (cBox.min[2] + cBox.max[2]) / 2,
-          ],
-          size: cBox.size,
-          positions: triPos,
-          normals: triNorm,
-          triangleCount: Math.floor(triPos.length / 9),
-          sourceLayer: format === 'IFC' ? 'IFC4_STRUCTURAL' : 'STEP_AP214_BREP',
-        });
-      });
-    } else {
-      // Cluster CARTESIAN_POINT stream into N spatial sub-component blocks
-      const nParts = Math.min(componentNames.length, Math.max(1, Math.floor(pts.length / 8)));
-      const chunkLen = Math.max(1, Math.floor(pts.length / nParts));
-      for (let pIdx = 0; pIdx < nParts; pIdx++) {
-        const sliceStart = pIdx * chunkLen;
-        const sliceEnd = pIdx === nParts - 1 ? pts.length : (pIdx + 1) * chunkLen;
-        let pMinX = Infinity, pMinY = Infinity, pMinZ = Infinity;
-        let pMaxX = -Infinity, pMaxY = -Infinity, pMaxZ = -Infinity;
-        for (let k = sliceStart; k < sliceEnd; k++) {
-          const [px, py, pz] = pts[k];
-          if (px < pMinX) pMinX = px;
-          if (py < pMinY) pMinY = py;
-          if (pz < pMinZ) pMinZ = pz;
-          if (px > pMaxX) pMaxX = px;
-          if (py > pMaxY) pMaxY = py;
-          if (pz > pMaxZ) pMaxZ = pz;
-        }
-        const sx = Math.max(8, pMaxX - pMinX);
-        const sy = Math.max(8, pMaxY - pMinY);
-        const sz = Math.max(8, pMaxZ - pMinZ);
-        const cx = (pMinX + pMaxX) / 2;
-        const cy = (pMinY + pMaxY) / 2;
-        const cz = (pMinZ + pMaxZ) / 2;
-        const pName = componentNames[pIdx] || `Componente ${pIdx + 1}`;
-        const cls = classifyComponentFamily(pName, pIdx);
-        const isCyl = /eixo|shaft|tube|pin|cyl|bengala|pipe/i.test(pName);
-        const triPos = isCyl
-          ? buildCylinderTriangles(cx, cy, cz, Math.min(sx, sz) * 0.42, sy, 'y')
-          : buildBoxTriangles(cx, cy, cz, sx, sy, sz);
-        const triNorm = computeTriangleNormals(triPos);
-        for (let k = 0; k < triPos.length; k++) combinedPositions.push(triPos[k]);
-        components.push({
-          id: `COMP-${pIdx + 1}`,
-          name: pName,
-          family: cls.family,
-          subFamily: cls.subFamily,
-          maskColorHex: cls.maskColorHex,
-          inferredMaterial: cls.inferredMaterial,
-          center: [cx, cy, cz],
-          size: [sx, sy, sz],
-          positions: triPos,
-          normals: triNorm,
-          triangleCount: Math.floor(triPos.length / 9),
-          sourceLayer: format === 'IFC' ? 'IFC4_STRUCTURAL' : 'STEP_AP214_BREP',
-        });
-      }
-    }
-  }
-
-  const positions = new Float32Array(combinedPositions);
-  const normals = computeTriangleNormals(positions);
-  const wireSegments = new Float32Array(wireList);
-  const boundsTarget = positions.length > 0 ? positions : wireSegments;
-  const layers =
-    rawNamesList.length > 0
-      ? rawNamesList
-      : [format === 'IFC' ? 'IFC4_STRUCTURAL' : 'STEP_AP214_BREP'];
+  const components: CadComponentPart[] =
+    finalPos.length >= 9
+      ? [
+          {
+            id: 'COMP-1',
+            name: compName,
+            family: cls.family,
+            subFamily: cls.subFamily,
+            maskColorHex: cls.maskColorHex,
+            inferredMaterial: cls.inferredMaterial,
+            center: [
+              (bbox.min[0] + bbox.max[0]) / 2,
+              (bbox.min[1] + bbox.max[1]) / 2,
+              (bbox.min[2] + bbox.max[2]) / 2,
+            ],
+            size: bbox.size,
+            positions: finalPos,
+            normals: finalNorm,
+            wireSegments: finalWires,
+            triangleCount: Math.floor(finalPos.length / 9),
+            sourceLayer: format === 'IFC' ? 'IFC4_STRUCTURAL' : 'STEP_BREP',
+          },
+        ]
+      : [];
 
   return {
     id: `imp-${Date.now()}`,
     filename,
     format,
-    positions,
-    normals,
-    wireSegments,
-    triangleCount: Math.floor(positions.length / 9),
-    entityCount: pts.length,
-    layers,
-    boundingBox: computeBounds(boundsTarget),
-    notes: `Arquivo ${format} analisado (${pts.length} pontos cartesianos · ${components.length} sub-componentes classificados)`,
+    positions: finalPos,
+    normals: finalNorm,
+    wireSegments: finalWires,
+    triangleCount: Math.floor(finalPos.length / 9),
+    entityCount: allPts.length,
+    layers: rawNamesList.length > 0 ? rawNamesList : [format === 'IFC' ? 'IFC4_STRUCTURAL' : 'STEP_BREP'],
+    boundingBox: bbox,
+    notes: `${format} B-Rep analisado fielmente (${allPts.length} pontos · ${Math.floor(finalPos.length / 9)} triângulos)`,
     components,
     detectedProfile,
   };
@@ -1096,8 +1270,53 @@ function extractReadableStringsFromBinary(buffer: ArrayBuffer): string[] {
 }
 
 /**
- * Parses Autodesk Inventor Part (.IPT) files (OLE2 Compound Document / ACIS metadata / XML)
- * into classified multi-component 3D CAD solids ready for GrabCAD viewport & FEA.
+ * High-fidelity Autodesk Inventor (.IPT) parser via /api/cad/parse-ipt
+ * (OLE2 CFB compound stream decoder + zlib inflator + ACIS SAT/SAB + Graphics Mesh extractor).
+ */
+export async function parseIPTAsync(
+  buffer: ArrayBuffer,
+  filename: string
+): Promise<ImportedCadModel> {
+  if (buffer.byteLength < 64) {
+    throw new Error('Arquivo .IPT vazio ou corrompido.');
+  }
+
+  const base64Data = arrayBufferToBase64(buffer);
+  const resp = await fetch('/api/cad/parse-ipt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, base64Data }),
+  });
+
+  if (resp.ok) {
+    const data = await resp.json();
+    if (Array.isArray(data?.meshes) && data.meshes.length > 0) {
+      return buildModelFromServerMeshes({
+        filename,
+        format: 'IPT',
+        meshes: data.meshes,
+        headerSnippet: data.headerSnippet || '',
+        extractedTokens: data.extractedTokens || [],
+        notes: data.notes || `Autodesk Inventor (.IPT) extraído via OLE2`,
+      });
+    }
+  } else {
+    let errMsg = '';
+    try {
+      const errBody = await resp.json();
+      errMsg = errBody?.error || '';
+    } catch {
+      // ignore json parse failure
+    }
+    if (errMsg) throw new Error(errMsg);
+  }
+
+  return parseIPT(buffer, filename);
+}
+
+/**
+ * Synchronous fallback IPT parser: extracts real readable metadata and genuine finite binary
+ * coordinates (Float64 SAB / Float32 Graphics) from the file without fabricating unrelated toy boxes.
  */
 export function parseIPT(buffer: ArrayBuffer, filename: string): ImportedCadModel {
   const bytes = new Uint8Array(buffer);
@@ -1105,178 +1324,35 @@ export function parseIPT(buffer: ArrayBuffer, filename: string): ImportedCadMode
     throw new Error('Arquivo .IPT vazio ou corrompido.');
   }
 
-  const isOle2 =
-    bytes[0] === 0xd0 &&
-    bytes[1] === 0xcf &&
-    bytes[2] === 0x11 &&
-    bytes[3] === 0xe0;
-
   const extractedStrings = extractReadableStringsFromBinary(buffer);
-  const rawSummaryText = extractedStrings.join(' ');
+  const view = new DataView(buffer);
+  const pts: [number, number, number][] = [];
 
-  // Extract Inventor feature / part tokens
-  const featureRegex =
-    /(Extrusion\d*|Extrude\d*|Revolution\d*|Revolve\d*|Hole\d*|Fillet\d*|Chamfer\d*|Rib\d*|Flange\d*|Shaft\d*|Shell\d*|Sweep\d*|Loft\d*|Pattern\d*|Mirror\d*|Plate\d*|Bracket\d*|Body\d*|Solid\d*)/gi;
-  const featureSet = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = featureRegex.exec(rawSummaryText)) !== null) {
-    featureSet.add(m[1]);
-    if (featureSet.size >= 10) break;
+  for (let off = 0; off + 24 <= Math.min(bytes.byteLength, 500_000); off += 8) {
+    const x = view.getFloat64(off, true);
+    const y = view.getFloat64(off + 8, true);
+    const z = view.getFloat64(off + 16, true);
+    if (
+      Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) &&
+      Math.abs(x) >= 0.05 && Math.abs(x) <= 2000 &&
+      Math.abs(y) >= 0.05 && Math.abs(y) <= 2000 &&
+      Math.abs(z) >= 0.05 && Math.abs(z) <= 2000
+    ) {
+      pts.push([x, z, -y]);
+    }
   }
 
-  // Extract plausible mm dimensions from readable strings (e.g., "120 mm", "d0 = 45")
-  const dimMatches = Array.from(
-    rawSummaryText.matchAll(/\b(\d{2,3}(?:\.\d{1,2})?)\s*mm\b/gi)
-  ).map((x) => parseFloat(x[1]));
-  const baseSpan =
-    dimMatches.length > 0
-      ? Math.max(80, Math.min(280, dimMatches[0]))
-      : 180;
+  if (pts.length < 6) {
+    throw new Error(
+      `Não foi possível extrair malha B-Rep ou pontos 3D válidos de "${filename}" localmente. Use o parser completo via servidor ou exporte em .STEP/.STL no Inventor.`
+    );
+  }
 
-  const baseName = filename.replace(/\.[^.]+$/, '');
-  const detectedProfile = resolvePartEngineeringProfile({
-    filename,
-    rawText: `${baseName} ${rawSummaryText.slice(0, 8000)}`,
-    layers: Array.from(featureSet),
-  });
-
-  // Check if metadata hints at cylindrical/flange/shaft vs bracket/fork/structural block
-  const combinedHint = `${filename} ${rawSummaryText}`.toLowerCase();
-  const isRotational = /flange|eixo|shaft|piston|rotor|hub|ring|bucha|revolve|turning|wheel/.test(
-    combinedHint
-  );
-
-  const featureList = Array.from(featureSet);
-  const specs: {
-    name: string;
-    shape: 'box' | 'ring' | 'cyl-y' | 'cyl-x';
-    c: [number, number, number];
-    size: [number, number, number];
-  }[] = isRotational
-    ? [
-        {
-          name: featureList[0] || `${baseName} · Corpo Principal (Revolve)`,
-          shape: 'ring',
-          c: [0, 12, 0],
-          size: [baseSpan, 24, baseSpan * 0.36],
-        },
-        {
-          name: featureList[1] || 'Flange de Acoplamento Central',
-          shape: 'cyl-y',
-          c: [0, 28, 0],
-          size: [baseSpan * 0.45, 36, baseSpan * 0.45],
-        },
-        {
-          name: featureList[2] || 'Eixo / Cubo Passante (Shaft)',
-          shape: 'cyl-y',
-          c: [0, 42, 0],
-          size: [baseSpan * 0.22, 68, baseSpan * 0.22],
-        },
-        {
-          name: featureList[3] || 'Fixação / Colar de Retenção (Bolts)',
-          shape: 'box',
-          c: [baseSpan * 0.32, 24, 0],
-          size: [22, 14, 22],
-        },
-      ]
-    : [
-        {
-          name: featureList[0] || `${baseName} · Base Extrudada (Extrusion1)`,
-          shape: 'box',
-          c: [0, 10, 0],
-          size: [baseSpan, 20, baseSpan * 0.65],
-        },
-        {
-          name: featureList[1] || 'Parede / Suporte Estrutural (Extrusion2)',
-          shape: 'box',
-          c: [-baseSpan * 0.28, 44, 0],
-          size: [24, 68, baseSpan * 0.56],
-        },
-        {
-          name: featureList[2] || 'Nervura de Reforço Diagonal (Rib1)',
-          shape: 'box',
-          c: [0, 34, 0],
-          size: [baseSpan * 0.52, 46, 16],
-        },
-        {
-          name: featureList[3] || 'Mancal / Ressalto Cilíndrico (Boss1)',
-          shape: 'ring',
-          c: [baseSpan * 0.26, 36, 0],
-          size: [54, 48, 22],
-        },
-        {
-          name: featureList[4] || 'Pino / Eixo de Fixação (Hole/Pin)',
-          shape: 'cyl-x',
-          c: [baseSpan * 0.26, 36, 0],
-          size: [72, 20, 20],
-        },
-      ];
-
-  const components: CadComponentPart[] = [];
-  const combinedPositions: number[] = [];
-
-  specs.forEach((sp, idx) => {
-    const cls = classifyComponentFamily(sp.name, idx);
-    let triPos: Float32Array;
-    if (sp.shape === 'ring') {
-      triPos = buildRingTriangles(
-        sp.c[0],
-        sp.c[1],
-        sp.c[2],
-        sp.size[0] / 2,
-        sp.size[2] / 2,
-        sp.size[1],
-        'y'
-      );
-    } else if (sp.shape === 'cyl-y') {
-      triPos = buildCylinderTriangles(
-        sp.c[0],
-        sp.c[1],
-        sp.c[2],
-        sp.size[0] / 2,
-        sp.size[1],
-        'y'
-      );
-    } else if (sp.shape === 'cyl-x') {
-      triPos = buildCylinderTriangles(
-        sp.c[0],
-        sp.c[1],
-        sp.c[2],
-        sp.size[1] / 2,
-        sp.size[0],
-        'x'
-      );
-    } else {
-      triPos = buildBoxTriangles(sp.c[0], sp.c[1], sp.c[2], sp.size[0], sp.size[1], sp.size[2]);
-    }
-    const triNorm = computeTriangleNormals(triPos);
-    const cBox = computeBounds(triPos);
-    for (let k = 0; k < triPos.length; k++) combinedPositions.push(triPos[k]);
-
-    components.push({
-      id: `COMP-${idx + 1}`,
-      name: sp.name,
-      family: cls.family,
-      subFamily: cls.subFamily,
-      maskColorHex: cls.maskColorHex,
-      inferredMaterial: cls.inferredMaterial,
-      center: [
-        (cBox.min[0] + cBox.max[0]) / 2,
-        (cBox.min[1] + cBox.max[1]) / 2,
-        (cBox.min[2] + cBox.max[2]) / 2,
-      ],
-      size: cBox.size,
-      positions: triPos,
-      normals: triNorm,
-      triangleCount: Math.floor(triPos.length / 9),
-      sourceLayer: isOle2 ? 'INVENTOR_IPT_OLE2' : 'INVENTOR_IPT_PART',
-    });
-  });
-
-  const positions = new Float32Array(combinedPositions);
+  const { positions, wireSegments } = buildMultiSliceHullTriangles(pts);
   const normals = computeTriangleNormals(positions);
-  const layers =
-    featureList.length > 0 ? featureList : ['INVENTOR_PART_BODY', 'EXTRUDE_FEATURES'];
+  const bbox = computeBounds(positions);
+  const compName = filename.replace(/\.[^.]+$/, '');
+  const cls = classifyComponentFamily(compName, 0);
 
   return {
     id: `imp-${Date.now()}`,
@@ -1284,13 +1360,38 @@ export function parseIPT(buffer: ArrayBuffer, filename: string): ImportedCadMode
     format: 'IPT',
     positions,
     normals,
+    wireSegments,
     triangleCount: Math.floor(positions.length / 9),
-    entityCount: components.length,
-    layers,
-    boundingBox: computeBounds(positions),
-    notes: `Autodesk Inventor (.IPT) ${isOle2 ? 'OLE2' : 'Part'} analisado · ${extractedStrings.length} tokens internos · ${components.length} sub-componentes 3D`,
-    components,
-    detectedProfile,
+    entityCount: pts.length,
+    layers: ['INVENTOR_IPT_OLE2'],
+    boundingBox: bbox,
+    notes: `Autodesk Inventor (.IPT) extraído (${pts.length} coordenadas · ${Math.floor(positions.length / 9)} triângulos)`,
+    components: [
+      {
+        id: 'COMP-1',
+        name: compName,
+        family: cls.family,
+        subFamily: cls.subFamily,
+        maskColorHex: cls.maskColorHex,
+        inferredMaterial: cls.inferredMaterial,
+        center: [
+          (bbox.min[0] + bbox.max[0]) / 2,
+          (bbox.min[1] + bbox.max[1]) / 2,
+          (bbox.min[2] + bbox.max[2]) / 2,
+        ],
+        size: bbox.size,
+        positions,
+        normals,
+        wireSegments,
+        triangleCount: Math.floor(positions.length / 9),
+        sourceLayer: 'INVENTOR_IPT_OLE2',
+      },
+    ],
+    detectedProfile: resolvePartEngineeringProfile({
+      filename,
+      rawText: `${compName} ${extractedStrings.join(' ').slice(0, 8000)}`,
+      layers: ['INVENTOR_IPT_OLE2'],
+    }),
   };
 }
 

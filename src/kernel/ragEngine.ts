@@ -2,7 +2,9 @@ import {
   parse3DM,
   parseDXF,
   parseIPT,
+  parseIPTAsync,
   parseOBJ,
+  parseSTEPAsync,
   parseSTEPorIFC,
   parseSTL,
   parseSVGToCad,
@@ -170,3 +172,39 @@ export function tryBuildCadAndRagDoc(params: {
 
   return { ragDoc, importedCad };
 }
+
+/**
+ * Async variant that uses OpenCASCADE (OCCT WASM) for .STEP/.STP and OLE2+zlib+ACIS for .IPT.
+ */
+export async function tryBuildCadAndRagDocAsync(params: {
+  title: string;
+  kind: RagSourceKind;
+  originUrl?: string;
+  mimeType: string;
+  byteSize: number;
+  extractedText?: string;
+  buffer?: ArrayBuffer;
+  preBuiltCad?: ImportedCadModel | null;
+}): Promise<{ ragDoc: RagSourceDocument; importedCad: ImportedCadModel | null }> {
+  const lower = params.title.toLowerCase();
+  let preBuiltCad = params.preBuiltCad ?? null;
+
+  if (!preBuiltCad) {
+    try {
+      if ((lower.endsWith('.step') || lower.endsWith('.stp')) && (params.buffer || params.extractedText)) {
+        preBuiltCad = await parseSTEPAsync(
+          params.buffer ?? params.extractedText!,
+          params.title,
+          'STEP'
+        );
+      } else if (lower.endsWith('.ipt') && params.buffer) {
+        preBuiltCad = await parseIPTAsync(params.buffer, params.title);
+      }
+    } catch {
+      // Fall back gracefully to text RAG indexing if binary CAD cannot be tessellated
+    }
+  }
+
+  return tryBuildCadAndRagDoc({ ...params, preBuiltCad });
+}
+

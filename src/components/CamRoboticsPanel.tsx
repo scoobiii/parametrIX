@@ -59,15 +59,15 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
   };
 
   return (
-    <div className="w-[380px] h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden">
+    <div className="w-full md:w-[350px] lg:w-[380px] h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden">
       <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Wrench className="w-4 h-4 text-amber-400" />
-          <h2 className="font-display text-sm font-semibold text-slate-100">
+        <div className="flex items-center gap-2 min-w-0">
+          <Wrench className="w-4 h-4 text-amber-400 shrink-0" />
+          <h2 className="font-display text-sm font-semibold text-slate-100 truncate">
             CAM, Ferramentas & Robótica
           </h2>
         </div>
-        <span className="text-[11px] font-mono-tabular text-emerald-400">
+        <span className="text-[11px] font-mono-tabular text-emerald-400 shrink-0">
           {toolpath.estimatedMinutes.toFixed(1)} min
         </span>
       </div>
@@ -76,7 +76,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
         {/* Machine Mode Selector */}
         <section className="space-y-2">
           <div className="text-xs font-medium text-slate-400">Processo de Fabricação</div>
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-2 gap-2">
             {MACHINE_OPTIONS.map((m) => (
               <button
                 key={m.id}
@@ -87,7 +87,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
                     postFormat: m.defaultPost,
                   })
                 }
-                className={`px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors text-left cursor-pointer ${
+                className={`min-h-[42px] px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors text-left cursor-pointer ${
                   settings.machineType === m.id
                     ? 'border-amber-400/70 bg-amber-500/15 text-amber-200'
                     : 'border-white/8 bg-[#0c1017] text-slate-400 hover:text-slate-200'

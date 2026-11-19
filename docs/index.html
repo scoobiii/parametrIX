@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="pt-BR" class="dark scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Parametrix CAD Studio — NURBS, Editor 3D IX, FEA & SCOOBIII/VUC</title>
+    <meta
+      name="description"
+      content="Plataforma paramétrica NURBS, OpenCASCADE STEP/IPT, FEA estrutural, Caneta Mágica MCP, Pegada de Carbono LCA e prova matemática determinística SCOOBIII/VUC."
+    />
+    <meta property="og:title" content="Parametrix CAD Studio — Engenharia Paramétrica 3D & MCP" />
+    <meta
+      property="og:description"
+      content="Explore ao vivo a superfície NURBS paramétrica, métricas de curvatura, tolerâncias GD&T por camada e análise de carbono de fabricação."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              display: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+              sans: ['"DM Sans"', 'system-ui', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'monospace'],
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      body {
+        background-color: #0b0e14;
+        color: #e6ebf2;
+        font-family: 'DM Sans', system-ui, sans-serif;
+        overflow-x: hidden;
+      }
+      .tabular-nums {
+        font-variant-numeric: tabular-nums;
+      }
+      input[type='range'].git-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        height: 5px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.25);
+        outline: none;
+      }
+      input[type='range'].git-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #38bdf8;
+        border: 2px solid #0b0e14;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body class="antialiased selection:bg-sky-500/30 selection:text-sky-100">
+    <!-- Top Bar (Clean 3-Zone Contract) -->
+    <header class="sticky top-0 z-40 border-b border-white/10 bg-[#0b0e14]/90 backdrop-blur-md">
+      <div class="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-6">
+        <a
+          href="#top"
+          class="font-display text-base sm:text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0"
+        >
+          Parametrix CAD
+        </a>
+
+        <nav class="hidden md:flex items-center gap-6 text-sm font-medium text-slate-400">
+          <a href="#playground" class="hover:text-slate-100 transition-colors whitespace-nowrap shrink-0">
+            Simulador 3D
+          </a>
+          <a href="#segmentos" class="hover:text-slate-100 transition-colors whitespace-nowrap shrink-0">
+            Segmentos & MCP
+          </a>
+          <a href="#arquitetura" class="hover:text-slate-100 transition-colors whitespace-nowrap shrink-0">
+            Arquitetura
+          </a>
+          <a href="#tolerancias" class="hover:text-slate-100 transition-colors whitespace-nowrap shrink-0">
+            GD&amp;T &amp; CO₂
+          </a>
+        </nav>
+
+        <div class="flex items-center gap-2 shrink-0">
+          <button
+            id="mobileMenuBtn"
+            type="button"
+            aria-label="Abrir navegação"
+            class="md:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg border border-white/12 text-slate-200 hover:bg-white/10"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <a
+            href="/"
+            class="min-h-[40px] px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors flex items-center whitespace-nowrap shrink-0"
+          >
+            Abrir Studio 3D
+          </a>
+        </div>
+      </div>
+
+      <!-- Mobile Drawer -->
+      <div id="mobileDrawer" class="hidden md:hidden border-t border-white/10 bg-[#0f141d] px-4 py-3 space-y-2">
+        <a href="#playground" class="block py-2 text-sm text-slate-200 hover:text-sky-400">01. Simulador NURBS Ao Vivo</a>
+        <a href="#segmentos" class="block py-2 text-sm text-slate-200 hover:text-sky-400">02. Segmentos, Normas &amp; MCP</a>
+        <a href="#arquitetura" class="block py-2 text-sm text-slate-200 hover:text-sky-400">03. Kernel OpenCASCADE &amp; IPT</a>
+        <a href="#tolerancias" class="block py-2 text-sm text-slate-200 hover:text-sky-400">04. GD&amp;T &amp; Pegada de Carbono</a>
+      </div>
+    </header>
+
+    <main id="top" class="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-16 sm:space-y-24">
+      <!-- Hero + Live Dynamic 3D NURBS Playground -->
+      <section id="playground" class="space-y-8">
+        <div class="space-y-4 max-w-3xl">
+          <div class="text-xs font-medium text-sky-400">
+            GitPage Dinâmica · OpenCASCADE STEP/IPT · NURBS · SCOOBIII/VUC
+          </div>
+          <h1
+            class="font-display text-3xl sm:text-5xl font-extrabold tracking-tight text-slate-100 leading-[1.1]"
+            style="text-wrap: balance"
+          >
+            Engenharia Paramétrica 3D com Prova Matemática e IA Espacial
+          </h1>
+          <p class="text-sm sm:text-base text-slate-400 leading-relaxed max-w-2xl">
+            Modele cascas NURBS bicúbicas, importe conjuntos reais <code>.STP</code>/<code>.IPT</code>,
+            execute FEA antes/depois, corte e rosqueie na viewport com a Caneta Mágica e verifique
+            cada desigualdade física e normativa em tempo real.
+          </p>
+        </div>
+
+        <!-- Interactive 2-Column Live CAD Playground -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+          <!-- WebGL / Canvas 3D Viewport -->
+          <div class="lg:col-span-7 flex flex-col bg-[#111620] border border-white/10 rounded-2xl overflow-hidden min-h-[320px] sm:min-h-[420px]">
+            <div class="px-4 py-3 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span class="font-semibold text-slate-100">Viewport NURBS Interativa</span>
+              <span id="viewportReadout" class="font-mono tabular-nums text-sky-300 text-[11px]">
+                Grau (3,3) · 34×34 subdivisões
+              </span>
+            </div>
+            <div class="relative flex-1 bg-[#080b10]">
+              <canvas id="nurbsCanvas" class="w-full h-full block min-h-[260px] sm:min-h-[360px] cursor-grab active:cursor-grabbing"></canvas>
+              <div class="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+                <span class="px-2.5 py-1 rounded bg-[#0b0e14]/90 border border-white/10 text-[11px] font-mono tabular-nums text-slate-300">
+                  Arraste para rotacionar a superfície 3D
+                </span>
+                <button
+                  id="btnOptimizeWeight"
+                  type="button"
+                  class="pointer-events-auto min-h-[38px] px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors cursor-pointer"
+                >
+                  Otimizar Peso via Curvatura
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Parametric Sliders & Real-Time Mathematical Output -->
+          <div class="lg:col-span-5 bg-[#111620] border border-white/10 rounded-2xl p-4 sm:p-5 flex flex-col justify-between gap-5">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <h2 class="font-display text-sm font-semibold text-slate-100">
+                  Parâmetros NURBS &amp; Análise Ao Vivo
+                </h2>
+                <button
+                  id="btnResetParams"
+                  type="button"
+                  class="text-xs text-sky-400 hover:text-sky-300 cursor-pointer"
+                >
+                  Resetar
+                </button>
+              </div>
+
+              <div class="space-y-3 text-xs">
+                <div>
+                  <div class="flex justify-between mb-1">
+                    <span class="text-slate-300">Vão X</span>
+                    <span id="valSpanX" class="font-mono tabular-nums text-sky-300">210 mm</span>
+                  </div>
+                  <input id="slSpanX" type="range" min="110" max="320" step="5" value="210" class="git-slider w-full" />
+                </div>
+
+                <div>
+                  <div class="flex justify-between mb-1">
+                    <span class="text-slate-300">Altura / Flecha Z</span>
+                    <span id="valArchZ" class="font-mono tabular-nums text-sky-300">52 mm</span>
+                  </div>
+                  <input id="slArchZ" type="range" min="12" max="100" step="2" value="52" class="git-slider w-full" />
+                </div>
+
+                <div>
+                  <div class="flex justify-between mb-1">
+                    <span class="text-slate-300">Torção Axial</span>
+                    <span id="valTwist" class="font-mono tabular-nums text-sky-300">18°</span>
+                  </div>
+                  <input id="slTwist" type="range" min="-60" max="60" step="2" value="18" class="git-slider w-full" />
+                </div>
+
+                <div>
+                  <div class="flex justify-between mb-1">
+                    <span class="text-slate-300">Espessura Sólida</span>
+                    <span id="valThick" class="font-mono tabular-nums text-sky-300">6.0 mm</span>
+                  </div>
+                  <input id="slThick" type="range" min="2" max="16" step="0.5" value="6" class="git-slider w-full" />
+                </div>
+
+                <div>
+                  <div class="flex justify-between mb-1">
+                    <span class="text-slate-300">Subdivisão NURBS (U×V)</span>
+                    <span id="valSubdiv" class="font-mono tabular-nums text-sky-300">34×34</span>
+                  </div>
+                  <input id="slSubdiv" type="range" min="14" max="60" step="2" value="34" class="git-slider w-full" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Live Computed Engineering Metrics -->
+            <div class="grid grid-cols-2 gap-2.5 pt-4 border-t border-white/10 text-xs">
+              <div class="p-3 rounded-xl bg-[#0c1017] border border-white/8">
+                <div class="text-[11px] text-slate-400">Massa Líquida (Al 6061)</div>
+                <div id="outMass" class="text-base font-bold font-mono tabular-nums text-slate-100 mt-0.5">
+                  0.642 kg
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-[#0c1017] border border-white/8">
+                <div class="text-[11px] text-slate-400">Fator de Segurança SF</div>
+                <div id="outSf" class="text-base font-bold font-mono tabular-nums text-emerald-400 mt-0.5">
+                  2.45×
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-[#0c1017] border border-white/8">
+                <div class="text-[11px] text-slate-400">Erro Cordal ISO 2768</div>
+                <div id="outChord" class="text-base font-bold font-mono tabular-nums text-sky-300 mt-0.5">
+                  0.041 mm
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-[#0c1017] border border-white/8">
+                <div class="text-[11px] text-slate-400">Pegada CO₂ (CNC 5X)</div>
+                <div id="outCo2" class="text-base font-bold font-mono tabular-nums text-amber-300 mt-0.5">
+                  7.84 kgCO₂e
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Dynamic Segment & MCP Explorer -->
+      <section id="segmentos" class="space-y-6">
+        <div class="space-y-2 max-w-2xl">
+          <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-100">
+            01. Normas Técnicas &amp; Ferramentas MCP por Segmento
+          </h2>
+          <p class="text-sm text-slate-400">
+            Selecione um segmento industrial para carregar dinamicamente normas aplicáveis, critérios FEA
+            e o payload JSON-RPC utilizado pelo Agente MCP.
+          </p>
+        </div>
+
+        <div id="segmentTabs" class="flex flex-wrap gap-2"></div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 bg-[#111620] border border-white/10 rounded-2xl p-5 sm:p-6">
+          <div class="space-y-4">
+            <div>
+              <div id="segTitle" class="font-display text-lg font-bold text-slate-100"></div>
+              <div id="segUse" class="text-xs text-slate-400 mt-1 leading-relaxed"></div>
+            </div>
+            <div class="space-y-1.5">
+              <div class="text-xs font-semibold text-emerald-400">Certificações &amp; Normas Obrigatórias</div>
+              <ul id="segNorms" class="space-y-1 text-xs text-slate-300 list-disc list-inside"></ul>
+            </div>
+            <div class="grid grid-cols-3 gap-2 pt-2 border-t border-white/10 text-xs">
+              <div>
+                <div class="text-[11px] text-slate-500">Carga Ref.</div>
+                <div id="segLoad" class="font-mono tabular-nums font-semibold text-amber-300"></div>
+              </div>
+              <div>
+                <div class="text-[11px] text-slate-500">SF Mínimo</div>
+                <div id="segSf" class="font-mono tabular-nums font-semibold text-emerald-300"></div>
+              </div>
+              <div>
+                <div class="text-[11px] text-slate-500">Flecha Máx</div>
+                <div id="segDefl" class="font-mono tabular-nums font-semibold text-sky-300"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-[#080b10] border border-white/10 rounded-xl p-4 flex flex-col justify-between gap-3">
+            <div class="flex items-center justify-between text-xs text-slate-400">
+              <span>Chamada MCP JSON-RPC 2.0</span>
+              <button
+                id="btnCopyMcp"
+                type="button"
+                class="px-2.5 py-1 rounded border border-white/15 text-slate-200 hover:border-sky-400 text-[11px] cursor-pointer"
+              >
+                Copiar JSON
+              </button>
+            </div>
+            <pre
+              id="segMcpJson"
+              class="font-mono text-[11px] text-sky-300 overflow-x-auto leading-relaxed"
+            ></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Architecture & Native CAD Parsers -->
+      <section id="arquitetura" class="space-y-6">
+        <div class="space-y-2 max-w-2xl">
+          <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-100">
+            02. Pipeline de Importação Fidedigna &amp; Kernel Matemático
+          </h2>
+          <p class="text-sm text-slate-400">
+            Processamento real de arquivos industriais no servidor Node/Express e no kernel NURBS no navegador.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <article class="p-5 bg-[#111620] border border-white/10 rounded-2xl space-y-2">
+            <div class="text-xs font-mono text-sky-400">STEP / STP / IGES</div>
+            <h3 class="font-display text-base font-semibold text-slate-100">OpenCASCADE WASM</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Tesselação B-Rep exata via <code>occt-import-js</code> em <code>POST /api/cad/parse-step</code>, preservando nomes de subconjuntos e normais reais.
+            </p>
+          </article>
+
+          <article class="p-5 bg-[#111620] border border-white/10 rounded-2xl space-y-2">
+            <div class="text-xs font-mono text-amber-400">Inventor .IPT</div>
+            <h3 class="font-display text-base font-semibold text-slate-100">OLE2 + zlib + ACIS</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Leitura de contêineres compostos via <code>cfb</code>, descompressão de fluxos e extração de geometria SAT/SAB com escala automática de cm para mm.
+            </p>
+          </article>
+
+          <article class="p-5 bg-[#111620] border border-white/10 rounded-2xl space-y-2">
+            <div class="text-xs font-mono text-emerald-400">SCOOBIII / VUC</div>
+            <h3 class="font-display text-base font-semibold text-slate-100">Prova Determinística</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Verifica partição Cox-de Boor (&lt; 1e-10), Jacobiano &gt; 0, fator K<sub>t</sub> de rasgos, roscas ISO 68-1 e critérios normativos sem chute.
+            </p>
+          </article>
+
+          <article class="p-5 bg-[#111620] border border-white/10 rounded-2xl space-y-2">
+            <div class="text-xs font-mono text-sky-400">Caneta Mágica</div>
+            <h3 class="font-display text-base font-semibold text-slate-100">Edição Direta na Peça</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Marque qualquer ponto ou área 3D para inserir rasgos paramétricos, furos, parafusos métricos M3–M12 ou acionar ferramentas MCP.
+            </p>
+          </article>
+
+          <article class="p-5 bg-[#111620] border border-white/10 rounded-2xl space-y-2">
+            <div class="text-xs font-mono text-emerald-400">Editor 3D IX</div>
+            <h3 class="font-display text-base font-semibold text-slate-100">Object Mask &amp; PBR</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Vista explodida, corte em seção X/Y/Z, medição, D-Pad de câmeras, render por família e troca individual de material PBR por componente.
+            </p>
+          </article>
+
+          <article class="p-5 bg-[#111620] border border-white/10 rounded-2xl space-y-2">
+            <div class="text-xs font-mono text-amber-400">Mobile-First UI</div>
+            <h3 class="font-display text-base font-semibold text-slate-100">Ergonomia Touch</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Barra inferior na zona natural do polegar, gavetas recolhíveis e alvos de toque mínimos de 44px em telas de 360px até 1440px.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <!-- GD&T & Carbon Comparison -->
+      <section id="tolerancias" class="space-y-6">
+        <div class="space-y-2 max-w-2xl">
+          <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-100">
+            03. Tolerâncias GD&amp;T por Camada &amp; Pegada de Carbono LCA
+          </h2>
+          <p class="text-sm text-slate-400">
+            Integração direta entre erro cordal NURBS, deflexão FEA e eficiência energética entre máquinas CNC e robótica 6-eixos.
+          </p>
+        </div>
+
+        <div class="overflow-x-auto bg-[#111620] border border-white/10 rounded-2xl">
+          <table class="w-full text-left text-xs min-w-[560px]">
+            <thead class="border-b border-white/10 text-slate-400 bg-[#0d111a]">
+              <tr>
+                <th class="py-3.5 px-4 font-semibold">Processo / Máquina</th>
+                <th class="py-3.5 px-4 font-semibold">Eficiência Cinemática</th>
+                <th class="py-3.5 px-4 font-semibold">Pós-Processador</th>
+                <th class="py-3.5 px-4 font-semibold">Consumo Médio</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-white/8 text-slate-200 tabular-nums">
+              <tr>
+                <td class="py-3 px-4 font-medium">CNC 3-Eixos</td>
+                <td class="py-3 px-4 font-mono text-slate-300">72%</td>
+                <td class="py-3 px-4 font-mono text-sky-300">Fanuc (.nc) / GRBL</td>
+                <td class="py-3 px-4 font-mono">4.8 kW base</td>
+              </tr>
+              <tr>
+                <td class="py-3 px-4 font-medium">CNC 5-Eixos Simultâneos</td>
+                <td class="py-3 px-4 font-mono text-sky-300">81%</td>
+                <td class="py-3 px-4 font-mono text-sky-300">Fanuc / ISO (.nc)</td>
+                <td class="py-3 px-4 font-mono">6.2 kW base</td>
+              </tr>
+              <tr>
+                <td class="py-3 px-4 font-medium">Robô KUKA KR 6-Eixos</td>
+                <td class="py-3 px-4 font-mono text-emerald-400">92% (Regenerativo)</td>
+                <td class="py-3 px-4 font-mono text-emerald-300">KUKA KRL (.src) / ABB</td>
+                <td class="py-3 px-4 font-mono">2.9 kW base</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="border-t border-white/10 bg-[#0f141d] mt-16">
+      <div class="max-w-6xl mx-auto px-4 sm:px-6 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-xs text-slate-400">
+        <div>
+          <strong class="text-slate-100 font-display">Parametrix CAD Studio</strong> · NURBS, OpenCASCADE, FEA &amp; SCOOBIII/VUC
+        </div>
+        <div class="flex flex-wrap items-center gap-4">
+          <a href="/" class="text-sky-400 hover:text-sky-300">Abrir Aplicação Web</a>
+          <a href="#playground" class="hover:text-slate-200">Topo</a>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      // Mobile menu toggle
+      const mobileBtn = document.getElementById('mobileMenuBtn');
+      const mobileDrawer = document.getElementById('mobileDrawer');
+      mobileBtn.addEventListener('click', () => {
+        mobileDrawer.classList.toggle('hidden');
+      });
+      mobileDrawer.querySelectorAll('a').forEach((link) => {
+        link.addEventListener('click', () => mobileDrawer.classList.add('hidden'));
+      });
+
+      // Live parametric state
+      const state = {
+        spanX: 210,
+        archZ: 52,
+        twist: 18,
+        thick: 6,
+        subdiv: 34,
+        rotY: 0.45,
+        rotX: 0.55,
+      };
+
+      const elSpanX = document.getElementById('slSpanX');
+      const elArchZ = document.getElementById('slArchZ');
+      const elTwist = document.getElementById('slTwist');
+      const elThick = document.getElementById('slThick');
+      const elSubdiv = document.getElementById('slSubdiv');
+
+      function updateMetricsAndRedraw() {
+        document.getElementById('valSpanX').textContent = state.spanX + ' mm';
+        document.getElementById('valArchZ').textContent = state.archZ + ' mm';
+        document.getElementById('valTwist').textContent = state.twist + '°';
+        document.getElementById('valThick').textContent = state.thick.toFixed(1) + ' mm';
+        document.getElementById('valSubdiv').textContent = state.subdiv + '×' + state.subdiv;
+        document.getElementById('viewportReadout').textContent =
+          `Grau (3,3) · ${state.subdiv}×${state.subdiv} subdivisões`;
+
+        const spanY = 145;
+        const volCm3 = (state.spanX * spanY * state.thick) / 1000 * 0.92;
+        const massKg = volCm3 * 0.0027; // Aluminum 6061 2.7 g/cm3
+        const archGain = 1 + (state.archZ / Math.max(80, state.spanX)) * 2.4;
+        const inertiaFactor = Math.pow(state.thick / 6, 2) * archGain;
+        const sf = Math.min(9.9, Math.max(0.4, 1.85 * inertiaFactor * (210 / state.spanX)));
+        const hStep = state.spanX / state.subdiv;
+        const kappa = (4 * state.archZ) / (state.spanX * state.spanX);
+        const chordErr = Math.max(0.004, (hStep * hStep * kappa) / 8);
+        const co2Kg = massKg * 11.4 * 1.35 + 1.85;
+
+        document.getElementById('outMass').textContent = massKg.toFixed(3) + ' kg';
+        const sfEl = document.getElementById('outSf');
+        sfEl.textContent = sf.toFixed(2) + '×';
+        sfEl.className =
+          'text-base font-bold font-mono tabular-nums mt-0.5 ' +
+          (sf >= 2.0 ? 'text-emerald-400' : sf >= 1.3 ? 'text-amber-300' : 'text-rose-400');
+        document.getElementById('outChord').textContent = chordErr.toFixed(3) + ' mm';
+        document.getElementById('outCo2').textContent = co2Kg.toFixed(2) + ' kgCO₂e';
+
+        drawSurface();
+      }
+
+      // Interactive 3D projected NURBS canvas renderer (zero external dependency fallback guaranteed)
+      const canvas = document.getElementById('nurbsCanvas');
+      const ctx = canvas.getContext('2d');
+
+      function resizeCanvas() {
+        const rect = canvas.parentElement.getBoundingClientRect();
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        canvas.width = Math.max(280, Math.floor(rect.width * dpr));
+        canvas.height = Math.max(240, Math.floor(rect.height * dpr));
+        drawSurface();
+      }
+
+      function evalPoint(u, v) {
+        const x0 = (u - 0.5) * state.spanX;
+        const z0 = (v - 0.5) * 145;
+        const uNorm = (u - 0.5) * 2;
+        const vNorm = (v - 0.5) * 2;
+        const arch = state.archZ * (1 - 0.65 * uNorm * uNorm - 0.35 * vNorm * vNorm);
+        const wave = 10 * Math.sin(u * Math.PI * 2) * Math.cos(v * Math.PI);
+        const y0 = arch + wave - state.archZ * 0.35;
+
+        const rad = ((state.twist * Math.PI) / 180) * (u - 0.5);
+        const cosT = Math.cos(rad);
+        const sinT = Math.sin(rad);
+        const yRot = y0 * cosT - z0 * sinT;
+        const zRot = y0 * sinT + z0 * cosT;
+        return [x0, yRot, zRot];
+      }
+
+      function project3D(pt, w, h) {
+        const cy = Math.cos(state.rotY);
+        const sy = Math.sin(state.rotY);
+        const cx = Math.cos(state.rotX);
+        const sx = Math.sin(state.rotX);
+
+        const x1 = pt[0] * cy - pt[2] * sy;
+        const z1 = pt[0] * sy + pt[2] * cy;
+        const y2 = pt[1] * cx - z1 * sx;
+        const z2 = pt[1] * sx + z1 * cx;
+
+        const scale = Math.min(w, h) / 310;
+        const persp = 650 / (650 + z2);
+        return [w * 0.5 + x1 * scale * persp, h * 0.52 - y2 * scale * persp, z2];
+      }
+
+      function drawSurface() {
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const n = Math.min(26, Math.max(10, Math.round(state.subdiv / 1.8)));
+        const grid = [];
+        for (let i = 0; i <= n; i++) {
+          const row = [];
+          for (let j = 0; j <= n; j++) {
+            const p = evalPoint(i / n, j / n);
+            row.push(project3D(p, w, h));
+          }
+          grid.push(row);
+        }
+
+        // Shaded wireframe patches
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            const p00 = grid[i][j];
+            const p10 = grid[i + 1][j];
+            const p11 = grid[i + 1][j + 1];
+            const p01 = grid[i][j + 1];
+            const elev = Math.max(0, Math.min(1, (i + j) / (2 * n)));
+            ctx.beginPath();
+            ctx.moveTo(p00[0], p00[1]);
+            ctx.lineTo(p10[0], p10[1]);
+            ctx.lineTo(p11[0], p11[1]);
+            ctx.lineTo(p01[0], p01[1]);
+            ctx.closePath();
+            ctx.fillStyle = `rgba(56, 189, 248, ${(0.06 + elev * 0.1).toFixed(3)})`;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.42)';
+            ctx.lineWidth = Math.max(0.8, w / 650);
+            ctx.stroke();
+          }
+        }
+      }
+
+      let dragging = false;
+      let lastX = 0;
+      let lastY = 0;
+      canvas.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        canvas.setPointerCapture(e.pointerId);
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        state.rotY += (e.clientX - lastX) * 0.008;
+        state.rotX = Math.max(-1.2, Math.min(1.2, state.rotX + (e.clientY - lastY) * 0.006));
+        lastX = e.clientX;
+        lastY = e.clientY;
+        drawSurface();
+      });
+      canvas.addEventListener('pointerup', () => {
+        dragging = false;
+      });
+
+      [
+        [elSpanX, 'spanX'],
+        [elArchZ, 'archZ'],
+        [elTwist, 'twist'],
+        [elThick, 'thick'],
+        [elSubdiv, 'subdiv'],
+      ].forEach(([input, key]) => {
+        input.addEventListener('input', () => {
+          state[key] = parseFloat(input.value);
+          updateMetricsAndRedraw();
+        });
+      });
+
+      document.getElementById('btnOptimizeWeight').addEventListener('click', () => {
+        state.thick = Math.max(2.5, Number((state.thick * 0.78).toFixed(1)));
+        state.archZ = Math.min(92, state.archZ + 12);
+        elThick.value = state.thick;
+        elArchZ.value = state.archZ;
+        updateMetricsAndRedraw();
+      });
+
+      document.getElementById('btnResetParams').addEventListener('click', () => {
+        state.spanX = 210;
+        state.archZ = 52;
+        state.twist = 18;
+        state.thick = 6;
+        state.subdiv = 34;
+        elSpanX.value = 210;
+        elArchZ.value = 52;
+        elTwist.value = 18;
+        elThick.value = 6;
+        elSubdiv.value = 34;
+        updateMetricsAndRedraw();
+      });
+
+      // Dynamic Segments Explorer
+      const SEGMENTS = [
+        {
+          id: 'ciclismo-mobilidade',
+          label: 'Ciclismo (ISO 4210)',
+          title: 'Mobilidade & Ciclismo High-Load',
+          use: 'Garfos dupla coroa, mesas, guidões e suportes de eixo passante submetidos a fadiga e impacto frontal.',
+          norms: ['ISO 4210-6 (Fadiga e Impacto de Garfos)', 'EN 15194', 'ASTM F2043'],
+          load: '5400 N',
+          sf: '2.50×',
+          defl: '≤ 2.2 mm',
+          mcpTool: 'cad_set_segment_profile',
+        },
+        {
+          id: 'aeroespacial',
+          label: 'Aeroespacial (AS9100)',
+          title: 'Aeroespacial & Propulsão Ti-6Al-4V',
+          use: 'Pás helicoidais, nervuras fresadas em 5-eixos e estruturas leves de alta relação rigidez/massa.',
+          norms: ['AS9100 Rev D', 'NADCAP NDT', 'MIL-STD-810H'],
+          load: '6800 N',
+          sf: '2.20×',
+          defl: '≤ 1.5 mm',
+          mcpTool: 'cad_generate_optimized_geometry',
+        },
+        {
+          id: 'arquitetura-bim',
+          label: 'Arquitetura BIM (NBR 8800)',
+          title: 'Cascas Estruturais & Grelhas Waffle BIM',
+          use: 'Coberturas paramétricas com vigas IfcBeam/IfcMember e validação de flecha máxima de serviço.',
+          norms: ['ABNT NBR 8800 / NBR 6118', 'Eurocode 3 (EN 1993)', 'ISO 16739 (IFC4)'],
+          load: '9500 N',
+          sf: '2.00×',
+          defl: '≤ 3.5 mm',
+          mcpTool: 'cad_evaluate_nurbs_metrics',
+        },
+        {
+          id: 'industrial-cnc',
+          label: 'CNC Industrial (ISO 2768)',
+          title: 'Flanges, Matrizes & Ferramentaria CNC',
+          use: 'Usinagem 3/5-eixos com tolerâncias geométricas GD&T por camada e furação métrica ISO.',
+          norms: ['ISO 2768-mK', 'ASME Y14.5 GD&T', 'DIN ISO 286'],
+          load: '6500 N',
+          sf: '2.80×',
+          defl: '≤ 0.8 mm',
+          mcpTool: 'cad_magic_pen_feature',
+        },
+        {
+          id: 'robotica',
+          label: 'Robótica 6-Eixos (KUKA)',
+          title: 'Células Robóticas & Efetuadores KRL',
+          use: 'Efetuadores leves em fibra de carbono e trajetórias contínuas com cinemática inversa 6-eixos.',
+          norms: ['ISO 10218-1 / TS 15066', 'ISO 9283 Repetibilidade'],
+          load: '3600 N',
+          sf: '2.30×',
+          defl: '≤ 1.2 mm',
+          mcpTool: 'cad_generate_cam_toolpath',
+        },
+      ];
+
+      let activeSeg = SEGMENTS[0];
+      const tabsWrap = document.getElementById('segmentTabs');
+
+      function renderSegments() {
+        tabsWrap.innerHTML = '';
+        SEGMENTS.forEach((seg) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = seg.label;
+          btn.className =
+            'min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors cursor-pointer ' +
+            (seg.id === activeSeg.id
+              ? 'bg-sky-500 text-slate-950 border-sky-400 font-semibold'
+              : 'bg-[#111620] text-slate-300 border-white/12 hover:border-sky-400/50');
+          btn.addEventListener('click', () => {
+            activeSeg = seg;
+            renderSegments();
+          });
+          tabsWrap.appendChild(btn);
+        });
+
+        document.getElementById('segTitle').textContent = activeSeg.title;
+        document.getElementById('segUse').textContent = activeSeg.use;
+        document.getElementById('segLoad').textContent = activeSeg.load;
+        document.getElementById('segSf').textContent = activeSeg.sf;
+        document.getElementById('segDefl').textContent = activeSeg.defl;
+
+        const ul = document.getElementById('segNorms');
+        ul.innerHTML = '';
+        activeSeg.norms.forEach((n) => {
+          const li = document.createElement('li');
+          li.textContent = n;
+          ul.appendChild(li);
+        });
+
+        const payload = {
+          jsonrpc: '2.0',
+          id: 'mcp-seg-01',
+          method: 'tools/call',
+          params: {
+            name: activeSeg.mcpTool,
+            arguments: {
+              segment: activeSeg.id,
+              verifyScoobiiiVuc: true,
+            },
+          },
+        };
+        document.getElementById('segMcpJson').textContent = JSON.stringify(payload, null, 2);
+      }
+
+      document.getElementById('btnCopyMcp').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(document.getElementById('segMcpJson').textContent);
+          document.getElementById('btnCopyMcp').textContent = 'Copiado!';
+          setTimeout(() => {
+            document.getElementById('btnCopyMcp').textContent = 'Copiar JSON';
+          }, 1500);
+        } catch {
+          // Ignore clipboard restrictions
+        }
+      });
+
+      window.addEventListener('resize', resizeCanvas);
+      renderSegments();
+      resizeCanvas();
+      updateMetricsAndRedraw();
+    </script>
+  </body>
+</html>
