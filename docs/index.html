@@ -421,6 +421,102 @@
           </table>
         </div>
       </section>
+
+      <!-- 05. CI Runner Sandbox & Prova Formal VUC em Tempo Real -->
+      <section id="ci-sandbox" class="scroll-mt-20 space-y-5">
+        <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+          <div>
+            <div class="text-xs font-mono text-emerald-400 uppercase tracking-wider">
+              05. CI Runner Sandbox · GitHub Actions API &amp; Prova VUC (SHA-256 + Ed25519)
+            </div>
+            <h2 class="font-display text-2xl font-bold text-slate-100 mt-1">
+              Status Real do Repositório &amp; Gatilhos de Execução
+            </h2>
+          </div>
+          <span
+            id="ciLiveBadge"
+            class="px-3 py-1 text-xs font-mono rounded-lg border border-white/15 bg-[#111620] text-slate-300"
+          >
+            Consultando Actions API...
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div class="bg-[#111620] border border-white/10 rounded-xl p-5 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="text-sm font-semibold text-slate-100">
+                Últimos Runs · scoobiii/parametrIX (Polling 15s)
+              </h3>
+              <button
+                id="btnRefreshActions"
+                type="button"
+                class="px-3 py-1.5 text-xs font-medium bg-sky-500/15 border border-sky-400/40 text-sky-200 rounded-lg hover:bg-sky-500/25 cursor-pointer"
+              >
+                Atualizar Agora
+              </button>
+            </div>
+            <div id="ciRunsList" class="space-y-2 text-xs font-mono text-slate-300">
+              <div class="p-3 bg-[#090d14] border border-white/8 rounded-lg">
+                Buscando runs reais em api.github.com/repos/scoobiii/parametrIX/actions/runs...
+              </div>
+            </div>
+            <div class="pt-2 border-t border-white/10 space-y-2">
+              <label class="block text-[11px] text-slate-400">
+                Token Read/Workflow opcional (apenas em memória na sessão para disparar <code>workflow_dispatch</code>):
+              </label>
+              <div class="flex flex-wrap gap-2">
+                <input
+                  id="ghSessionPat"
+                  type="password"
+                  placeholder="github_pat_... (opcional, nunca salvo)"
+                  class="flex-1 min-w-[180px] px-3 py-1.5 text-xs bg-[#090d14] border border-white/12 rounded-lg text-slate-100 font-mono outline-none focus:border-sky-400"
+                />
+                <button
+                  type="button"
+                  data-sandbox-action="audit"
+                  class="btnSandboxDispatch px-3 py-1.5 text-xs font-semibold bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 rounded-lg cursor-pointer"
+                >
+                  Rodar audit:cad
+                </button>
+                <button
+                  type="button"
+                  data-sandbox-action="test"
+                  class="btnSandboxDispatch px-3 py-1.5 text-xs font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 rounded-lg cursor-pointer"
+                >
+                  Rodar Testes 100%
+                </button>
+                <button
+                  type="button"
+                  data-sandbox-action="vuc-proof"
+                  class="btnSandboxDispatch px-3 py-1.5 text-xs font-semibold bg-amber-500/15 border border-amber-400/40 text-amber-200 rounded-lg cursor-pointer"
+                >
+                  Gerar Prova VUC
+                </button>
+              </div>
+              <div id="sandboxTriggerFeedback" class="text-[11px] font-mono text-slate-400"></div>
+            </div>
+          </div>
+
+          <div class="bg-[#111620] border border-white/10 rounded-xl p-5 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="text-sm font-semibold text-slate-100">
+                Último Certificado VUC Formal (SHA-256 + Ed25519)
+              </h3>
+              <button
+                id="btnLoadVucProof"
+                type="button"
+                class="px-3 py-1.5 text-xs font-medium bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 rounded-lg hover:bg-emerald-500/25 cursor-pointer"
+              >
+                Validar VUC Local
+              </button>
+            </div>
+            <pre
+              id="vucProofPre"
+              class="p-3 bg-[#090d14] border border-white/8 rounded-lg text-[11px] font-mono text-emerald-300 overflow-x-auto max-h-64"
+            >Consultando /api/vuc/latest-proof ou proof/vuc-latest.json...</pre>
+          </div>
+        </div>
+      </section>
     </main>
 
     <footer class="border-t border-white/10 bg-[#0f141d] mt-16">
@@ -760,6 +856,121 @@
       renderSegments();
       resizeCanvas();
       updateMetricsAndRedraw();
+
+      // Live GitHub Actions API + Formal VUC Proof Polling (15s) — honest OFFLINE state if unreachable
+      let lastKnownVuc = null;
+
+      async function loadLatestVucProof() {
+        const pre = document.getElementById('vucProofPre');
+        const tryUrls = ['/api/vuc/latest-proof', './proof/vuc-latest.json', '../proof/vuc-latest.json'];
+        for (const u of tryUrls) {
+          try {
+            const resp = await fetch(u, { cache: 'no-store' });
+            if (resp.ok) {
+              const data = await resp.json();
+              lastKnownVuc = data.certificate || data;
+              pre.textContent = JSON.stringify(lastKnownVuc, null, 2);
+              return;
+            }
+          } catch {
+            // try next real endpoint
+          }
+        }
+        pre.textContent = lastKnownVuc
+          ? JSON.stringify({ status: 'OFFLINE', lastValidVuc: lastKnownVuc }, null, 2)
+          : 'OFFLINE — nenhum certificado VUC local encontrado. Execute `npm run vuc:proof` ou abra via servidor Studio.';
+      }
+
+      async function fetchGitHubRuns() {
+        const badge = document.getElementById('ciLiveBadge');
+        const listEl = document.getElementById('ciRunsList');
+        try {
+          const resp = await fetch(
+            'https://api.github.com/repos/scoobiii/parametrIX/actions/runs?per_page=5',
+            { headers: { Accept: 'application/vnd.github+json' } }
+          );
+          if (!resp.ok) {
+            throw new Error('HTTP ' + resp.status);
+          }
+          const data = await resp.json();
+          const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+          if (runs.length === 0) {
+            badge.textContent = 'Actions: sem runs públicos';
+            listEl.innerHTML =
+              '<div class="p-3 bg-[#090d14] border border-white/8 rounded-lg">Nenhum workflow run encontrado no repositório.</div>';
+            return;
+          }
+          const top = runs[0];
+          badge.textContent =
+            'CI: ' + (top.conclusion || top.status) + ' · ' + String(top.head_sha || '').slice(0, 7);
+          listEl.innerHTML = runs
+            .map(
+              (r) =>
+                '<a href="' +
+                r.html_url +
+                '" target="_blank" rel="noopener noreferrer" class="block p-2.5 bg-[#090d14] border border-white/8 hover:border-sky-400/50 rounded-lg">' +
+                '<div class="flex justify-between text-slate-100"><span>' +
+                r.name +
+                '</span><span class="text-sky-300">' +
+                (r.conclusion || r.status) +
+                '</span></div>' +
+                '<div class="text-[10px] text-slate-500 mt-0.5">commit ' +
+                String(r.head_sha || '').slice(0, 7) +
+                ' · ' +
+                new Date(r.updated_at).toLocaleString('pt-BR') +
+                '</div></a>'
+            )
+            .join('');
+        } catch (err) {
+          badge.textContent = 'OFFLINE / Actions indisponível';
+          listEl.innerHTML =
+            '<div class="p-3 bg-[#090d14] border border-amber-400/30 rounded-lg text-amber-200">' +
+            'OFFLINE (' +
+            (err && err.message ? err.message : 'rede indisponível') +
+            '). Exibindo último estado conhecido sem simulação.' +
+            '</div>';
+        }
+      }
+
+      document.querySelectorAll('.btnSandboxDispatch').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const action = btn.getAttribute('data-sandbox-action') || 'full-ci';
+          const pat = document.getElementById('ghSessionPat').value.trim();
+          const fb = document.getElementById('sandboxTriggerFeedback');
+          if (!pat) {
+            fb.textContent =
+              'Informe um token GitHub (Actions: write) no campo acima para disparar workflow_dispatch real em sandbox.yml.';
+            return;
+          }
+          fb.textContent = 'Disparando sandbox.yml (' + action + ')...';
+          try {
+            const resp = await fetch(
+              'https://api.github.com/repos/scoobiii/parametrIX/actions/workflows/sandbox.yml/dispatches',
+              {
+                method: 'POST',
+                headers: {
+                  Accept: 'application/vnd.github+json',
+                  Authorization: 'Bearer ' + pat,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ref: 'main', inputs: { action } }),
+              }
+            );
+            fb.textContent = resp.ok
+              ? 'Workflow sandbox.yml disparado (' + action + '). Polling atualizará em até 15s.'
+              : 'Falha ao disparar sandbox.yml: HTTP ' + resp.status;
+            if (resp.ok) setTimeout(fetchGitHubRuns, 3000);
+          } catch (err) {
+            fb.textContent = 'Erro de rede ao disparar sandbox: ' + (err && err.message ? err.message : '');
+          }
+        });
+      });
+
+      document.getElementById('btnRefreshActions').addEventListener('click', fetchGitHubRuns);
+      document.getElementById('btnLoadVucProof').addEventListener('click', loadLatestVucProof);
+      void loadLatestVucProof();
+      void fetchGitHubRuns();
+      setInterval(fetchGitHubRuns, 15000);
     </script>
   </body>
 </html>

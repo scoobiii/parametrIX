@@ -135,6 +135,20 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
       if (transcript) {
         const intent = onVoiceTranscript(transcript);
         speakFeedback(intent.feedbackText);
+        if (intent.action === 'agent-query' || !intent.matched) {
+          setBarExpanded(true);
+          setAgentBusy(true);
+          void onSendAgentPrompt(
+            transcript,
+            currentCred.endpointUrl,
+            selectedAgentId === 'local-llm' ? localLlmRec?.modelId : selectedEntry.defaultModel
+          )
+            .then((reply) => {
+              setAgentReply(reply);
+              speakFeedback(reply);
+            })
+            .finally(() => setAgentBusy(false));
+        }
       }
       setListening(false);
     };
@@ -145,19 +159,7 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
     rec.start();
   };
 
-  const handleDispatchPrompt = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = promptDraft.trim();
-    if (!text) return;
-
-    const possibleIntent = onVoiceTranscript(text);
-    if (possibleIntent.matched) {
-      speakFeedback(possibleIntent.feedbackText);
-      setPromptDraft('');
-      setAgentReply(`Comando executado: ${possibleIntent.feedbackText}`);
-      return;
-    }
-
+  const dispatchAgentText = async (text: string) => {
     setAgentBusy(true);
     try {
       const reply = await onSendAgentPrompt(
@@ -166,10 +168,27 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
         selectedAgentId === 'local-llm' ? localLlmRec?.modelId : selectedEntry.defaultModel
       );
       setAgentReply(reply);
+      speakFeedback(reply);
       setPromptDraft('');
     } finally {
       setAgentBusy(false);
     }
+  };
+
+  const handleDispatchPrompt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = promptDraft.trim();
+    if (!text) return;
+
+    const possibleIntent = onVoiceTranscript(text);
+    if (possibleIntent.matched && possibleIntent.action !== 'agent-query') {
+      speakFeedback(possibleIntent.feedbackText);
+      setPromptDraft('');
+      setAgentReply(`Comando executado: ${possibleIntent.feedbackText}`);
+      return;
+    }
+
+    await dispatchAgentText(text);
   };
 
   return (
@@ -296,23 +315,53 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
       {(barExpanded || lastVoiceStatus || agentReply) && (
         <div className="mt-2 pt-2 border-t border-white/8 flex flex-col gap-1.5">
           {barExpanded && (
-            <form onSubmit={handleDispatchPrompt} className="flex items-center gap-2">
-              <input
-                type="text"
-                value={promptDraft}
-                onChange={(e) => setPromptDraft(e.target.value)}
-                placeholder='Comando voz/texto ou pergunta ao agente (ex: "reiniciar cam", "modo po metalico", "frostbite")...'
-                className="flex-1 px-3 py-1.5 text-xs bg-[#090c11] border border-white/12 rounded text-slate-100 outline-none focus:border-sky-400"
-              />
-              <button
-                type="submit"
-                disabled={agentBusy}
-                className="px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded hover:bg-sky-400 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
-              >
-                <Send className="w-3.5 h-3.5" />
-                {agentBusy ? 'Enviando...' : 'Executar'}
-              </button>
-            </form>
+            <div className="space-y-1.5">
+              <form onSubmit={handleDispatchPrompt} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={promptDraft}
+                  onChange={(e) => setPromptDraft(e.target.value)}
+                  placeholder='Comando CAM ou pergunta ao agente (ex: "reiniciar cam", "modo po metalico", "qual a sinterizacao?")...'
+                  className="flex-1 px-3 py-1.5 text-xs bg-[#090c11] border border-white/12 rounded text-slate-100 outline-none focus:border-sky-400"
+                />
+                <button
+                  type="submit"
+                  disabled={agentBusy}
+                  className="px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded hover:bg-sky-400 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {agentBusy ? 'Enviando...' : 'Executar'}
+                </button>
+              </form>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: 'Reiniciar CAM', cmd: 'reiniciar cam' },
+                  { label: 'Pó Metálico LPBF', cmd: 'modo po metalico' },
+                  { label: 'Resina SLA', cmd: 'modo resina' },
+                  { label: 'Cold-Plate DC', cmd: 'coldplate' },
+                  { label: 'Prova VUC Ed25519', cmd: 'prova vuc' },
+                  { label: 'Enviar Código G / MQTT', cmd: 'enviar codigo g' },
+                  { label: 'Agente: Status CAM & Sinterização', cmd: 'qual parametro de sinterizacao e ferramenta CAM atual?' },
+                ].map((chip) => (
+                  <button
+                    key={chip.label}
+                    type="button"
+                    onClick={() => {
+                      const intent = onVoiceTranscript(chip.cmd);
+                      if (intent.matched && intent.action !== 'agent-query') {
+                        speakFeedback(intent.feedbackText);
+                        setAgentReply(`Comando executado: ${intent.feedbackText}`);
+                      } else {
+                        void dispatchAgentText(chip.cmd);
+                      }
+                    }}
+                    className="px-2 py-0.5 text-[10px] font-mono-tabular bg-[#141a24] border border-white/10 text-slate-300 hover:border-sky-400 hover:text-sky-200 rounded cursor-pointer"
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           {(lastVoiceStatus || agentReply) && (
             <div className="text-[11px] font-mono-tabular text-slate-300 bg-[#090c11] border border-white/8 rounded px-2.5 py-1 flex items-center justify-between gap-2">

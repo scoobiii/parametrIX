@@ -918,11 +918,27 @@ export interface RemoteMachineTarget {
   id: string;
   name: string;
   machineType: MachineType;
-  protocol: 'OPC-UA' | 'HTTP-Moonraker' | 'SSH-KUKA-Bridge' | 'GRBL-Serial-WS';
+  protocol: 'OPC-UA' | 'HTTP-Moonraker' | 'SSH-KUKA-Bridge' | 'GRBL-Serial-WS' | 'MQTT';
   endpointUrl: string;
   status: 'online' | 'executando' | 'standby';
   lastJobVuc: string;
+  mqttEnabled?: boolean;
+  mqttBrokerUrl?: string;
+  mqttTopic?: string;
+  mqttQos?: 0 | 1 | 2;
   updatedAt: string;
+}
+
+export interface RemoteMqttTelemetryEvent {
+  id: string;
+  machineId: string;
+  machineName: string;
+  brokerUrl: string;
+  topic: string;
+  qos: 0 | 1 | 2;
+  payloadSummary: string;
+  vucHash: string;
+  timestamp: string;
 }
 
 export interface VoiceActionIntent {
@@ -933,6 +949,10 @@ export interface VoiceActionIntent {
     | 'play-cam'
     | 'pause-cam'
     | 'set-process'
+    | 'select-program'
+    | 'dispatch-remote'
+    | 'verify-vuc'
+    | 'agent-query'
     | 'load-preset'
     | 'run-fea'
     | 'optimize-curvature'
@@ -944,6 +964,22 @@ export interface VoiceActionIntent {
     | 'unknown';
   param?: string;
   feedbackText: string;
+}
+
+export interface FormalVucCertificate {
+  vuc_id: string;
+  domain: string;
+  status: 'PASS' | 'FAIL';
+  hash_input: string;
+  hash_output: string;
+  hash_processo: string;
+  commit: string;
+  runner: string;
+  node_version: string;
+  duracao_ms: number;
+  timestamp: string;
+  assinatura_ed25519: string;
+  public_key_pem: string;
 }
 
 export type CamProgramTargetCategory = 'datacenter' | 'humanoid';

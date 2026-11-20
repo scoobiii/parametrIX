@@ -1,9 +1,10 @@
 import type { VoiceActionIntent } from '../types/cad';
 
 /**
- * Deterministic voice transcript interpreter (Portuguese & English)
- * enabling full hands-free control over CAM restart, manufacturing modes,
- * presets, FEA, curvature optimization, edge drawers, agents, and exports.
+ * Deterministic voice & text CAM command interpreter (Portuguese & English)
+ * enabling full hands-free control over CAM restart, all 8 manufacturing modes,
+ * Datacenter/Humanoid programs, remote G-code/MQTT dispatch, formal VUC proof,
+ * presets, FEA, curvature optimization, agent Q&A routing, and exports.
  */
 export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
   const transcript = rawTranscript.trim();
@@ -18,6 +19,16 @@ export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
       matched: false,
       action: 'unknown',
       feedbackText: 'Comando de voz vazio.',
+    };
+  }
+
+  if (/(^(agente|perguntar|explique|como esta|qual|quais|status)\b|\?$)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'agent-query',
+      param: transcript,
+      feedbackText: 'Consultando agente CAM com Olho MCP e prova VUC.',
     };
   }
 
@@ -45,6 +56,46 @@ export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
       matched: true,
       action: 'play-cam',
       feedbackText: 'Iniciando simulação CAM em tempo real.',
+    };
+  }
+
+  if (/(cold ?plate|liquid cooling|trocador)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'select-program',
+      param: 'dc-coldplate',
+      feedbackText: 'Carregando programa CAM Cold-Plate Liquid Cooling do Datacenter.',
+    };
+  }
+
+  if (/(manifold|engate rapido)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'select-program',
+      param: 'dc-manifold',
+      feedbackText: 'Carregando programa CAM Manifold LPBF em pó metálico.',
+    };
+  }
+
+  if (/(torso|humanoide|endo ?esqueleto)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'select-program',
+      param: 'hum-torso',
+      feedbackText: 'Carregando programa CAM Endoesqueleto Torácico do Robô Humanoide.',
+    };
+  }
+
+  if (/(atuador|harmonico|junta)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'select-program',
+      param: 'hum-actuator',
+      feedbackText: 'Carregando programa CAM Atuador Harmônico 5-eixos.',
     };
   }
 
@@ -85,6 +136,64 @@ export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
       action: 'set-process',
       param: 'laser-cut',
       feedbackText: 'Modo CAM alterado para Corte / Sinterização a Laser.',
+    };
+  }
+
+  if (/(5 eixos|cinco eixos|cnc 5)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'set-process',
+      param: 'cnc-5axis',
+      feedbackText: 'Modo CAM alterado para Centro CNC 5-Eixos Simultâneo.',
+    };
+  }
+
+  if (/(3 eixos|tres eixos|cnc 3|fresadora)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'set-process',
+      param: 'cnc-3axis',
+      feedbackText: 'Modo CAM alterado para Fresadora CNC 3-Eixos.',
+    };
+  }
+
+  if (/(kuka|6 eixos|seis eixos|braco robo)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'set-process',
+      param: 'robot-6axis',
+      feedbackText: 'Modo CAM alterado para Robô Industrial KUKA 6-Eixos.',
+    };
+  }
+
+  if (/(usinagem manual|modo manual|dro)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'set-process',
+      param: 'manual',
+      feedbackText: 'Modo CAM alterado para Usinagem Manual / DRO.',
+    };
+  }
+
+  if (/(enviar codigo g|despachar maquina|despacho remoto|mqtt)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'dispatch-remote',
+      feedbackText: 'Despachando código G e telemetria MQTT para máquina remota.',
+    };
+  }
+
+  if (/(prova vuc|certificado vuc|hash vuc|assinar vuc|ed25519)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'verify-vuc',
+      feedbackText: 'Gerando prova formal VUC SHA-256 com assinatura Ed25519.',
     };
   }
 
@@ -167,6 +276,6 @@ export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
     transcript,
     matched: false,
     action: 'unknown',
-    feedbackText: `Comando não reconhecido: "${transcript}". Tente "reiniciar CAM", "modo resina", "frostbite" ou "rodar FEA".`,
+    feedbackText: `Comando não reconhecido: "${transcript}". Tente "reiniciar CAM", "modo pó metálico", "coldplate", "prova VUC" ou "agente ...?".`,
   };
 }

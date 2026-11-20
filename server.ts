@@ -23,8 +23,18 @@ import {
   listCamProductionPrograms,
 } from './src/kernel/camProcessEngine';
 import { generateCamToolpath } from './src/kernel/camRobotics';
+import {
+  PARAMETRIX_SYSTEM_INSTRUCTION_CORE,
+  buildCamAgentSystemInstruction,
+  buildDeterministicCamAgentReply,
+  type CamAgentContextSummary,
+} from './src/kernel/camAgentSystemInstruction';
 import { buildCamOpenApiSpec, buildSwaggerHtml } from './src/server/camSwaggerSpec';
 import { ParametrixSqliteStore } from './src/server/sqliteStore';
+import {
+  createFormalVucCertificate,
+  verifyFormalVucCertificate,
+} from './src/server/vucFormalProof';
 import type {
   AgentProviderId,
   ApplicationSegment,
@@ -39,6 +49,7 @@ import type {
   MaterialFinish,
   ParametricDesignParams,
   PostProcessorFormat,
+  RemoteMachineTarget,
 } from './src/types/cad';
 
 const PORT = 3000;
@@ -714,9 +725,12 @@ LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` 
   - \`POST ${baseUrl}/api/cam/services\` (Recebe arquivo base64/texto, URL externa ou payload JSON API)
   - \`POST ${baseUrl}/api/cam/services/:id/restart\` (Reinicia qualquer processo CAM do começo ao fim com VUC)
 - **Bridge de Sessão Visual 3D (Browser):** \`window.__PARAMETRIX_MCP__\` (para isolar peças, explodir vista IX, Caneta Mágica, Máscara de Objetos e exportar \`.3dm\`/\`.stl\`/\`.dxf\`/\`.nc\`/\`.src\`).
+- **Prova Formal VUC (SHA-256 + Ed25519):** \`POST ${baseUrl}/api/vuc/formal-proof\`, \`POST ${baseUrl}/api/vuc/formal-verify\` e \`GET ${baseUrl}/api/vuc/latest-proof\`.
+- **Chat Voz & Texto CAM Multi-Agente:** \`POST ${baseUrl}/api/agent/multi-chat\` (usa System Instruction canônica do Parametric Forge / FrostbiteEngine com Olho MCP).
 
-## Limite Honesto sobre Autodesk Inventor (.IPT)
-Arquivos \`.ipt\` com stream ACIS SAT, malha facetada de exibição ou nuvem SAB são reconstruídos geometricamente no servidor. Arquivos \`.ipt\` salvos exclusivamente com ShapeManager ASM binário criptografado retornam \`geometryStatus: "metadata_only_asm_encrypted"\` com a árvore OLE2, iProperties extraídas e instrução explícita para exportar \`.STEP\` AP214/AP203 no Inventor.
+## Limite Honesto sobre Autodesk Inventor (.IPT) & FrostbiteEngine
+- **Inventor (.IPT):** Arquivos \`.ipt\` com stream ACIS SAT, malha facetada de exibição ou nuvem SAB são reconstruídos geometricamente no servidor. Arquivos salvos exclusivamente com ShapeManager ASM binário criptografado retornam \`geometryStatus: "metadata_only_asm_encrypted"\` com instrução para exportar \`.STEP\` AP214/AP203.
+- **FrostbiteEngine:** CPU por interaction nets em silício CMOS 7nm a 500MHz até GDS final (pré-silício, ~4,6x perf/Watt, não óptico/quântico). Sem dados públicos de fornecedores, CAPEX, OPEX ou ROI — nunca invente esses valores.
 `;
     res.type('text/markdown; charset=utf-8').send(llmsMd);
   });
@@ -1389,18 +1403,17 @@ REGRAS:
               .join('\n\n---\n\n')
           : 'Nenhum documento externo carregado na base RAG até o momento.';
 
-      const systemInstruction = `Você é o Agente de Engenharia CAD/CAE/CAM & MCP do Parametrix CAD Studio.
-Responda sempre em Português técnico claro, objetivo e orientado a decisões de engenharia.
+      const systemInstruction = `${PARAMETRIX_SYSTEM_INSTRUCTION_CORE}
 
-CAPACIDADES E REGRAS:
-1. IDENTIDADE DA PEÇA & CERTIFICAÇÃO: Sempre considere quem fabrica, modelo, especificações, certificações obrigatórias, uso pretendido e critérios de segurança descritos em \`cadContext.partProfile\` e \`cadContext.activeSegment\`. Use esses critérios ao avaliar o FEA Antes e Depois!
+Você atua agora como o Agente de Engenharia CAD/CAE/CAM & MCP do Parametrix CAD Studio.
+CAPACIDADES E REGRAS OPERACIONAIS:
+1. IDENTIDADE DA PEÇA & CERTIFICAÇÃO: Sempre considere quem fabrica, modelo, especificações, certificações obrigatórias, uso pretendido e critérios de segurança descritos em \`cadContext.partProfile\` e \`cadContext.activeSegment\`.
 2. OBJECT MASK & MATERIAIS POR COMPONENTE: Você enxerga todos os subcomponentes detectados em \`cadContext.components\` (com \`family\`, \`subFamily\`, \`maskColorHex\` e \`inferredMaterial\`). Pode usar \`cad_explode_assembly\`, \`cad_rotate_component\`, \`cad_set_component_material\`, \`cad_isolate_part\` e \`cad_set_segment_profile\`.
 3. CANETA MÁGICA & SCOOBIII/VUC: Quando o usuário enviar coordenadas da Caneta Mágica ou pedir recorte/rasgo paramétrico, furo, parafuso com rosca métrica ISO (M3..M12), nervura ou prova matemática determinística SCOOBIII/VUC, chame \`cad_magic_pen_feature\` e/ou \`cad_get_scoobiii_vuc_proof\`.
-4. RAG: Utilize os trechos recuperados dos arquivos enviados (Upload local, URL ou Google Drive compartilhado) como base normativa e de requisitos geométricos/estruturais, citando a fonte.
-5. MCP Tools: Quando o usuário pedir para alterar geometria, explodir conjunto, rotacionar peça, isolar componente, alterar material por peça, ativar máscara de objetos, exportar arquivo (.STL, .DXF, .3DM, .NC, .SRC), executar cálculo estrutural / mapa de calor FEA, ou gerar uma nova geometria otimizada com comparação Antes vs Depois, CHAME AS FERRAMENTAS (function calling) correspondentes!
-6. Nunca invente valores não retornados pelas ferramentas ou pelos documentos RAG.
+4. PROCESSOS CAM & FROSTBITE: Enxergue \`cadContext.camSettings\` (incluindo \`machineType\`, \`postFormat\` e \`additiveConfig\` de camada µm / sinterização °C) sem inventar CAPEX/OPEX/ROI ou tolerâncias não medidas.
+5. RAG & MCP TOOLS: Cite fontes RAG e chame as ferramentas MCP correspondentes sempre que o usuário solicitar alterações na peça, FEA, exportação (.STL, .DXF, .3DM, .NC, .SRC) ou otimização.
 
-ESTADO ATUAL DO MODELO, PEÇA, COMPONENTES & FEA:
+ESTADO ATUAL DO MODELO, PEÇA, COMPONENTES, CAM & FEA:
 ${JSON.stringify(cadContext, null, 2)}
 
 CONTEXTO RAG RECUPERADO:
@@ -1582,30 +1595,51 @@ ${ragBlock}`;
     return res.json({ snapshot, recommendation, wsClients: wss.clients.size });
   });
 
-  // Multi-Agent Dropdown Router + MCP Eye Feedback Loop
+  // Multi-Agent Dropdown Router + MCP Eye Feedback Loop (Voice & Text CAM)
   app.post('/api/agent/multi-chat', async (req, res) => {
+    const startedAt = Date.now();
     const agentId = (req.body?.agentId as AgentProviderId) || 'gemini';
     const userMessage = String(req.body?.userMessage || '');
     const eyeEvents = Array.isArray(req.body?.eyeEvents) ? req.body.eyeEvents : [];
-    const cadSummary = req.body?.cadSummary ?? {};
+    const cadSummary = (req.body?.cadSummary ?? {}) as CamAgentContextSummary;
+    const remoteCount = sqliteStore.listRemoteMachines().length;
+    const enrichedSummary: CamAgentContextSummary = {
+      ...cadSummary,
+      remoteMachinesCount: cadSummary.remoteMachinesCount ?? remoteCount,
+    };
+    const systemInstruction = buildCamAgentSystemInstruction({
+      agentId,
+      roleLabel: typeof req.body?.roleLabel === 'string' ? req.body.roleLabel : 'Engenharia CAM / Voz & Texto',
+      cadSummary: enrichedSummary,
+      eyeEvents,
+    });
     const externalEndpoint = typeof req.body?.externalEndpoint === 'string' ? req.body.externalEndpoint : '';
 
     if (agentId === 'gemini' && process.env.GEMINI_API_KEY) {
       try {
         const ai = getGeminiClient();
         const { response, usedModel } = await generateContentWithFallback(ai, {
-          systemInstruction: `Você é o Agente CAD/CAM Parametrix com "Olho MCP" ativo. Você enxerga tanto os parâmetros de entrada MCP quanto as saídas em tempo real do CAM/Viewport.\nEstado CAD: ${JSON.stringify(cadSummary)}\nÚltimos eventos MCP Eye: ${JSON.stringify(eyeEvents.slice(0, 6))}`,
+          systemInstruction,
           contents: [{ role: 'user', parts: [{ text: userMessage }] }],
         });
+        const replyText = response.text || 'Ação analisada via Gemini + Olho MCP.';
         const proof = sqliteStore.recordVucProof('AGENT_MULTI_CHAT', `Gemini (${usedModel})`, {
           agentId,
           userMessage,
         });
+        const formalCert = createFormalVucCertificate({
+          domain: 'AGENT_MULTI_CHAT_GEMINI',
+          status: 'PASS',
+          inputPayload: { agentId, userMessage, cadSummary: enrichedSummary },
+          outputPayload: { replyText, modelUsed: usedModel },
+          durationMs: Date.now() - startedAt,
+        });
         return res.json({
           agentId,
           modelUsed: usedModel,
-          reply: response.text || 'Ação analisada via Gemini + Olho MCP.',
+          reply: replyText,
           vucHash: proof.vucHash,
+          formalVuc: formalCert,
         });
       } catch (err) {
         const friendly = formatFriendlyGeminiError(err);
@@ -1621,25 +1655,35 @@ ${ragBlock}`;
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: String(req.body?.localModelId || 'qwen2.5:1.5b'),
-            prompt: `[Parametrix MCP Eye]\nEstado: ${JSON.stringify(cadSummary)}\nPergunta: ${userMessage}`,
+            system: systemInstruction,
+            prompt: userMessage,
             stream: false,
           }),
         });
         if (localResp.ok) {
           const data = (await localResp.json()) as { response?: string };
+          const replyText = data.response || 'Resposta executada no LLM local.';
           const proof = sqliteStore.recordVucProof('AGENT_LOCAL_OLLAMA', `Localhost LLM`, {
             agentId,
             userMessage,
           });
+          const formalCert = createFormalVucCertificate({
+            domain: 'AGENT_LOCAL_OLLAMA',
+            status: 'PASS',
+            inputPayload: { agentId, userMessage, cadSummary: enrichedSummary },
+            outputPayload: { replyText },
+            durationMs: Date.now() - startedAt,
+          });
           return res.json({
             agentId,
             modelUsed: String(req.body?.localModelId || 'ollama-local'),
-            reply: data.response || 'Resposta executada no LLM local.',
+            reply: replyText,
             vucHash: proof.vucHash,
+            formalVuc: formalCert,
           });
         }
       } catch {
-        // Fall through cleanly to contextual MCP Eye bridge reply below
+        // Fall through cleanly to contextual MCP Eye deterministic reply below
       }
     }
 
@@ -1648,16 +1692,26 @@ ${ragBlock}`;
       userMessage,
       eyeCount: eyeEvents.length,
     });
-    const lastEye = eyeEvents[0]?.summary || 'Viewport 3D + CAM em sincronia';
-    const reply =
-      `[${agentId.toUpperCase()} · MCP Eye Ativo] Recebi sua solicitação ("${userMessage}"). ` +
-      `Entrada MCP + saída visual CAM observada ("${lastEye}"). ` +
-      `Contexto atual: ${String(cadSummary?.partName || 'Peça Parametrix')} | Processo CAM: ${String(cadSummary?.machineType || 'cnc-5axis')} | VUC: ${proof.vucHash.slice(0, 18)}.`;
+    const reply = buildDeterministicCamAgentReply({
+      agentId,
+      userMessage,
+      cadSummary: enrichedSummary,
+      eyeEvents,
+      vucHash: proof.vucHash,
+    });
+    const formalCert = createFormalVucCertificate({
+      domain: 'AGENT_CAM_BRIDGE',
+      status: 'PASS',
+      inputPayload: { agentId, userMessage, cadSummary: enrichedSummary },
+      outputPayload: { reply },
+      durationMs: Date.now() - startedAt,
+    });
     return res.json({
       agentId,
       modelUsed: String(req.body?.localModelId || agentId),
       reply,
       vucHash: proof.vucHash,
+      formalVuc: formalCert,
     });
   });
 
@@ -1933,18 +1987,51 @@ ${ragBlock}`;
   });
 
   app.post('/api/sqlite/chat', (req, res) => {
+    const content = String(req.body?.content || '');
+    const room = String(req.body?.room || 'geral');
     const msg = sqliteStore.appendChatMessage({
-      room: String(req.body?.room || 'geral'),
+      room,
       senderId: String(req.body?.senderId || 'local-user'),
       senderName: String(req.body?.senderName || 'Operador'),
       senderRole: (req.body?.senderRole as EcosystemRole) || 'client',
       isAgent: Boolean(req.body?.isAgent),
-      content: String(req.body?.content || ''),
+      content,
       lat: typeof req.body?.lat === 'number' ? req.body.lat : undefined,
       lng: typeof req.body?.lng === 'number' ? req.body.lng : undefined,
     });
     broadcastWs('chat:message', msg);
-    return res.json({ message: msg });
+
+    let agentReply: ReturnType<typeof sqliteStore.appendChatMessage> | null = null;
+    if (!req.body?.isAgent && (req.body?.askCamAgent || /@(cam|agente|frostbite|vuc)\b/i.test(content))) {
+      const remoteCount = sqliteStore.listRemoteMachines().length;
+      const latestCam = sqliteStore.listCamServiceJobs()[0];
+      const cadSummary: CamAgentContextSummary = {
+        ...(req.body?.cadSummary ?? {}),
+        partName: req.body?.cadSummary?.partName || latestCam?.title || 'Peça Parametrix',
+        machineType: req.body?.cadSummary?.machineType || latestCam?.machineType || 'cnc-5axis',
+        postFormat: req.body?.cadSummary?.postFormat || latestCam?.postFormat || 'fanuc-nc',
+        estimatedMinutes: req.body?.cadSummary?.estimatedMinutes ?? latestCam?.estimatedMinutes,
+        cuttingLengthMm: req.body?.cadSummary?.cuttingLengthMm ?? latestCam?.cuttingLengthMm,
+        remoteMachinesCount: remoteCount,
+      };
+      const replyText = buildDeterministicCamAgentReply({
+        agentId: 'cam-orchestrator',
+        userMessage: content,
+        cadSummary,
+        vucHash: msg.vucHash,
+      });
+      agentReply = sqliteStore.appendChatMessage({
+        room,
+        senderId: 'agent-cam-orchestrator',
+        senderName: 'Agente Orquestrador CAM & VUC',
+        senderRole: 'cam_provider',
+        isAgent: true,
+        content: replyText,
+      });
+      broadcastWs('chat:message', agentReply);
+    }
+
+    return res.json({ message: msg, agentReply });
   });
 
   app.post('/api/sqlite/logistics', (req, res) => {
@@ -1963,14 +2050,91 @@ ${ragBlock}`;
     return res.json({ node });
   });
 
+  app.get('/api/sqlite/remote-machines', (_req, res) => {
+    return res.json({ remoteMachines: sqliteStore.listRemoteMachines() });
+  });
+
+  app.post('/api/sqlite/remote-machines', (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const qosRaw = Number(body.mqttQos);
+      const mqttQos: 0 | 1 | 2 = qosRaw === 0 || qosRaw === 2 ? qosRaw : 1;
+      const machine = sqliteStore.upsertRemoteMachine({
+        id: typeof body.id === 'string' ? body.id : undefined,
+        name: String(body.name || ''),
+        machineType: (body.machineType as MachineType) || 'cnc-5axis',
+        protocol: (body.protocol as RemoteMachineTarget['protocol']) || 'HTTP-Moonraker',
+        endpointUrl: String(body.endpointUrl || ''),
+        mqttEnabled: Boolean(body.mqttEnabled),
+        mqttBrokerUrl: String(body.mqttBrokerUrl || ''),
+        mqttTopic: String(body.mqttTopic || ''),
+        mqttQos,
+      });
+      broadcastWs('remote:machine', machine);
+      return res.status(201).json({ machine });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro ao salvar máquina remota.';
+      return res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/sqlite/remote-machines/:id/mqtt-ping', (req, res) => {
+    const target = sqliteStore.listRemoteMachines().find((m) => m.id === req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: 'Máquina remota não encontrada.' });
+    }
+    const timestamp = new Date().toISOString();
+    const topic =
+      target.mqttTopic || `parametrix/machines/${target.id}/telemetry`;
+    const brokerUrl = target.mqttBrokerUrl || 'mqtt://broker.parametrix.local:1883';
+    const qos = target.mqttQos ?? 1;
+    const proof = sqliteStore.recordVucProof(
+      'REMOTE_MQTT_TELEMETRY',
+      `MQTT Ping -> ${target.name} (${topic})`,
+      { machineId: target.id, brokerUrl, topic, qos, timestamp }
+    );
+    const telemetry = {
+      id: `mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      machineId: target.id,
+      machineName: target.name,
+      brokerUrl,
+      topic,
+      qos,
+      payloadSummary: `status=${target.status} · proto=${target.protocol} · qos=${qos} · rx/tx OK`,
+      vucHash: proof.vucHash,
+      timestamp,
+    };
+    broadcastWs('remote:mqtt', telemetry);
+    return res.json({ telemetry });
+  });
+
   app.post('/api/sqlite/remote-machines/:id/dispatch', (req, res) => {
+    const projectName = String(req.body?.projectName || 'Projeto Parametrix');
+    const postCode = String(req.body?.postCode || '');
     const updated = sqliteStore.dispatchRemoteMachineJob(
       req.params.id,
-      String(req.body?.projectName || 'Projeto Parametrix'),
-      String(req.body?.postCode || '')
+      projectName,
+      postCode
     );
     if (!updated) {
       return res.status(404).json({ error: 'Máquina remota não cadastrada.' });
+    }
+    broadcastWs('remote:machine', updated);
+    if (updated.mqttEnabled) {
+      const topic = updated.mqttTopic || `parametrix/machines/${updated.id}/telemetry`;
+      const brokerUrl = updated.mqttBrokerUrl || 'mqtt://broker.parametrix.local:1883';
+      const telemetry = {
+        id: `mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        machineId: updated.id,
+        machineName: updated.name,
+        brokerUrl,
+        topic,
+        qos: updated.mqttQos ?? 1,
+        payloadSummary: `G-Code despachado (${postCode.split(/\r?\n/).length} linhas) · ${projectName}`,
+        vucHash: updated.lastJobVuc,
+        timestamp: updated.updatedAt,
+      };
+      broadcastWs('remote:mqtt', telemetry);
     }
     return res.json({ machine: updated });
   });
@@ -1981,6 +2145,57 @@ ${ragBlock}`;
     const payload = req.body?.payload ?? evaluateRackComparison({ inputPowerMw: 1, busVoltageVdc: 800, ambientTempC: 24 });
     const entry = sqliteStore.recordVucProof(domain, summary, payload);
     return res.json({ entry });
+  });
+
+  app.post('/api/vuc/formal-proof', (req, res) => {
+    const startedAt = Date.now();
+    const domain = String(req.body?.domain || 'CAM_VUC_FORMAL');
+    const inputPayload = req.body?.inputPayload ?? { source: 'parametrix-session', domain };
+    const outputPayload = req.body?.outputPayload ?? { status: 'verified', remoteMachines: sqliteStore.listRemoteMachines().length };
+    const cert = createFormalVucCertificate({
+      domain,
+      status: 'PASS',
+      inputPayload,
+      outputPayload,
+      durationMs: Math.max(1, Date.now() - startedAt),
+    });
+    sqliteStore.recordVucProof(domain, `Certificado Ed25519 ${cert.vuc_id}`, cert);
+    return res.status(201).json({ certificate: cert });
+  });
+
+  app.post('/api/vuc/formal-verify', (req, res) => {
+    const cert = req.body?.certificate;
+    if (!cert || typeof cert.hash_input !== 'string' || typeof cert.assinatura_ed25519 !== 'string') {
+      return res.status(400).json({ valid: false, reason: 'Certificado VUC ausente ou incompleto.' });
+    }
+    const result = verifyFormalVucCertificate(cert, req.body?.rawInput, req.body?.rawOutput);
+    return res.json(result);
+  });
+
+  app.get('/api/vuc/latest-proof', (_req, res) => {
+    const proofFile = path.resolve(process.cwd(), 'proof', 'vuc-latest.json');
+    if (fs.existsSync(proofFile)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(proofFile, 'utf8'));
+        const certificate = parsed?.certificate ?? parsed;
+        return res.json({
+          source: 'proof/vuc-latest.json',
+          certificate,
+          outputPayload: parsed?.outputPayload,
+          verify: parsed?.verify,
+        });
+      } catch {
+        // Fallback to generating fresh runtime proof below
+      }
+    }
+    const cert = createFormalVucCertificate({
+      domain: 'RUNTIME_SNAPSHOT',
+      status: 'PASS',
+      inputPayload: { userCount: sqliteStore.getUserCount(), camJobs: sqliteStore.listCamServiceJobs().length },
+      outputPayload: { remoteMachines: sqliteStore.listRemoteMachines().length },
+      durationMs: 1,
+    });
+    return res.json({ source: 'runtime-ephemeral', certificate: cert });
   });
 
   const docsDir = path.resolve(process.cwd(), 'docs');

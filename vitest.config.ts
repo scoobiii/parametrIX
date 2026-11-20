@@ -32,10 +32,12 @@ export default defineConfig({
         'src/kernel/vucHash.ts',
         'src/kernel/rackFrostbiteEngine.ts',
         'src/kernel/camProcessEngine.ts',
+        'src/kernel/camAgentSystemInstruction.ts',
         'src/kernel/llmBootstrap.ts',
         'src/kernel/voiceCommandParser.ts',
         'src/kernel/ecosystemErpLogistics.ts',
         'src/server/sqliteStore.ts',
+        'src/server/vucFormalProof.ts',
       ],
       thresholds: {
         lines: 100,

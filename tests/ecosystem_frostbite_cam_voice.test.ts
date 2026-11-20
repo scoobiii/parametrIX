@@ -1,6 +1,8 @@
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import {
   CAM_PRODUCTION_PROGRAMS,
@@ -30,6 +32,11 @@ import {
   evaluateFrostbiteDatacenterState,
   evaluateRackComparison,
 } from '../src/kernel/rackFrostbiteEngine';
+import {
+  PARAMETRIX_SYSTEM_INSTRUCTION_CORE,
+  buildCamAgentSystemInstruction,
+  buildDeterministicCamAgentReply,
+} from '../src/kernel/camAgentSystemInstruction';
 import { parseVoiceCommand } from '../src/kernel/voiceCommandParser';
 import {
   buildVucExecutionProof,
@@ -37,6 +44,12 @@ import {
   computeDeterministicVucHash,
 } from '../src/kernel/vucHash';
 import { ParametrixSqliteStore } from '../src/server/sqliteStore';
+import {
+  createFormalVucCertificate,
+  getSafeGitCommit,
+  sha256Hex,
+  verifyFormalVucCertificate,
+} from '../src/server/vucFormalProof';
 import type {
   AuthProviderKind,
   CamSettings,
@@ -308,7 +321,170 @@ describe('llmBootstrap & voiceCommandParser kernels', () => {
     expect(parseVoiceCommand('vista explodida').action).toBe('toggle-explode');
     expect(parseVoiceCommand('exportar stl').action).toBe('export-stl');
     expect(parseVoiceCommand('carregar soc hibrido optico').param).toBe('preset-soc-hybrid');
+    expect(parseVoiceCommand('coldplate liquid cooling').param).toBe('dc-coldplate');
+    expect(parseVoiceCommand('manifold engate rapido').param).toBe('dc-manifold');
+    expect(parseVoiceCommand('torso humanoide').param).toBe('hum-torso');
+    expect(parseVoiceCommand('atuador harmonico').param).toBe('hum-actuator');
+    expect(parseVoiceCommand('cnc 5 eixos').param).toBe('cnc-5axis');
+    expect(parseVoiceCommand('fresadora 3 eixos').param).toBe('cnc-3axis');
+    expect(parseVoiceCommand('robo kuka 6 eixos').param).toBe('robot-6axis');
+    expect(parseVoiceCommand('usinagem manual dro').param).toBe('manual');
+    expect(parseVoiceCommand('enviar codigo g mqtt').action).toBe('dispatch-remote');
+    expect(parseVoiceCommand('gerar prova vuc ed25519').action).toBe('verify-vuc');
+    expect(parseVoiceCommand('agente qual a sinterizacao atual?').action).toBe('agent-query');
     expect(parseVoiceCommand('falar sobre clima amanha').action).toBe('unknown');
+  });
+
+  it('builds CAM system instructions, grounded agent replies, and formal SHA-256 + Ed25519 VUC certificates', () => {
+    expect(PARAMETRIX_SYSTEM_INSTRUCTION_CORE).toContain('FrostbiteEngine');
+
+    const emptyInst = buildCamAgentSystemInstruction({});
+    expect(emptyInst).toContain('Manufatura Aditiva: processo subtrativo/robótico');
+    expect(emptyInst).toContain('Nenhum evento MCP Eye');
+
+    const richInst = buildCamAgentSystemInstruction({
+      agentId: 'claude',
+      roleLabel: 'cam_provider',
+      cadSummary: {
+        partName: 'Cold-Plate',
+        activeSegment: 'industrial-cnc',
+        machineType: 'powder-metal',
+        processLabel: 'Impressão Pó Metálico',
+        activeTool: 'T11 Laser',
+        postFormat: 'slm-powder',
+        estimatedMinutes: 35,
+        cuttingLengthMm: 4100,
+        camRestartCount: 2,
+        safetyFactor: 2.6,
+        remoteMachinesCount: 4,
+        vucHash: 'VUC-ABCD',
+        additiveConfig: {
+          layerThicknessUm: 40,
+          sinterTempC: 1220,
+          supportPattern: 'tree-branch',
+          supportDensityPct: 35,
+          atmosphere: 'argon',
+        },
+      },
+      eyeEvents: [
+        { direction: 'cam-output', source: 'CAM', summary: 'Reinício #2' },
+        {},
+      ],
+    });
+    expect(richInst).toContain('camada=40 µm');
+    expect(richInst).toContain('Reinício #2');
+
+    // Also test additiveConfig with undefined inner properties
+    const partialAddInst = buildCamAgentSystemInstruction({
+      cadSummary: { additiveConfig: {} },
+    });
+    expect(partialAddInst).toContain('camada=n/d µm');
+
+    // Deterministic CAM Agent Reply across all 5 branches + missing optional fields
+    const rFrost = buildDeterministicCamAgentReply({
+      agentId: 'gemini',
+      userMessage: 'Qual o CAPEX e ROI do Frostbite 7nm?',
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rFrost).toContain('NÃO óptico e NÃO quântico');
+
+    const rAddFull = buildDeterministicCamAgentReply({
+      agentId: 'deepseek',
+      userMessage: 'Qual a temperatura de sinterização e camada?',
+      cadSummary: {
+        partName: 'Manifold',
+        processLabel: 'LPBF',
+        activeTool: 'T11',
+        additiveConfig: { layerThicknessUm: 45, sinterTempC: 1240, supportPattern: 'lattice-grid', supportDensityPct: 40 },
+      },
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rAddFull).toContain('1240 °C');
+
+    const rAddFallback = buildDeterministicCamAgentReply({
+      agentId: 'qwen',
+      userMessage: 'Parametro resina SLA suporte?',
+      cadSummary: { additiveConfig: { supportPattern: 'linear-fin' } },
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rAddFallback).toContain('linear-fin (35%)');
+
+    const rAddEmpty = buildDeterministicCamAgentReply({
+      agentId: 'meta',
+      userMessage: 'Camada po metalico?',
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rAddEmpty).toContain('configurável');
+
+    const rVuc = buildDeterministicCamAgentReply({
+      agentId: 'grok',
+      userMessage: 'Gerar certificado prova VUC Ed25519',
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rVuc).toContain('Ed25519');
+
+    const rMqtt = buildDeterministicCamAgentReply({
+      agentId: 'manus',
+      userMessage: 'Despachar código G para máquina remota MQTT',
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rMqtt).toContain('máquinas remotas');
+
+    const rGeneral = buildDeterministicCamAgentReply({
+      agentId: 'local-llm',
+      userMessage: 'Qual o ciclo desta peça?',
+      eyeEvents: [{ summary: 'ATC T03 ativo' }],
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rGeneral).toContain('ATC T03 ativo');
+
+    const rGeneralEmpty = buildDeterministicCamAgentReply({
+      agentId: 'local-llm',
+      userMessage: 'status geral',
+      cadSummary: { partName: 'Eixo', machineType: 'cnc-3axis', activeTool: 'T02', estimatedMinutes: 12, safetyFactor: 2.1 },
+      vucHash: 'VUC-111122223333444455',
+    });
+    expect(rGeneralEmpty).toContain('Eixo');
+
+    // Formal SHA-256 + Ed25519 VUC Proof tests
+    expect(sha256Hex('abc')).toHaveLength(64);
+    const gitTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'parametrix-git-'));
+    expect(getSafeGitCommit('no-git-fallback', gitTmp)).toBe('no-git-fallback');
+    execSync(
+      'git init && git config user.email "t@local" && git config user.name "t" && touch a.txt && git add a.txt && git commit -m "init"',
+      { cwd: gitTmp, stdio: 'ignore' }
+    );
+    expect(getSafeGitCommit('no-git-fallback', gitTmp).length).toBeGreaterThanOrEqual(4);
+    fs.rmSync(gitTmp, { recursive: true, force: true });
+
+    const prevGh = process.env.GITHUB_ACTIONS;
+    process.env.GITHUB_ACTIONS = 'true';
+    const certBuf = createFormalVucCertificate({
+      domain: 'TEST_BUFFER',
+      status: 'PASS',
+      inputPayload: Buffer.from('step-in'),
+      outputPayload: Buffer.from('gcode-out'),
+      durationMs: 42,
+    });
+    expect(certBuf.runner).toBe('github-actions-ubuntu');
+    expect(verifyFormalVucCertificate(certBuf, Buffer.from('step-in'), Buffer.from('gcode-out')).valid).toBe(true);
+    expect(verifyFormalVucCertificate(certBuf, Buffer.from('wrong-in')).valid).toBe(false);
+    expect(verifyFormalVucCertificate(certBuf, Buffer.from('step-in'), Buffer.from('wrong-out')).valid).toBe(false);
+
+    delete process.env.GITHUB_ACTIONS;
+    const certJson = createFormalVucCertificate({
+      domain: 'TEST_JSON',
+      status: 'PASS',
+      inputPayload: { a: 1 },
+      outputPayload: { b: 2 },
+      durationMs: 10,
+      commitSha: 'deadbeef',
+    });
+    expect(certJson.runner).toBe('local-sandbox');
+    expect(verifyFormalVucCertificate(certJson, { a: 1 }, { b: 2 }).valid).toBe(true);
+    expect(verifyFormalVucCertificate({ ...certJson, hash_input: '0'.repeat(64) }).valid).toBe(false);
+    expect(verifyFormalVucCertificate({ ...certJson, public_key_pem: 'INVALID-PEM' }).valid).toBe(false);
+    if (prevGh !== undefined) process.env.GITHUB_ACTIONS = prevGh;
   });
 });
 
@@ -543,6 +719,68 @@ describe('ecosystemErpLogistics & ParametrixSqliteStore', () => {
     expect(dispatched?.status).toBe('executando');
     expect(store.listRemoteMachines().some((m) => m.id === 'mach-lpbf-1' && m.status === 'executando')).toBe(true);
 
+    // Remote machines upsert (validation, auto-id MQTT enabled QoS 2, explicit id QoS 0, update with defaults)
+    expect(() =>
+      store.upsertRemoteMachine({
+        name: '   ',
+        machineType: 'cnc-5axis',
+        protocol: 'MQTT',
+        endpointUrl: 'mqtt://broker.local:1883/gcode',
+      })
+    ).toThrow(/obrigatórios/i);
+    expect(() =>
+      store.upsertRemoteMachine({
+        name: 'Fresa MQTT',
+        machineType: 'cnc-5axis',
+        protocol: 'MQTT',
+        endpointUrl: '  ',
+      })
+    ).toThrow(/obrigatórios/i);
+
+    const createdAuto = store.upsertRemoteMachine({
+      name: 'Célula Solda MQTT',
+      machineType: 'robot-weld',
+      protocol: 'MQTT',
+      endpointUrl: 'mqtt://factory.local:1883/parametrix/gcode',
+      mqttEnabled: true,
+      mqttBrokerUrl: 'mqtt://factory.local:1883',
+      mqttTopic: 'parametrix/laser/telemetry',
+      mqttQos: 2,
+    });
+    expect(createdAuto.id).toMatch(/^mach-/);
+    expect(createdAuto.mqttEnabled).toBe(true);
+    expect(createdAuto.mqttQos).toBe(2);
+    expect(createdAuto.mqttTopic).toBe('parametrix/laser/telemetry');
+
+    const createdExplicit = store.upsertRemoteMachine({
+      id: 'mach-custom-1',
+      name: 'Torno CNC MQTT',
+      machineType: 'cnc-5axis',
+      protocol: 'HTTP-Moonraker',
+      endpointUrl: 'http://lathe.local:7125/gcode',
+      mqttEnabled: true,
+      mqttBrokerUrl: 'mqtt://lathe.local:1883',
+      mqttTopic: 'parametrix/lathe/status',
+      mqttQos: 0,
+    });
+    expect(createdExplicit.id).toBe('mach-custom-1');
+    expect(createdExplicit.mqttQos).toBe(0);
+
+    const updatedExplicit = store.upsertRemoteMachine({
+      id: 'mach-custom-1',
+      name: 'Torno CNC Atualizado',
+      machineType: 'cnc-5axis',
+      protocol: 'OPC-UA',
+      endpointUrl: 'opc.tcp://lathe.local:4840',
+      mqttEnabled: false,
+    });
+    expect(updatedExplicit.id).toBe('mach-custom-1');
+    expect(updatedExplicit.name).toBe('Torno CNC Atualizado');
+    expect(updatedExplicit.mqttEnabled).toBe(false);
+    expect(updatedExplicit.mqttBrokerUrl).toBe('');
+    expect(updatedExplicit.mqttTopic).toBe('');
+    expect(updatedExplicit.mqttQos).toBe(1);
+
     // VUC ledger
     expect(store.listVucLedger().length).toBeGreaterThan(0);
 
@@ -591,6 +829,27 @@ describe('ecosystemErpLogistics & ParametrixSqliteStore', () => {
     expect(reopen.listErpRecords().length).toBeGreaterThanOrEqual(4);
     reopen.db.close();
     store.db.close();
+
+    // Legacy remote_machines schema migration (missing mqtt_* columns)
+    const legacyDbPath = path.join(tmpDir, 'legacy.sqlite');
+    const legacyRawDb = new DatabaseSync(legacyDbPath);
+    legacyRawDb.exec(`
+      CREATE TABLE remote_machines (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        machine_type TEXT NOT NULL,
+        protocol TEXT NOT NULL,
+        endpoint_url TEXT NOT NULL,
+        status TEXT NOT NULL,
+        last_job_vuc TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    legacyRawDb.close();
+    const migratedStore = new ParametrixSqliteStore(legacyDbPath);
+    expect(migratedStore.listRemoteMachines()).toHaveLength(4);
+    migratedStore.db.close();
+
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     // Also verify :memory: and default data/parametrix.sqlite constructor branches

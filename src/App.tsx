@@ -27,7 +27,7 @@ import { AdditiveCamConfigPanel } from './components/AdditiveCamConfigPanel';
 import { AgentVoiceCommandBar } from './components/AgentVoiceCommandBar';
 import { CadFilesPanel } from './components/CadFilesPanel';
 import { CamRoboticsPanel, type CamServiceSubmissionInput } from './components/CamRoboticsPanel';
-import { EcosystemHubPanel } from './components/EcosystemHubPanel';
+import { EcosystemHubPanel, type RemoteMachineConfigInput } from './components/EcosystemHubPanel';
 import { FrostbiteRackDashboard } from './components/FrostbiteRackDashboard';
 import { GrasshopperCanvas } from './components/GrasshopperCanvas';
 import { McpToolsPanel } from './components/McpToolsPanel';
@@ -128,6 +128,7 @@ import type {
   PostProcessorFormat,
   RagSourceDocument,
   RemoteMachineTarget,
+  RemoteMqttTelemetryEvent,
   SessionDeliverable,
   SystemResourceSnapshot,
   ViewportDisplayState,
@@ -182,6 +183,7 @@ export default function App() {
   const [computeNodes, setComputeNodes] = useState<ComputeShareNode[]>([]);
   const [erpRecords, setErpRecords] = useState<ErpCrmRecord[]>([]);
   const [remoteMachines, setRemoteMachines] = useState<RemoteMachineTarget[]>([]);
+  const [mqttTelemetryFeed, setMqttTelemetryFeed] = useState<RemoteMqttTelemetryEvent[]>([]);
   const [camServiceJobs, setCamServiceJobs] = useState<CamServiceJob[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -813,6 +815,14 @@ export default function App() {
           } else if (msg.type === 'cam:service' && msg.payload) {
             const job = msg.payload as CamServiceJob;
             setCamServiceJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
+          } else if (msg.type === 'remote:machine' && msg.payload) {
+            const rm = msg.payload as RemoteMachineTarget;
+            setRemoteMachines((prev) => [rm, ...prev.filter((m) => m.id !== rm.id)]);
+          } else if (msg.type === 'remote:mqtt' && msg.payload) {
+            const tel = msg.payload as RemoteMqttTelemetryEvent;
+            setMqttTelemetryFeed((prev) =>
+              prev.some((t) => t.id === tel.id) ? prev : [tel, ...prev.slice(0, 29)]
+            );
           }
         } catch {
           // Ignore invalid WS frame
@@ -1484,6 +1494,22 @@ export default function App() {
     }
   };
 
+  const buildLiveCamSummary = () => ({
+    partName: partProfile.partName,
+    activeSegment,
+    machineType: effectiveCamSettings.machineType,
+    processLabel: camVisualState.processLabel,
+    activeTool: `${camVisualState.activeToolEvent.toolNumber} · ${camVisualState.activeToolEvent.toolName}`,
+    postFormat: effectiveCamSettings.postFormat,
+    estimatedMinutes: toolpath.estimatedMinutes,
+    cuttingLengthMm: toolpath.cuttingLengthMm,
+    camRestartCount,
+    safetyFactor: feaResult.safetyFactor,
+    additiveConfig: effectiveCamSettings.additiveConfig,
+    remoteMachinesCount: remoteMachines.length,
+    vucHash: camVisualState.vucProof.vucHash,
+  });
+
   const handleSendMultiAgentPrompt = async (
     prompt: string,
     externalEndpoint: string,
@@ -1497,25 +1523,27 @@ export default function App() {
         body: JSON.stringify({
           agentId: selectedAgentId,
           userMessage: prompt,
+          roleLabel: `${sqliteProfile.role} (${sqliteProfile.handleAt})`,
           eyeEvents: mcpEyeEvents.slice(0, 8),
-          cadSummary: {
-            partName: partProfile.partName,
-            machineType: effectiveCamSettings.machineType,
-            activeTool: camVisualState.activeToolEvent.toolName,
-            safetyFactor: feaResult.safetyFactor,
-          },
+          cadSummary: buildLiveCamSummary(),
           externalEndpoint,
           localModelId: modelId,
         }),
       });
-      const data = (await resp.json()) as { reply?: string; vucHash?: string; error?: string };
+      const data = (await resp.json()) as {
+        reply?: string;
+        vucHash?: string;
+        formalVuc?: { vuc_id?: string };
+        error?: string;
+      };
       const text = data.reply || data.error || 'Resposta registrada pelo agente.';
       pushMcpEyeEvent('agent-feedback', `Agent.${selectedAgentId}`, text, {
         vucHash: data.vucHash,
+        formalVucId: data.formalVuc?.vuc_id,
       });
       return text;
     } catch {
-      return `[${selectedAgentId}] Bridge offline: Olho MCP observando ${camVisualState.processLabel}.`;
+      return `[${selectedAgentId}] Bridge offline: Olho MCP observando ${camVisualState.processLabel} · VUC ${camVisualState.vucProof.vucHash.slice(0, 14)}.`;
     }
   };
 
@@ -1533,6 +1561,34 @@ export default function App() {
       setSimPlaying(false);
     } else if (intent.action === 'set-process' && intent.param) {
       handleRestartCamProcess(intent.param as MachineType);
+    } else if (intent.action === 'select-program' && intent.param) {
+      handleLaunchCamProgram(intent.param);
+    } else if (intent.action === 'dispatch-remote') {
+      const target = remoteMachines.find((m) => m.status !== 'standby') ?? remoteMachines[0];
+      if (target) void handleDispatchRemoteMachine(target.id);
+    } else if (intent.action === 'verify-vuc') {
+      void fetch('/api/vuc/formal-proof', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: 'VOICE_CAM_VERIFICATION',
+          inputPayload: buildLiveCamSummary(),
+          outputPayload: {
+            vucHash: camVisualState.vucProof.vucHash,
+            tool: camVisualState.activeToolEvent.toolNumber,
+          },
+        }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((resData: { certificate?: { vuc_id?: string; hash_processo?: string } } | null) => {
+          if (resData?.certificate?.vuc_id) {
+            setLastServerVucHex(resData.certificate.vuc_id);
+            setLastVoiceStatus(
+              `Certificado VUC Ed25519 emitido: ${resData.certificate.vuc_id}`
+            );
+          }
+        })
+        .catch(() => {});
     } else if (intent.action === 'open-tab' && intent.param) {
       handleTabSwitch(intent.param as WorkspaceTab);
     } else if (intent.action === 'start-wizard') {
@@ -1600,13 +1656,58 @@ export default function App() {
     }
   };
 
-  const handleSendEcosystemChat = async (room: string, content: string, asAgent = false) => {
+  const handleSaveRemoteMachine = async (input: RemoteMachineConfigInput) => {
+    const resp = await fetch('/api/sqlite/remote-machines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = (await resp.json()) as { machine?: RemoteMachineTarget; error?: string };
+    if (!resp.ok || !data.machine) {
+      throw new Error(data.error || 'Falha ao salvar endpoint remoto no SQLite.');
+    }
+    const saved = data.machine;
+    setRemoteMachines((prev) => [saved, ...prev.filter((m) => m.id !== saved.id)]);
+    pushMcpEyeEvent(
+      'cam-output',
+      `Remote.Config.${saved.protocol}`,
+      `Endpoint configurado: ${saved.name} (${saved.endpointUrl})`,
+      saved
+    );
+  };
+
+  const handlePingRemoteMqtt = async (machineId: string) => {
+    try {
+      const resp = await fetch(`/api/sqlite/remote-machines/${encodeURIComponent(machineId)}/mqtt-ping`, {
+        method: 'POST',
+      });
+      if (!resp.ok) return;
+      const data = (await resp.json()) as { telemetry?: RemoteMqttTelemetryEvent };
+      if (data.telemetry) {
+        const tel = data.telemetry;
+        setMqttTelemetryFeed((prev) =>
+          prev.some((t) => t.id === tel.id) ? prev : [tel, ...prev.slice(0, 29)]
+        );
+      }
+    } catch {
+      // Ignore offline errors
+    }
+  };
+
+  const handleSendEcosystemChat = async (
+    room: string,
+    content: string,
+    asAgent = false,
+    askCamAgent = false
+  ) => {
     const body = {
       room,
       senderId: sqliteProfile.id,
       senderName: asAgent ? sqliteProfile.agentConfig.agentName : sqliteProfile.displayName,
       senderRole: sqliteProfile.role,
       isAgent: asAgent,
+      askCamAgent,
+      cadSummary: buildLiveCamSummary(),
       content,
     };
     const resp = await fetch('/api/sqlite/chat', {
@@ -1615,12 +1716,20 @@ export default function App() {
       body: JSON.stringify(body),
     });
     if (resp.ok) {
-      const data = (await resp.json()) as { message?: EcosystemChatMessage };
-      if (data.message) {
-        setChatMessages((prev) =>
-          prev.some((m) => m.id === data.message!.id) ? prev : [...prev, data.message!]
-        );
-      }
+      const data = (await resp.json()) as {
+        message?: EcosystemChatMessage;
+        agentReply?: EcosystemChatMessage | null;
+      };
+      setChatMessages((prev) => {
+        let next = prev;
+        if (data.message && !next.some((m) => m.id === data.message!.id)) {
+          next = [...next, data.message];
+        }
+        if (data.agentReply && !next.some((m) => m.id === data.agentReply!.id)) {
+          next = [...next, data.agentReply];
+        }
+        return next;
+      });
     }
   };
 
@@ -2304,6 +2413,9 @@ export default function App() {
             onAddErpRecord={handleAddErpRecord}
             remoteMachines={remoteMachines}
             onDispatchRemoteMachine={handleDispatchRemoteMachine}
+            onSaveRemoteMachine={handleSaveRemoteMachine}
+            onPingRemoteMqtt={handlePingRemoteMqtt}
+            mqttTelemetryFeed={mqttTelemetryFeed}
             onRunAutonomousProjectWorkflow={handleRunAutonomousProjectWorkflow}
           />
         )}

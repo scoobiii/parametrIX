@@ -1,4 +1,4 @@
-name: Mandatory CI Gate (100% Coverage + CAD Audit + Build)
+name: Mandatory CI Gate (Onboard + 100% Coverage + CAD Audit + Build + VUC Proof)
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 jobs:
   ci-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -24,14 +24,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify Node >= 22 and Environment Contracts
+        run: |
+          node --version
+          grep -q "data/parametrix.db" .gitignore
+
       - name: TypeScript Strict Check (lint)
         run: npm run lint
 
       - name: Unit & Kernel Tests (100% V8 Coverage Enforced)
-        run: npm run test:coverage
+        run: npm test -- --run --coverage --coverage.thresholds.lines=100 --coverage.thresholds.functions=100 --coverage.thresholds.branches=100 --coverage.thresholds.statements=100
 
-      - name: CAD / IPT / STEP / LLM Briefing Audit Suite
+      - name: CAD / IPT / STEP / LLM Briefing Audit Suite (26/26)
         run: npm run audit:cad
 
       - name: Production Bundle Build
         run: npm run build
+
+      - name: Generate Formal VUC Proof (SHA-256 + Ed25519)
+        run: npm run vuc:proof
+
+      - name: Upload Coverage Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-coverage-100
+          path: coverage/
+
+      - name: Upload Formal VUC Proof Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vuc-formal-proof
+          path: proof/vuc-latest.json

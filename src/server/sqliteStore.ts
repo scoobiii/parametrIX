@@ -162,6 +162,10 @@ export class ParametrixSqliteStore {
         endpoint_url TEXT NOT NULL,
         status TEXT NOT NULL,
         last_job_vuc TEXT NOT NULL,
+        mqtt_enabled INTEGER NOT NULL DEFAULT 0,
+        mqtt_broker_url TEXT NOT NULL DEFAULT '',
+        mqtt_topic TEXT NOT NULL DEFAULT '',
+        mqtt_qos INTEGER NOT NULL DEFAULT 1,
         updated_at TEXT NOT NULL
       );
 
@@ -196,6 +200,18 @@ export class ParametrixSqliteStore {
         updated_at TEXT NOT NULL
       );
     `);
+
+    const remoteCols = (
+      this.db.prepare('PRAGMA table_info(remote_machines)').all() as { name: string }[]
+    ).map((c) => c.name);
+    if (!remoteCols.includes('mqtt_broker_url')) {
+      this.db.exec(`
+        ALTER TABLE remote_machines ADD COLUMN mqtt_enabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE remote_machines ADD COLUMN mqtt_broker_url TEXT NOT NULL DEFAULT '';
+        ALTER TABLE remote_machines ADD COLUMN mqtt_topic TEXT NOT NULL DEFAULT '';
+        ALTER TABLE remote_machines ADD COLUMN mqtt_qos INTEGER NOT NULL DEFAULT 1;
+      `);
+    }
   }
 
   private seedIfEmpty(): void {
@@ -406,6 +422,10 @@ export class ParametrixSqliteStore {
           endpointUrl: 'opc.tcp://cnc5x.local:4840/parametrix',
           status: 'online',
           lastJobVuc: computeDeterministicVucHash('MACHINE_INIT', 'mach-cnc-5x'),
+          mqttEnabled: true,
+          mqttBrokerUrl: 'mqtt://broker.parametrix.local:1883',
+          mqttTopic: 'parametrix/machines/mach-cnc-5x/telemetry',
+          mqttQos: 1,
           updatedAt: now,
         },
         {
@@ -416,6 +436,10 @@ export class ParametrixSqliteStore {
           endpointUrl: 'http://lpbf-eos.local:7125/printer/gcode',
           status: 'online',
           lastJobVuc: computeDeterministicVucHash('MACHINE_INIT', 'mach-lpbf-1'),
+          mqttEnabled: true,
+          mqttBrokerUrl: 'mqtt://broker.parametrix.local:1883',
+          mqttTopic: 'parametrix/machines/mach-lpbf-1/telemetry',
+          mqttQos: 1,
           updatedAt: now,
         },
         {
@@ -426,6 +450,10 @@ export class ParametrixSqliteStore {
           endpointUrl: 'http://sla-uv.local:7126/api/jobs',
           status: 'standby',
           lastJobVuc: computeDeterministicVucHash('MACHINE_INIT', 'mach-sla-uv'),
+          mqttEnabled: false,
+          mqttBrokerUrl: 'mqtt://broker.parametrix.local:1883',
+          mqttTopic: 'parametrix/machines/mach-sla-uv/telemetry',
+          mqttQos: 1,
           updatedAt: now,
         },
         {
@@ -436,15 +464,34 @@ export class ParametrixSqliteStore {
           endpointUrl: 'ssh://kuka-cell04.local:22/krl/deploy',
           status: 'online',
           lastJobVuc: computeDeterministicVucHash('MACHINE_INIT', 'mach-kuka-weld'),
+          mqttEnabled: true,
+          mqttBrokerUrl: 'mqtt://broker.parametrix.local:1883',
+          mqttTopic: 'parametrix/machines/mach-kuka-weld/telemetry',
+          mqttQos: 1,
           updatedAt: now,
         },
       ];
       const stmt = this.db.prepare(
-        `INSERT INTO remote_machines (id, name, machine_type, protocol, endpoint_url, status, last_job_vuc, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO remote_machines (
+          id, name, machine_type, protocol, endpoint_url, status, last_job_vuc,
+          mqtt_enabled, mqtt_broker_url, mqtt_topic, mqtt_qos, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const m of machines) {
-        stmt.run(m.id, m.name, m.machineType, m.protocol, m.endpointUrl, m.status, m.lastJobVuc, m.updatedAt);
+        stmt.run(
+          m.id,
+          m.name,
+          m.machineType,
+          m.protocol,
+          m.endpointUrl,
+          m.status,
+          m.lastJobVuc,
+          m.mqttEnabled ? 1 : 0,
+          m.mqttBrokerUrl!,
+          m.mqttTopic!,
+          m.mqttQos!,
+          m.updatedAt
+        );
       }
     }
 
@@ -969,11 +1016,8 @@ export class ParametrixSqliteStore {
     return { ...node, updatedAt };
   }
 
-  public listRemoteMachines(): RemoteMachineTarget[] {
-    const rows = this.db
-      .prepare('SELECT * FROM remote_machines ORDER BY updated_at DESC')
-      .all() as Record<string, unknown>[];
-    return rows.map((r) => ({
+  private mapRemoteMachineRow(r: Record<string, unknown>): RemoteMachineTarget {
+    return {
       id: String(r.id),
       name: String(r.name),
       machineType: r.machine_type as MachineType,
@@ -981,8 +1025,97 @@ export class ParametrixSqliteStore {
       endpointUrl: String(r.endpoint_url),
       status: r.status as RemoteMachineTarget['status'],
       lastJobVuc: String(r.last_job_vuc),
+      mqttEnabled: Boolean(r.mqtt_enabled),
+      mqttBrokerUrl: String(r.mqtt_broker_url),
+      mqttTopic: String(r.mqtt_topic),
+      mqttQos: Number(r.mqtt_qos) as 0 | 1 | 2,
       updatedAt: String(r.updated_at),
-    }));
+    };
+  }
+
+  public listRemoteMachines(): RemoteMachineTarget[] {
+    const rows = this.db
+      .prepare('SELECT * FROM remote_machines ORDER BY updated_at DESC')
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapRemoteMachineRow(r));
+  }
+
+  public upsertRemoteMachine(input: {
+    id?: string;
+    name: string;
+    machineType: MachineType;
+    protocol: RemoteMachineTarget['protocol'];
+    endpointUrl: string;
+    mqttEnabled?: boolean;
+    mqttBrokerUrl?: string;
+    mqttTopic?: string;
+    mqttQos?: 0 | 1 | 2;
+  }): RemoteMachineTarget {
+    const cleanName = input.name.trim();
+    const cleanUrl = input.endpointUrl.trim();
+    if (!cleanName || !cleanUrl) {
+      throw new Error('Nome da máquina e endpoint de código G são obrigatórios.');
+    }
+
+    const now = new Date().toISOString();
+    const id = input.id?.trim() || `mach-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const mqttEnabled = Boolean(input.mqttEnabled);
+    const mqttBrokerUrl = (input.mqttBrokerUrl ?? '').trim();
+    const mqttTopic = (input.mqttTopic ?? '').trim();
+    const mqttQos: 0 | 1 | 2 = input.mqttQos === 0 || input.mqttQos === 2 ? input.mqttQos : 1;
+    const vucHash = computeDeterministicVucHash('REMOTE_MACHINE_CONFIG', {
+      id,
+      name: cleanName,
+      protocol: input.protocol,
+      endpointUrl: cleanUrl,
+      mqttEnabled,
+      mqttBrokerUrl,
+      mqttTopic,
+      mqttQos,
+    });
+
+    this.db
+      .prepare(
+        `INSERT INTO remote_machines (
+          id, name, machine_type, protocol, endpoint_url, status, last_job_vuc,
+          mqtt_enabled, mqtt_broker_url, mqtt_topic, mqtt_qos, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          machine_type = excluded.machine_type,
+          protocol = excluded.protocol,
+          endpoint_url = excluded.endpoint_url,
+          mqtt_enabled = excluded.mqtt_enabled,
+          mqtt_broker_url = excluded.mqtt_broker_url,
+          mqtt_topic = excluded.mqtt_topic,
+          mqtt_qos = excluded.mqtt_qos,
+          last_job_vuc = excluded.last_job_vuc,
+          updated_at = excluded.updated_at`
+      )
+      .run(
+        id,
+        cleanName,
+        input.machineType,
+        input.protocol,
+        cleanUrl,
+        vucHash,
+        mqttEnabled ? 1 : 0,
+        mqttBrokerUrl,
+        mqttTopic,
+        mqttQos,
+        now
+      );
+
+    this.recordVucProof(
+      'REMOTE_MACHINE_CONFIG',
+      `Endpoint remoto salvo: ${cleanName} (${input.protocol})`,
+      { id, endpointUrl: cleanUrl, mqttEnabled, mqttTopic, vucHash }
+    );
+
+    const saved = this.db
+      .prepare('SELECT * FROM remote_machines WHERE id = ?')
+      .get(id) as Record<string, unknown>;
+    return this.mapRemoteMachineRow(saved);
   }
 
   public dispatchRemoteMachineJob(
@@ -1011,12 +1144,9 @@ export class ParametrixSqliteStore {
       vucHash,
     });
 
+    const mapped = this.mapRemoteMachineRow(row);
     return {
-      id: String(row.id),
-      name: String(row.name),
-      machineType: row.machine_type as MachineType,
-      protocol: row.protocol as RemoteMachineTarget['protocol'],
-      endpointUrl: String(row.endpoint_url),
+      ...mapped,
       status: 'executando',
       lastJobVuc: vucHash,
       updatedAt: now,

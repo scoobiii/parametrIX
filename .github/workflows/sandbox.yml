@@ -1,0 +1,56 @@
+name: CI Runner Sandbox (On-Demand Audit, Coverage & VUC Proof)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Ação do sandbox (audit, test, vuc-proof, full-ci)'
+        required: true
+        default: 'full-ci'
+        type: choice
+        options:
+          - audit
+          - test
+          - vuc-proof
+          - full-ci
+
+jobs:
+  sandbox-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Requested Sandbox Action
+        run: |
+          ACTION="${{ inputs.action }}"
+          echo "Executing sandbox action: $ACTION"
+          if [ "$ACTION" = "audit" ]; then
+            npm run audit:cad
+          elif [ "$ACTION" = "test" ]; then
+            npm run test:coverage
+          elif [ "$ACTION" = "vuc-proof" ]; then
+            npm run vuc:proof
+          else
+            npm run ci
+          fi
+
+      - name: Generate Formal VUC Proof Artifact
+        if: always()
+        run: npm run vuc:proof
+
+      - name: Upload Sandbox VUC Proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-vuc-proof
+          path: proof/vuc-latest.json

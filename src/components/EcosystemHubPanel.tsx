@@ -5,11 +5,15 @@ import {
   MapPin,
   MessageSquare,
   Navigation,
+  Pencil,
   Radio,
+  Save,
   Send,
   Server,
+  Settings,
   Truck,
   UserCheck,
+  Wifi,
 } from 'lucide-react';
 import {
   ECOSYSTEM_ROLE_DEFINITIONS,
@@ -25,15 +29,29 @@ import type {
   ErpCrmRecord,
   LogisticsModal,
   LogisticsTelemetryNode,
+  MachineType,
   RemoteMachineTarget,
+  RemoteMqttTelemetryEvent,
 } from '../types/cad';
+
+export interface RemoteMachineConfigInput {
+  id?: string;
+  name: string;
+  machineType: MachineType;
+  protocol: RemoteMachineTarget['protocol'];
+  endpointUrl: string;
+  mqttEnabled: boolean;
+  mqttBrokerUrl: string;
+  mqttTopic: string;
+  mqttQos: 0 | 1 | 2;
+}
 
 interface EcosystemHubPanelProps {
   profile: AuthUserProfile;
   onUpdateProfile: (patch: Partial<AuthUserProfile>) => Promise<void>;
   onOpenAuthModal: () => void;
   chatMessages: EcosystemChatMessage[];
-  onSendChat: (room: string, content: string, asAgent?: boolean) => Promise<void>;
+  onSendChat: (room: string, content: string, asAgent?: boolean, askCamAgent?: boolean) => Promise<void>;
   logisticsNodes: LogisticsTelemetryNode[];
   onPingGpsLocation: (modal: LogisticsModal, routeLabel: string) => Promise<void>;
   computeNodes: ComputeShareNode[];
@@ -41,6 +59,9 @@ interface EcosystemHubPanelProps {
   onAddErpRecord: (rec: Omit<ErpCrmRecord, 'id' | 'vucHash' | 'updatedAt'>) => Promise<void>;
   remoteMachines: RemoteMachineTarget[];
   onDispatchRemoteMachine: (machineId: string) => Promise<void>;
+  onSaveRemoteMachine?: (input: RemoteMachineConfigInput) => Promise<void>;
+  onPingRemoteMqtt?: (machineId: string) => Promise<void>;
+  mqttTelemetryFeed?: RemoteMqttTelemetryEvent[];
   onRunAutonomousProjectWorkflow: (role: EcosystemRole) => void;
 }
 
@@ -59,6 +80,9 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   onAddErpRecord,
   remoteMachines,
   onDispatchRemoteMachine,
+  onSaveRemoteMachine,
+  onPingRemoteMqtt,
+  mqttTelemetryFeed = [],
   onRunAutonomousProjectWorkflow,
 }) => {
   const [subTab, setSubTab] = useState<EcosystemSubTab>('chat');
@@ -77,6 +101,20 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   const [agentPhone, setAgentPhone] = useState(profile.agentConfig.phone);
   const [agentAddress, setAgentAddress] = useState(profile.agentConfig.address);
   const [agentBusy, setAgentBusy] = useState(false);
+
+  // Remote Machine + MQTT Configuration Panel State
+  const [editingMachineId, setEditingMachineId] = useState<string | undefined>(undefined);
+  const [rmName, setRmName] = useState('');
+  const [rmType, setRmType] = useState<MachineType>('cnc-5axis');
+  const [rmProtocol, setRmProtocol] = useState<RemoteMachineTarget['protocol']>('HTTP-Moonraker');
+  const [rmEndpointUrl, setRmEndpointUrl] = useState('');
+  const [rmMqttEnabled, setRmMqttEnabled] = useState(true);
+  const [rmMqttBrokerUrl, setRmMqttBrokerUrl] = useState('mqtt://broker.parametrix.local:1883');
+  const [rmMqttTopic, setRmMqttTopic] = useState('parametrix/machines/nova-celula/telemetry');
+  const [rmMqttQos, setRmMqttQos] = useState<0 | 1 | 2>(1);
+  const [rmBusy, setRmBusy] = useState(false);
+  const [rmFeedback, setRmFeedback] = useState<string | null>(null);
+  const [rmError, setRmError] = useState<string | null>(null);
 
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -183,14 +221,78 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
     }
   };
 
-  const handleSend = async (asAgent = false) => {
+  const handleSend = async (asAgent = false, askCamAgent = false) => {
     const text = chatDraft.trim();
-    if (!text && !asAgent) return;
+    if (!text && !asAgent && !askCamAgent) return;
     const msg =
       text ||
-      `[Agente Autônomo ${profile.handleAt}] Executando checklist completo do perfil (${ECOSYSTEM_ROLE_DEFINITIONS[profile.role].shortTag}) no endereço ${agentAddress} · Contato ${agentPhone}.`;
+      (askCamAgent
+        ? 'Qual o estado atual do processo CAM, ferramenta ATC e prova VUC?'
+        : `[Agente Autônomo ${profile.handleAt}] Executando checklist completo do perfil (${ECOSYSTEM_ROLE_DEFINITIONS[profile.role].shortTag}) no endereço ${agentAddress} · Contato ${agentPhone}.`);
     setChatDraft('');
-    await onSendChat(chatRoom, msg, asAgent);
+    await onSendChat(chatRoom, msg, asAgent, askCamAgent);
+  };
+
+  const resetRemoteForm = () => {
+    setEditingMachineId(undefined);
+    setRmName('');
+    setRmType('cnc-5axis');
+    setRmProtocol('HTTP-Moonraker');
+    setRmEndpointUrl('');
+    setRmMqttEnabled(true);
+    setRmMqttBrokerUrl('mqtt://broker.parametrix.local:1883');
+    setRmMqttTopic('parametrix/machines/nova-celula/telemetry');
+    setRmMqttQos(1);
+    setRmError(null);
+  };
+
+  const handleEditRemoteMachine = (m: RemoteMachineTarget) => {
+    setEditingMachineId(m.id);
+    setRmName(m.name);
+    setRmType(m.machineType);
+    setRmProtocol(m.protocol);
+    setRmEndpointUrl(m.endpointUrl);
+    setRmMqttEnabled(m.mqttEnabled ?? true);
+    setRmMqttBrokerUrl(m.mqttBrokerUrl || 'mqtt://broker.parametrix.local:1883');
+    setRmMqttTopic(m.mqttTopic || `parametrix/machines/${m.id}/telemetry`);
+    setRmMqttQos(m.mqttQos ?? 1);
+    setRmFeedback(null);
+    setRmError(null);
+  };
+
+  const handleSaveRemoteForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onSaveRemoteMachine) return;
+    if (!rmName.trim() || !rmEndpointUrl.trim()) {
+      setRmError('Informe o nome da máquina e a URL do endpoint para código G.');
+      return;
+    }
+    setRmBusy(true);
+    setRmError(null);
+    setRmFeedback(null);
+    try {
+      await onSaveRemoteMachine({
+        id: editingMachineId,
+        name: rmName.trim(),
+        machineType: rmType,
+        protocol: rmProtocol,
+        endpointUrl: rmEndpointUrl.trim(),
+        mqttEnabled: rmMqttEnabled,
+        mqttBrokerUrl: rmMqttBrokerUrl.trim(),
+        mqttTopic: rmMqttTopic.trim(),
+        mqttQos: rmMqttQos,
+      });
+      setRmFeedback(
+        editingMachineId
+          ? `Endpoint "${rmName.trim()}" atualizado no SQLite com monitoramento MQTT.`
+          : `Novo endpoint "${rmName.trim()}" salvo no SQLite.`
+      );
+      resetRemoteForm();
+    } catch (err) {
+      setRmError(err instanceof Error ? err.message : 'Falha ao salvar endpoint remoto.');
+    } finally {
+      setRmBusy(false);
+    }
   };
 
   const roleDef = ECOSYSTEM_ROLE_DEFINITIONS[profile.role];
@@ -348,20 +450,29 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
                 ))}
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <input
                 type="text"
-                placeholder={`Enviar mensagem em #${chatRoom} como ${profile.displayName}...`}
+                placeholder={`Enviar em #${chatRoom} (use @cam ou @vuc para resposta técnica automática)...`}
                 value={chatDraft}
                 onChange={(e) => setChatDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') void handleSend(false);
+                  if (e.key === 'Enter') void handleSend(false, false);
                 }}
-                className="flex-1 px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
+                className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
               />
               <button
                 type="button"
-                onClick={() => void handleSend(false)}
+                onClick={() => void handleSend(false, true)}
+                className="px-3 py-2 text-xs font-semibold bg-emerald-500/15 border border-emerald-400/45 text-emerald-200 rounded-lg hover:bg-emerald-500/25 flex items-center gap-1.5 cursor-pointer"
+                title="Envia pergunta e aciona o Agente Orquestrador CAM com prova VUC na sala"
+              >
+                <Send className="w-3.5 h-3.5" />
+                Perguntar Agente CAM
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSend(false, false)}
                 className="px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 flex items-center gap-1.5 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
@@ -654,42 +765,290 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
           </div>
         )}
 
-        {/* 5. Remote Machine Execution */}
+        {/* 5. Remote Machine Execution & MQTT Configuration */}
         {subTab === 'remote' && (
-          <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-3">
-            <div className="text-xs text-slate-400">
-              Conecte e despache o pós-processado (.NC / .SRC / SLM / SLA) diretamente para máquinas remotas via OPC-UA, Moonraker HTTP ou SSH KUKA Bridge com assinatura VUC.
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {remoteMachines.map((m) => (
-                <div
-                  key={m.id}
-                  className="p-3.5 bg-[#0c1017] border border-white/10 rounded-lg space-y-2"
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-100">{m.name}</span>
-                    <span className="font-mono-tabular text-[11px] text-emerald-400">
-                      {m.status.toUpperCase()}
-                    </span>
+          <div className="space-y-4">
+            {/* Configuration Panel for Saving New G-Code & MQTT Endpoints */}
+            {onSaveRemoteMachine && (
+              <form
+                onSubmit={handleSaveRemoteForm}
+                className="bg-[#111620] border border-sky-400/35 rounded-xl p-4 space-y-4"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Settings className="w-4 h-4 text-sky-400" />
+                      <h2 className="font-display text-sm font-bold text-slate-100">
+                        Configuração de Máquinas Remotas · Despacho Código G & Monitoramento MQTT
+                      </h2>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Cadastre novos endpoints fabris para envio direto de G-Code/KRL e vincule broker/tópico MQTT para telemetria em tempo real.
+                    </p>
                   </div>
-                  <div className="text-[11px] font-mono-tabular text-slate-400">
-                    {m.protocol} · {m.endpointUrl}
-                  </div>
-                  <div className="flex items-center justify-between gap-2 pt-1">
-                    <span className="text-[10px] font-mono-tabular text-slate-500 truncate">
-                      {m.lastJobVuc}
-                    </span>
+                  {editingMachineId && (
                     <button
                       type="button"
-                      onClick={() => void onDispatchRemoteMachine(m.id)}
-                      className="px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-lg flex items-center gap-1 cursor-pointer shrink-0"
+                      onClick={resetRemoteForm}
+                      className="px-3 py-1.5 text-xs border border-white/15 text-slate-300 hover:text-white rounded-lg cursor-pointer self-start sm:self-auto"
                     >
-                      <Radio className="w-3.5 h-3.5" />
-                      Executar Remoto
+                      Cancelar Edição
                     </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Nome da Máquina / Célula
+                    </label>
+                    <input
+                      type="text"
+                      value={rmName}
+                      onChange={(e) => setRmName(e.target.value)}
+                      placeholder="Ex: Fresadora Haas VF-2"
+                      className="w-full px-3 py-2 bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Tipo CAM</label>
+                    <select
+                      aria-label="Tipo de Máquina CAM"
+                      value={rmType}
+                      onChange={(e) => setRmType(e.target.value as MachineType)}
+                      className="w-full px-3 py-2 bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
+                    >
+                      <option value="cnc-5axis">CNC 5-Eixos</option>
+                      <option value="cnc-3axis">CNC 3-Eixos</option>
+                      <option value="powder-metal">Pó Metálico (LPBF)</option>
+                      <option value="resin-sla">Resina UV (SLA)</option>
+                      <option value="robot-weld">Robô Solda MIG/TIG</option>
+                      <option value="laser-cut">Corte Laser Fibra</option>
+                      <option value="robot-6axis">Robô 6-Eixos KUKA</option>
+                      <option value="manual">DRO / Manual</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Protocolo Despacho G-Code
+                    </label>
+                    <select
+                      aria-label="Protocolo Despacho Código G"
+                      value={rmProtocol}
+                      onChange={(e) =>
+                        setRmProtocol(e.target.value as RemoteMachineTarget['protocol'])
+                      }
+                      className="w-full px-3 py-2 bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
+                    >
+                      <option value="HTTP-Moonraker">HTTP Moonraker / Klipper</option>
+                      <option value="OPC-UA">OPC-UA Industrial</option>
+                      <option value="SSH-KUKA-Bridge">SSH KUKA / FANUC Bridge</option>
+                      <option value="GRBL-Serial-WS">GRBL Serial over WebSocket</option>
+                      <option value="MQTT">MQTT Direct Command</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      Endpoint URL (Código G)
+                    </label>
+                    <input
+                      type="text"
+                      value={rmEndpointUrl}
+                      onChange={(e) => setRmEndpointUrl(e.target.value)}
+                      placeholder="http://192.168.1.40:7125/printer/gcode"
+                      className="w-full px-3 py-2 bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 font-mono-tabular outline-none focus:border-sky-400"
+                    />
                   </div>
                 </div>
-              ))}
+
+                <div className="p-3 bg-[#0c1017] border border-white/10 rounded-lg space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-emerald-300">
+                      <Wifi className="w-3.5 h-3.5" />
+                      Monitoramento via MQTT
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={rmMqttEnabled}
+                        onChange={(e) => setRmMqttEnabled(e.target.checked)}
+                        className="accent-emerald-400"
+                      />
+                      Ativar assinatura de telemetria MQTT
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-xs">
+                    <div className="md:col-span-2">
+                      <label className="block text-[11px] text-slate-400 mb-1">
+                        Broker MQTT URL
+                      </label>
+                      <input
+                        type="text"
+                        value={rmMqttBrokerUrl}
+                        onChange={(e) => setRmMqttBrokerUrl(e.target.value)}
+                        placeholder="mqtt://broker.empresa.local:1883"
+                        className="w-full px-3 py-2 bg-[#111620] border border-white/12 rounded-lg text-slate-100 font-mono-tabular outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[11px] text-slate-400 mb-1">
+                        Tópico de Telemetria MQTT
+                      </label>
+                      <input
+                        type="text"
+                        value={rmMqttTopic}
+                        onChange={(e) => setRmMqttTopic(e.target.value)}
+                        placeholder="parametrix/machines/cnc-01/telemetry"
+                        className="w-full px-3 py-2 bg-[#111620] border border-white/12 rounded-lg text-slate-100 font-mono-tabular outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">QoS MQTT</label>
+                      <select
+                        aria-label="QoS MQTT"
+                        value={rmMqttQos}
+                        onChange={(e) =>
+                          setRmMqttQos(Number(e.target.value) as 0 | 1 | 2)
+                        }
+                        className="w-full px-3 py-2 bg-[#111620] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-emerald-400"
+                      >
+                        <option value={0}>QoS 0 (At most once)</option>
+                        <option value={1}>QoS 1 (At least once)</option>
+                        <option value={2}>QoS 2 (Exactly once)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {rmError && <div className="text-xs text-rose-400">{rmError}</div>}
+                {rmFeedback && <div className="text-xs text-emerald-400">{rmFeedback}</div>}
+
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={rmBusy}
+                    className="min-h-[38px] px-4 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 hover:bg-emerald-400 rounded-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    {rmBusy
+                      ? 'Salvando no SQLite...'
+                      : editingMachineId
+                        ? 'Atualizar Endpoint Remoto'
+                        : 'Salvar Novo Endpoint Remoto + MQTT'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Saved Endpoints Grid + Dispatch + MQTT Ping */}
+            <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-3">
+              <div className="text-xs text-slate-400">
+                Conecte e despache o pós-processado (.NC / .SRC / SLM / SLA) diretamente para os endpoints cadastrados com assinatura VUC e retorno em tempo real via MQTT.
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {remoteMachines.map((m) => (
+                  <div
+                    key={m.id}
+                    className="p-3.5 bg-[#0c1017] border border-white/10 rounded-lg space-y-2"
+                  >
+                    <div className="flex items-center justify-between text-xs gap-2">
+                      <span className="font-semibold text-slate-100 truncate">{m.name}</span>
+                      <span className="font-mono-tabular text-[11px] text-emerald-400 shrink-0">
+                        {m.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-slate-300 truncate">
+                      {m.protocol} · {m.endpointUrl}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-slate-400 flex items-center justify-between gap-2">
+                      <span className="truncate">
+                        {m.mqttEnabled
+                          ? `MQTT (QoS ${m.mqttQos ?? 1}): ${m.mqttTopic || 'tópico padrão'}`
+                          : 'MQTT: desativado'}
+                      </span>
+                      <span className="text-[10px] text-slate-500 shrink-0">{m.machineType}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-white/8">
+                      <span className="text-[10px] font-mono-tabular text-slate-500 truncate max-w-[160px]">
+                        {m.lastJobVuc}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {onSaveRemoteMachine && (
+                          <button
+                            type="button"
+                            onClick={() => handleEditRemoteMachine(m)}
+                            className="px-2.5 py-1.5 text-[11px] font-medium border border-white/15 text-slate-200 hover:border-sky-400 rounded-lg flex items-center gap-1 cursor-pointer"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            Editar
+                          </button>
+                        )}
+                        {onPingRemoteMqtt && (
+                          <button
+                            type="button"
+                            onClick={() => void onPingRemoteMqtt(m.id)}
+                            className="px-2.5 py-1.5 text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/25 rounded-lg flex items-center gap-1 cursor-pointer"
+                          >
+                            <Wifi className="w-3 h-3" />
+                            MQTT Ping
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void onDispatchRemoteMachine(m.id)}
+                          className="px-3 py-1.5 text-[11px] font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-lg flex items-center gap-1 cursor-pointer"
+                        >
+                          <Radio className="w-3 h-3" />
+                          Enviar Código G
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Live MQTT Telemetry Feed */}
+            <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-100 flex items-center gap-1.5">
+                  <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+                  Monitoramento MQTT em Tempo Real
+                </span>
+                <span className="font-mono-tabular text-[11px] text-slate-400">
+                  {mqttTelemetryFeed.length} eventos recebidos
+                </span>
+              </div>
+              {mqttTelemetryFeed.length === 0 ? (
+                <div className="p-3 bg-[#090d14] border border-white/8 rounded-lg text-xs text-slate-400">
+                  Nenhum evento MQTT recebido ainda. Clique em "MQTT Ping" ou "Enviar Código G" em qualquer máquina habilitada para monitorar o tópico em tempo real.
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {mqttTelemetryFeed.map((evt) => (
+                    <div
+                      key={evt.id}
+                      className="p-2.5 bg-[#090d14] border border-white/8 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-mono-tabular text-emerald-300 truncate">
+                          [{evt.topic}] · QoS {evt.qos}
+                        </div>
+                        <div className="text-slate-200 truncate">
+                          {evt.machineName} — {evt.payloadSummary}
+                        </div>
+                      </div>
+                      <div className="font-mono-tabular text-[10px] text-slate-500 shrink-0">
+                        {evt.brokerUrl} · {evt.vucHash.slice(0, 12)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
