@@ -23,6 +23,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
+import { AdditiveCamConfigPanel } from './components/AdditiveCamConfigPanel';
 import { AgentVoiceCommandBar } from './components/AgentVoiceCommandBar';
 import { CadFilesPanel } from './components/CadFilesPanel';
 import { CamRoboticsPanel } from './components/CamRoboticsPanel';
@@ -47,7 +48,7 @@ import {
   triggerBlobDownload,
 } from './kernel/cadFormats';
 import { evaluateCamProcessVisualState } from './kernel/camProcessEngine';
-import { generateCamToolpath } from './kernel/camRobotics';
+import { generateCamToolpath, getDefaultAdditiveSettings } from './kernel/camRobotics';
 import {
   SEGMENT_CATALOG,
   buildParametricComponentParts,
@@ -1313,6 +1314,14 @@ export default function App() {
         ...prev,
         machineType: overrideMachine,
         postFormat: defaultPostForMachine(overrideMachine),
+        ...(overrideMachine === 'powder-metal' || overrideMachine === 'resin-sla'
+          ? {
+              additiveConfig:
+                prev.machineType === overrideMachine && prev.additiveConfig
+                  ? prev.additiveConfig
+                  : getDefaultAdditiveSettings(overrideMachine),
+            }
+          : {}),
       }));
     }
     setSimProgress(0);
@@ -1900,7 +1909,7 @@ export default function App() {
 
               {/* Retractable Right Edge Quick CAM & Process Drawer */}
               {rightEdgeDrawerOpen && (
-                <div className="absolute right-0 top-0 bottom-0 z-30 w-72 bg-[#111620] border-l border-white/15 flex flex-col shadow-2xl">
+                <div className="absolute right-0 top-0 bottom-0 z-30 w-[380px] max-w-[92vw] bg-[#111620] border-l border-white/15 flex flex-col shadow-2xl">
                   <div className="px-3 py-2.5 border-b border-white/10 flex items-center justify-between">
                     <span className="text-xs font-semibold text-amber-200 font-mono-tabular">
                       CAM Rápido · {camVisualState.activeToolEvent.toolNumber}
@@ -1961,6 +1970,14 @@ export default function App() {
                         VUC: {camVisualState.vucProof.vucHash.slice(0, 18)}
                       </div>
                     </div>
+
+                    <AdditiveCamConfigPanel
+                      settings={camSettings}
+                      onChangeSettings={(patch) =>
+                        setCamSettings((prev) => ({ ...prev, ...patch }))
+                      }
+                      toolpath={toolpath}
+                    />
 
                     <button
                       type="button"

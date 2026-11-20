@@ -147,9 +147,30 @@ describe('camProcessEngine kernel', () => {
     expect(powderRecoat.showPowderCone).toBe(true);
     expect(powderRecoat.showLaserRay).toBe(false);
 
-    const powderFuse = evaluateCamProcessVisualState({ ...baseCam, machineType: 'powder-metal' }, tp, 0.5, 2);
+    const powderFuse = evaluateCamProcessVisualState(
+      {
+        ...baseCam,
+        machineType: 'powder-metal',
+        additiveConfig: {
+          layerThicknessUm: 45,
+          supportPattern: 'linear-fin',
+          supportDensityPct: 30,
+          overhangAngleDeg: 40,
+          sinterLaserPowerW: 450,
+          sinterScanSpeedMmS: 1000,
+          sinterTempC: 1200,
+          sinterHoldMinutes: 120,
+          atmosphere: 'argon',
+          hatchSpacingMm: 0.12,
+        },
+      },
+      tp,
+      0.5,
+      2
+    );
     expect(powderFuse.showLaserRay).toBe(true);
     expect(powderFuse.showPowderCone).toBe(false);
+    expect(powderFuse.activeToolEvent.toolName).toContain('450W');
 
     const slaUv = evaluateCamProcessVisualState({ ...baseCam, machineType: 'resin-sla' }, tp, 0.6, 1);
     expect(slaUv.showResinUvBeam).toBe(true);

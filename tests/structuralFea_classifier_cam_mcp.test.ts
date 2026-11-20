@@ -15,6 +15,8 @@ import {
   CAM_TOOLS,
   computeCuttingParameters,
   generateCamToolpath,
+  getDefaultAdditiveSettings,
+  resolveAdditiveSettings,
   solveRobot6AxisIK,
 } from '../src/kernel/camRobotics';
 import {
@@ -453,14 +455,57 @@ describe('camRobotics kernel', () => {
     expect(rRasterKukaShort.points.length).toBeLessThanOrEqual(220);
     expect(rRasterKukaShort.postCode).not.toContain('pontos LIN no arquivo exportado completo');
 
-    const rSlm = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'powder-metal', strategy: 'raster', stepoverPct: 60, postFormat: 'slm-powder' });
-    expect(rSlm.postCode).toContain('LPBF METAL POWDER 400W');
+    // Additive defaults, support anchors, empty-normals branch, none support, and sintering cycles
+    const defSlm = getDefaultAdditiveSettings('powder-metal');
+    const defSla = getDefaultAdditiveSettings('resin-sla');
+    expect(defSlm.atmosphere).toBe('argon');
+    expect(defSla.atmosphere).toBe('uv-chamber');
+    expect(resolveAdditiveSettings({ ...cam5x, machineType: 'powder-metal' }).layerThicknessUm).toBe(30);
 
-    const rSla = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'resin-sla', strategy: 'raster', stepoverPct: 60, postFormat: 'sla-resin' });
+    const meshWithDownNormals = {
+      ...compactMesh,
+      normals: new Float32Array([0, -1, 0, 0, 1, 0, 0, -0.95, 0]),
+    };
+    const rSlm = generateCamToolpath(surface, meshWithDownNormals, {
+      ...cam5x,
+      machineType: 'powder-metal',
+      strategy: 'raster',
+      stepoverPct: 60,
+      postFormat: 'slm-powder',
+      additiveConfig: {
+        ...defSlm,
+        supportPattern: 'lattice-grid',
+        supportDensityPct: 24,
+        atmosphere: 'vacuum',
+      },
+    });
+    expect(rSlm.postCode).toContain('LPBF METAL POWDER 400W');
+    expect(rSlm.postCode).toContain('ADDITIVE_SUPPORT: lattice-grid');
+    expect(rSlm.additiveSummary?.supportVolumeCm3).toBeGreaterThan(0);
+    expect(rSlm.additiveSummary?.atmosphereLabel).toContain('Vácuo');
+    expect(rSlm.manualSteps[0].operation).toContain('LPBF');
+
+    const rSla = generateCamToolpath(surface, { ...compactMesh, normals: new Float32Array(0) }, {
+      ...cam5x,
+      machineType: 'resin-sla',
+      strategy: 'raster',
+      stepoverPct: 60,
+      postFormat: 'sla-resin',
+      additiveConfig: {
+        ...defSla,
+        supportPattern: 'none',
+        supportDensityPct: 0,
+        atmosphere: 'nitrogen',
+      },
+    });
     expect(rSla.postCode).toContain('SLA UV RESIN 405NM');
+    expect(rSla.additiveSummary?.supportVolumeCm3).toBe(0);
+    expect(rSla.additiveSummary?.overhangAreaRatioPct).toBe(12);
+    expect(rSla.manualSteps[0].operation).toContain('SLA 405nm');
 
     const rWeld = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'robot-weld', strategy: 'raster', stepoverPct: 60, postFormat: 'weld-tig-mig' });
     expect(rWeld.postCode).toContain('ROBOTIC WIRE ARC MIG/TIG 195A');
+    expect(rWeld.additiveSummary).toBeUndefined();
 
     const rLaser = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'laser-cut', strategy: 'raster', stepoverPct: 60, postFormat: 'laser-g' });
     expect(rLaser.postCode).toContain('FIBER LASER 4KW');

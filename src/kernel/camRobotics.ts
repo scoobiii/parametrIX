@@ -1,4 +1,9 @@
 import type {
+  AdditiveCamSummary,
+  AdditiveManufacturingSettings,
+  AdditiveProcessKind,
+  AdditiveSinteringAtmosphere,
+  AdditiveSupportPattern,
   CamSettings,
   CamTool,
   EvaluatedMesh,
@@ -80,6 +85,154 @@ export const CAM_TOOLS: CamTool[] = [
   },
 ];
 
+const ATMOSPHERE_LABELS: Record<AdditiveSinteringAtmosphere, string> = {
+  argon: 'Argônio Inerte (Ar 99.999%)',
+  nitrogen: 'Nitrogênio (N₂ Técnico)',
+  vacuum: 'Alto Vácuo (<10⁻³ mbar)',
+  'uv-chamber': 'Câmara UV 405nm + Convecção',
+};
+
+const SUPPORT_PATTERN_FACTORS: Record<AdditiveSupportPattern, number> = {
+  none: 0,
+  'tree-branch': 0.55,
+  'lattice-grid': 0.85,
+  'linear-fin': 1.0,
+};
+
+export function getDefaultAdditiveSettings(
+  processKind: AdditiveProcessKind
+): AdditiveManufacturingSettings {
+  if (processKind === 'resin-sla') {
+    return {
+      layerThicknessUm: 25,
+      supportPattern: 'tree-branch',
+      supportDensityPct: 16,
+      overhangAngleDeg: 42,
+      sinterLaserPowerW: 0.35,
+      sinterScanSpeedMmS: 1800,
+      sinterTempC: 60,
+      sinterHoldMinutes: 35,
+      atmosphere: 'uv-chamber',
+      hatchSpacingMm: 0.08,
+    };
+  }
+  return {
+    layerThicknessUm: 30,
+    supportPattern: 'lattice-grid',
+    supportDensityPct: 22,
+    overhangAngleDeg: 45,
+    sinterLaserPowerW: 400,
+    sinterScanSpeedMmS: 950,
+    sinterTempC: 1150,
+    sinterHoldMinutes: 90,
+    atmosphere: 'argon',
+    hatchSpacingMm: 0.11,
+  };
+}
+
+export function resolveAdditiveSettings(settings: CamSettings): AdditiveManufacturingSettings {
+  const kind: AdditiveProcessKind =
+    settings.machineType === 'resin-sla' ? 'resin-sla' : 'powder-metal';
+  const merged: AdditiveManufacturingSettings = {
+    ...getDefaultAdditiveSettings(kind),
+    ...(settings.additiveConfig ?? {}),
+  };
+  return {
+    layerThicknessUm: Math.max(10, Math.min(150, merged.layerThicknessUm)),
+    supportPattern: merged.supportPattern,
+    supportDensityPct: Math.max(0, Math.min(60, merged.supportDensityPct)),
+    overhangAngleDeg: Math.max(15, Math.min(75, merged.overhangAngleDeg)),
+    sinterLaserPowerW: Math.max(0.05, Math.min(1200, merged.sinterLaserPowerW)),
+    sinterScanSpeedMmS: Math.max(100, Math.min(5000, merged.sinterScanSpeedMmS)),
+    sinterTempC: Math.max(25, Math.min(1500, merged.sinterTempC)),
+    sinterHoldMinutes: Math.max(5, Math.min(360, merged.sinterHoldMinutes)),
+    atmosphere: merged.atmosphere,
+    hatchSpacingMm: Math.max(0.03, Math.min(0.4, merged.hatchSpacingMm)),
+  };
+}
+
+export function computeAdditiveSummary(
+  mesh: EvaluatedMesh,
+  cuttingLengthMm: number,
+  settings: CamSettings,
+  processKind: AdditiveProcessKind
+): AdditiveCamSummary {
+  const cfg = resolveAdditiveSettings(settings);
+  const bbox = mesh.boundingBox;
+  const heightMm = Math.max(4, bbox.size[1]);
+  const layerCount = Math.max(10, Math.round((heightMm * 1000) / cfg.layerThicknessUm));
+
+  // Estimate overhang area fraction from mesh surface normals (downward faces exceeding overhang angle)
+  const cosThreshold = -Math.cos((cfg.overhangAngleDeg * Math.PI) / 180);
+  let overhangVerts = 0;
+  const totalNormals = Math.floor(mesh.normals.length / 3);
+  for (let i = 0; i < totalNormals; i++) {
+    if (mesh.normals[i * 3 + 1] < cosThreshold) {
+      overhangVerts++;
+    }
+  }
+  const rawOverhangPct = totalNormals > 0 ? (overhangVerts / totalNormals) * 100 : 0;
+  const overhangAreaRatioPct = Number(Math.max(12, Math.min(85, rawOverhangPct)).toFixed(1));
+
+  const partVolumeCm3 = Number(Math.max(4, mesh.volumeCm3).toFixed(2));
+  const envelopeCm3 = Math.max(
+    10,
+    (bbox.size[0] * bbox.size[1] * bbox.size[2]) / 1000
+  );
+  const patternFactor = SUPPORT_PATTERN_FACTORS[cfg.supportPattern];
+  const supportVolumeCm3 = Number(
+    (
+      envelopeCm3 *
+      (overhangAreaRatioPct / 100) *
+      0.32 *
+      (cfg.supportDensityPct / 100) *
+      patternFactor
+    ).toFixed(2)
+  );
+  const densityGcm3 = processKind === 'powder-metal' ? 4.43 : 1.15;
+  const supportMassGrams = Number((supportVolumeCm3 * densityGcm3).toFixed(1));
+
+  // Volumetric Energy Density: VED = P / (v * h * t) in J/mm^3
+  const layerMm = cfg.layerThicknessUm / 1000;
+  const energyDensityJMm3 = Number(
+    (
+      cfg.sinterLaserPowerW /
+      Math.max(0.001, cfg.sinterScanSpeedMmS * cfg.hatchSpacingMm * layerMm)
+    ).toFixed(2)
+  );
+
+  // Build time combines laser/UV scan vector time + per-layer recoater/peel time
+  const scanPathPerLayerMm = Math.max(45, (cuttingLengthMm * 0.25) / Math.max(1, cfg.hatchSpacingMm * 10));
+  const recoaterSecPerLayer = processKind === 'powder-metal' ? 3.2 : 1.8;
+  const totalScanSeconds = (layerCount * scanPathPerLayerMm) / cfg.sinterScanSpeedMmS;
+  const buildMinutes = Number(
+    ((totalScanSeconds + layerCount * recoaterSecPerLayer) / 60).toFixed(2)
+  );
+
+  const thermalRampMinutes =
+    processKind === 'powder-metal' ? cfg.sinterTempC / 28 : cfg.sinterTempC / 10;
+  const sinteringOrPostCureMinutes = Number(
+    (cfg.sinterHoldMinutes + thermalRampMinutes).toFixed(1)
+  );
+  const totalCycleMinutes = Number((buildMinutes + sinteringOrPostCureMinutes).toFixed(1));
+
+  return {
+    processKind,
+    layerCount,
+    layerThicknessUm: cfg.layerThicknessUm,
+    partVolumeCm3,
+    supportVolumeCm3,
+    supportMassGrams,
+    overhangAreaRatioPct,
+    energyDensityJMm3,
+    buildMinutes,
+    sinteringOrPostCureMinutes,
+    totalCycleMinutes,
+    sinteringTempC: cfg.sinterTempC,
+    atmosphereLabel: ATMOSPHERE_LABELS[cfg.atmosphere],
+  };
+}
+
 export function computeCuttingParameters(tool: CamTool, speedMultiplier: number) {
   const rawRpm = (1000 * tool.recommendedVc) / (Math.PI * tool.diameterMm);
   const spindleRpm = Math.round(Math.min(24000, Math.max(1200, rawRpm)) / 50) * 50;
@@ -90,7 +243,7 @@ export function computeCuttingParameters(tool: CamTool, speedMultiplier: number)
 }
 
 /**
- * Generates real 3D/5-Axis/6-Axis CAM Toolpaths directly from the evaluated NURBS surface.
+ * Generates real 3D/5-Axis/6-Axis & Additive CAM Toolpaths directly from the evaluated NURBS surface.
  * Output coordinates are in CNC/Robot frame: X = worldX, Y = -worldZ, Z = worldY_up
  */
 export function generateCamToolpath(
@@ -99,15 +252,24 @@ export function generateCamToolpath(
   settings: CamSettings
 ): ToolpathResult {
   const tool = CAM_TOOLS.find((t) => t.id === settings.toolId) ?? CAM_TOOLS[0];
-  const { spindleRpm, feedRateMmMin } = computeCuttingParameters(
-    tool,
-    settings.cutSpeedMultiplier
-  );
+  const isAdditive =
+    settings.machineType === 'powder-metal' || settings.machineType === 'resin-sla';
+  const additiveKind: AdditiveProcessKind =
+    settings.machineType === 'resin-sla' ? 'resin-sla' : 'powder-metal';
+  const additiveCfg = isAdditive ? resolveAdditiveSettings(settings) : null;
+
+  const baseCutting = computeCuttingParameters(tool, settings.cutSpeedMultiplier);
+  const spindleRpm = isAdditive ? 0 : baseCutting.spindleRpm;
+  const feedRateMmMin = additiveCfg
+    ? Math.round(Math.min(120000, Math.max(600, additiveCfg.sinterScanSpeedMmS * 60)))
+    : baseCutting.feedRateMmMin;
 
   const bbox = mesh.boundingBox;
   const safeZ = bbox.max[1] + settings.safeZMm;
   const points: ToolpathPoint[] = [];
-  const stepoverMm = Math.max(2, (tool.diameterMm * settings.stepoverPct) / 100);
+  const stepoverMm = additiveCfg
+    ? Math.max(1.5, additiveCfg.hatchSpacingMm * 40)
+    : Math.max(2, (tool.diameterMm * settings.stepoverPct) / 100);
 
   const pushPt = (
     wx: number,
@@ -234,6 +396,21 @@ export function generateCamToolpath(
     }
   }
 
+  // Additive Support Base Anchors (integrated into CAM path when support pattern !== 'none')
+  if (additiveCfg && additiveCfg.supportPattern !== 'none' && additiveCfg.supportDensityPct > 0) {
+    const anchorCols = Math.max(2, Math.min(6, Math.round(additiveCfg.supportDensityPct / 8)));
+    const baseZ = bbox.min[1];
+    for (let c = 0; c < anchorCols; c++) {
+      const u = (c + 0.5) / anchorCols;
+      const e0 = evaluateNurbsPointAndNormal(surface, u, 0.25);
+      const e1 = evaluateNurbsPointAndNormal(surface, u, 0.75);
+      pushPt(e0.point[0], baseZ, e0.point[2], 0, 1, 0, true);
+      pushPt(e0.point[0], e0.point[1], e0.point[2], 0, 1, 0, false);
+      pushPt(e1.point[0], e1.point[1], e1.point[2], 0, 1, 0, false);
+      pushPt(e1.point[0], baseZ, e1.point[2], 0, 1, 0, false);
+    }
+  }
+
   // Compute cutting/rapid distances
   let cuttingLengthMm = 0;
   let rapidLengthMm = 0;
@@ -245,11 +422,16 @@ export function generateCamToolpath(
     else cuttingLengthMm += dist;
   }
 
-  const estimatedMinutes =
-    cuttingLengthMm / Math.max(100, feedRateMmMin) + rapidLengthMm / 6000;
-  const removedVolumeCm3 = Number(
-    ((cuttingLengthMm * tool.diameterMm * settings.stepdownMm) / 1000).toFixed(1)
-  );
+  const additiveSummary = isAdditive
+    ? computeAdditiveSummary(mesh, cuttingLengthMm, settings, additiveKind)
+    : undefined;
+
+  const estimatedMinutes = additiveSummary
+    ? additiveSummary.totalCycleMinutes
+    : cuttingLengthMm / Math.max(100, feedRateMmMin) + rapidLengthMm / 6000;
+  const removedVolumeCm3 = additiveSummary
+    ? Number((additiveSummary.partVolumeCm3 + additiveSummary.supportVolumeCm3).toFixed(1))
+    : Number(((cuttingLengthMm * tool.diameterMm * settings.stepdownMm) / 1000).toFixed(1));
 
   const manualSteps = buildManualProcessSheet(
     surface,
@@ -257,7 +439,9 @@ export function generateCamToolpath(
     tool,
     spindleRpm,
     feedRateMmMin,
-    settings
+    settings,
+    additiveCfg,
+    additiveSummary
   );
   const postCode = generatePostProcessorCode(
     points,
@@ -265,7 +449,9 @@ export function generateCamToolpath(
     spindleRpm,
     feedRateMmMin,
     settings,
-    manualSteps
+    manualSteps,
+    additiveCfg,
+    additiveSummary
   );
 
   return {
@@ -278,6 +464,7 @@ export function generateCamToolpath(
     removedVolumeCm3,
     postCode,
     manualSteps,
+    additiveSummary,
   };
 }
 
@@ -287,13 +474,77 @@ function buildManualProcessSheet(
   tool: CamTool,
   rpm: number,
   feed: number,
-  settings: CamSettings
+  settings: CamSettings,
+  additiveCfg: AdditiveManufacturingSettings | null,
+  additiveSummary?: AdditiveCamSummary
 ): ManualOperationStep[] {
   const b = mesh.boundingBox;
   const cx = (b.min[0] + b.max[0]) / 2;
   const cy = -(b.min[2] + b.max[2]) / 2;
   const zTop = b.max[1];
   const zMin = b.min[1];
+
+  if (additiveCfg && additiveSummary) {
+    const isSlm = additiveSummary.processKind === 'powder-metal';
+    return [
+      {
+        step: 1,
+        operation: isSlm
+          ? 'Preparação da Mesa & Câmara Inerte LPBF'
+          : 'Calibração da Cuba Fotopolimérica SLA 405nm',
+        toolName: isSlm ? 'Recoater Lâmina Cerâmica' : 'Plataforma Z + Wiper Óptico',
+        rpm: 0,
+        feedMmMin: feed,
+        targetX: Number(cx.toFixed(2)),
+        targetY: Number(cy.toFixed(2)),
+        targetZ: Number(zMin.toFixed(2)),
+        depthAp: Number((additiveCfg.layerThicknessUm / 1000).toFixed(3)),
+        notes: `Camada ${additiveCfg.layerThicknessUm} µm (${additiveSummary.layerCount} camadas) · Atmosfera: ${additiveSummary.atmosphereLabel}.`,
+      },
+      {
+        step: 2,
+        operation: `Geração de Suportes (${additiveCfg.supportPattern})`,
+        toolName: isSlm ? 'Laser Fibra Yb Contorno Baixo' : 'Galvo UV Árvore / Âncora',
+        rpm: 0,
+        feedMmMin: feed,
+        targetX: Number(b.min[0].toFixed(2)),
+        targetY: Number((-b.max[2]).toFixed(2)),
+        targetZ: Number(zMin.toFixed(2)),
+        depthAp: Number((additiveCfg.layerThicknessUm / 1000).toFixed(3)),
+        notes: `Densidade ${additiveCfg.supportDensityPct}% · Ângulo crítico ${additiveCfg.overhangAngleDeg}° · Volume suporte ${additiveSummary.supportVolumeCm3} cm³ (${additiveSummary.supportMassGrams} g).`,
+      },
+      {
+        step: 3,
+        operation: isSlm
+          ? `Fusão Seletiva / Sinterização (${surface.name})`
+          : `Fotopolimerização UV SLA (${surface.name})`,
+        toolName: isSlm
+          ? `Laser ${additiveCfg.sinterLaserPowerW}W`
+          : `Laser UV ${additiveCfg.sinterLaserPowerW}W`,
+        rpm: 0,
+        feedMmMin: feed,
+        targetX: Number(b.max[0].toFixed(2)),
+        targetY: Number((-b.min[2]).toFixed(2)),
+        targetZ: Number(zTop.toFixed(2)),
+        depthAp: Number(additiveCfg.hatchSpacingMm.toFixed(2)),
+        notes: `Hachura ${additiveCfg.hatchSpacingMm} mm · Varredura ${additiveCfg.sinterScanSpeedMmS} mm/s · VED ${additiveSummary.energyDensityJMm3} J/mm³.`,
+      },
+      {
+        step: 4,
+        operation: isSlm
+          ? 'Ciclo de Sinterização & Alívio Térmico em Forno'
+          : 'Lavagem IPA & Pós-Cura Térmica/UV',
+        toolName: isSlm ? 'Forno Sinterização Controlado' : 'Estufa UV + Térmica',
+        rpm: 0,
+        feedMmMin: 0,
+        targetX: Number(cx.toFixed(2)),
+        targetY: Number(cy.toFixed(2)),
+        targetZ: Number(zTop.toFixed(2)),
+        depthAp: 0,
+        notes: `${additiveCfg.sinterTempC} °C por ${additiveCfg.sinterHoldMinutes} min · Ciclo térmico total ${additiveSummary.sinteringOrPostCureMinutes} min.`,
+      },
+    ];
+  }
 
   return [
     {
@@ -353,7 +604,9 @@ function generatePostProcessorCode(
   rpm: number,
   feed: number,
   settings: CamSettings,
-  manualSteps: ManualOperationStep[]
+  manualSteps: ManualOperationStep[],
+  additiveCfg: AdditiveManufacturingSettings | null,
+  additiveSummary?: AdditiveCamSummary
 ): string {
   const fmt = settings.postFormat;
   const maxLines = Math.min(points.length, 220);
@@ -447,11 +700,22 @@ function generatePostProcessorCode(
     `%`,
     `O1001 (PARAMETRIX CAM - ${modeTag})`,
     `G21 G90 G17 G94`,
+  ];
+
+  if (additiveCfg && additiveSummary) {
+    lines.push(
+      `(ADDITIVE_LAYER_UM: ${additiveCfg.layerThicknessUm} | LAYERS: ${additiveSummary.layerCount})`,
+      `(ADDITIVE_SUPPORT: ${additiveCfg.supportPattern} | DENSITY: ${additiveCfg.supportDensityPct}% | VOL: ${additiveSummary.supportVolumeCm3}cm3)`,
+      `(ADDITIVE_SINTER: ${additiveCfg.sinterTempC}C | HOLD: ${additiveCfg.sinterHoldMinutes}min | ATM: ${additiveCfg.atmosphere} | VED: ${additiveSummary.energyDensityJMm3}J/mm3)`
+    );
+  }
+
+  lines.push(
     `T01 M06`,
     `S${rpm} M03`,
     `G54`,
-    `G00 Z${points[0].z.toFixed(3)}`,
-  ];
+    `G00 Z${points[0].z.toFixed(3)}`
+  );
 
   for (let i = 0; i < maxLines; i++) {
     const p = points[i];

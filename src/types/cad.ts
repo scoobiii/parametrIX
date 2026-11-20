@@ -189,6 +189,41 @@ export interface CamTool {
   cornerRadiusMm?: number;
 }
 
+export type AdditiveProcessKind = 'powder-metal' | 'resin-sla';
+
+export type AdditiveSupportPattern = 'tree-branch' | 'lattice-grid' | 'linear-fin' | 'none';
+
+export type AdditiveSinteringAtmosphere = 'argon' | 'nitrogen' | 'vacuum' | 'uv-chamber';
+
+export interface AdditiveManufacturingSettings {
+  layerThicknessUm: number;
+  supportPattern: AdditiveSupportPattern;
+  supportDensityPct: number;
+  overhangAngleDeg: number;
+  sinterLaserPowerW: number;
+  sinterScanSpeedMmS: number;
+  sinterTempC: number;
+  sinterHoldMinutes: number;
+  atmosphere: AdditiveSinteringAtmosphere;
+  hatchSpacingMm: number;
+}
+
+export interface AdditiveCamSummary {
+  processKind: AdditiveProcessKind;
+  layerCount: number;
+  layerThicknessUm: number;
+  partVolumeCm3: number;
+  supportVolumeCm3: number;
+  supportMassGrams: number;
+  overhangAreaRatioPct: number;
+  energyDensityJMm3: number;
+  buildMinutes: number;
+  sinteringOrPostCureMinutes: number;
+  totalCycleMinutes: number;
+  sinteringTempC: number;
+  atmosphereLabel: string;
+}
+
 export interface CamSettings {
   machineType: MachineType;
   strategy: CamStrategy;
@@ -199,6 +234,7 @@ export interface CamSettings {
   safeZMm: number;
   cutSpeedMultiplier: number;
   postFormat: PostProcessorFormat;
+  additiveConfig?: AdditiveManufacturingSettings;
 }
 
 export interface ToolpathPoint {
@@ -246,6 +282,7 @@ export interface ToolpathResult {
   removedVolumeCm3: number;
   postCode: string;
   manualSteps: ManualOperationStep[];
+  additiveSummary?: AdditiveCamSummary;
 }
 
 export interface CadPlugin {

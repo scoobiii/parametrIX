@@ -9,7 +9,8 @@ import {
   Wrench,
 } from 'lucide-react';
 import { triggerBlobDownload } from '../kernel/cadFormats';
-import { CAM_TOOLS } from '../kernel/camRobotics';
+import { CAM_TOOLS, getDefaultAdditiveSettings } from '../kernel/camRobotics';
+import { AdditiveCamConfigPanel } from './AdditiveCamConfigPanel';
 import type {
   CamProcessVisualState,
   CamSettings,
@@ -90,7 +91,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
   };
 
   return (
-    <div className="w-full md:w-[350px] lg:w-[385px] h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden">
+    <div className="w-full md:w-[375px] lg:w-[425px] h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden">
       <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Wrench className="w-4 h-4 text-amber-400 shrink-0" />
@@ -139,6 +140,9 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
                   onChangeSettings({
                     machineType: m.id,
                     postFormat: m.defaultPost,
+                    ...(m.id === 'powder-metal' || m.id === 'resin-sla'
+                      ? { additiveConfig: getDefaultAdditiveSettings(m.id) }
+                      : {}),
                   })
                 }
                 className={`min-h-[46px] px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors text-left cursor-pointer ${
@@ -153,6 +157,13 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
             ))}
           </div>
         </section>
+
+        {/* Dedicated Additive Manufacturing Config Panel (Powder Metal vs SLA Resin + Supports + Sintering) */}
+        <AdditiveCamConfigPanel
+          settings={settings}
+          onChangeSettings={onChangeSettings}
+          toolpath={toolpath}
+        />
 
         {/* Live ATC Tool Change Sequence */}
         <section className="space-y-2 pt-3 border-t border-white/8">

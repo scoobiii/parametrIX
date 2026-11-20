@@ -5,6 +5,7 @@ import type {
   MachineType,
   ToolpathResult,
 } from '../types/cad';
+import { resolveAdditiveSettings } from './camRobotics';
 import { buildVucExecutionProof } from './vucHash';
 
 export const PROCESS_LABELS: Record<MachineType, string> = {
@@ -20,64 +21,92 @@ export const PROCESS_LABELS: Record<MachineType, string> = {
 
 export function buildToolChangeSequence(
   machineType: MachineType,
-  toolpath: ToolpathResult
+  toolpath: ToolpathResult,
+  settings?: CamSettings
 ): CamToolChangeEvent[] {
   const rpm = toolpath.spindleRpm;
 
   if (machineType === 'powder-metal') {
+    const addCfg = resolveAdditiveSettings({
+      machineType,
+      strategy: 'isoparm',
+      toolId: 'tool-ball-8',
+      stepoverPct: 24,
+      stepdownMm: 2,
+      stockMarginMm: 0.2,
+      safeZMm: 25,
+      cutSpeedMultiplier: 1,
+      postFormat: 'slm-powder',
+      additiveConfig: settings?.additiveConfig,
+    });
+    const supLabel = `${addCfg.supportPattern} ${addCfg.supportDensityPct}%`;
     return [
       {
         atProgress: 0,
         toolNumber: 'T10',
         toolName: 'Lâmina Recoater Pó Ti/Al',
         toolKind: 'powder-recoater',
-        operationLabel: 'Espalhamento de Camada de Pó Metálico (30 µm)',
-        rpmOrPowerLabel: '40 mm/s · Argônio',
+        operationLabel: `Espalhamento Pó (${addCfg.layerThicknessUm} µm) · Suporte ${supLabel}`,
+        rpmOrPowerLabel: `${addCfg.atmosphere} · Recoater`,
       },
       {
         atProgress: 0.25,
         toolNumber: 'T11',
-        toolName: 'Cabeçote Laser Fibra Yb 400W',
+        toolName: `Cabeçote Laser Fibra Yb ${addCfg.sinterLaserPowerW}W`,
         toolKind: 'laser-head',
-        operationLabel: 'Fusão Seletiva do Contorno em Pó Metálico',
-        rpmOrPowerLabel: '400 W · Spot 80 µm',
+        operationLabel: `Fusão Seletiva Contorno & Suportes (${addCfg.hatchSpacingMm} mm)`,
+        rpmOrPowerLabel: `${addCfg.sinterLaserPowerW} W · ${addCfg.sinterScanSpeedMmS} mm/s`,
       },
       {
         atProgress: 0.72,
         toolNumber: 'T12',
-        toolName: 'Varredor Pós-Fusão + Alívio Térmico',
+        toolName: `Sinterização Térmica & Pós-Fusão (${addCfg.sinterTempC}°C)`,
         toolKind: 'powder-recoater',
-        operationLabel: 'Sinterização de Pele & Limpeza de Pó Residual',
-        rpmOrPowerLabel: '220 W · Raio 1070 nm',
+        operationLabel: `Ciclo Sinterização ${addCfg.sinterTempC}°C (${addCfg.sinterHoldMinutes} min)`,
+        rpmOrPowerLabel: `${Math.round(addCfg.sinterLaserPowerW * 0.55)} W · Alívio Térmico`,
       },
     ];
   }
 
   if (machineType === 'resin-sla') {
+    const addCfg = resolveAdditiveSettings({
+      machineType,
+      strategy: 'isoparm',
+      toolId: 'tool-ball-8',
+      stepoverPct: 24,
+      stepdownMm: 2,
+      stockMarginMm: 0.2,
+      safeZMm: 25,
+      cutSpeedMultiplier: 1,
+      postFormat: 'sla-resin',
+      additiveConfig: settings?.additiveConfig,
+    });
+    const uvMw = Math.round(addCfg.sinterLaserPowerW * 1000);
+    const supLabel = `${addCfg.supportPattern} ${addCfg.supportDensityPct}%`;
     return [
       {
         atProgress: 0,
         toolNumber: 'T20',
         toolName: 'Limpador Nivelador Cuba Resina',
         toolKind: 'powder-recoater',
-        operationLabel: 'Nivelamento Fotopolímero Líquido (25 µm)',
-        rpmOrPowerLabel: 'Resina Engenharia 405nm',
+        operationLabel: `Nivelamento Resina (${addCfg.layerThicknessUm} µm) · Suporte ${supLabel}`,
+        rpmOrPowerLabel: 'Fotopolímero UV 405nm',
       },
       {
         atProgress: 0.22,
         toolNumber: 'T21',
-        toolName: 'Projetor Galvo UV 405 nm',
+        toolName: `Projetor Galvo UV ${uvMw} mW`,
         toolKind: 'uv-projector',
-        operationLabel: 'Cura a Laser UV da Casca & Nervuras Internas',
-        rpmOrPowerLabel: '350 mW · UV 405 nm',
+        operationLabel: `Cura UV Casca & Suportes (${addCfg.hatchSpacingMm} mm)`,
+        rpmOrPowerLabel: `${uvMw} mW · ${addCfg.sinterScanSpeedMmS} mm/s`,
       },
       {
         atProgress: 0.78,
         toolNumber: 'T22',
-        toolName: 'Feixe UV Acabamento Superficial',
+        toolName: `Pós-Cura UV + Térmica (${addCfg.sinterTempC}°C)`,
         toolKind: 'uv-projector',
-        operationLabel: 'Polimerização Final de Alta Definição',
-        rpmOrPowerLabel: '180 mW · Micro-Passo',
+        operationLabel: `Polimerização Final ${addCfg.sinterTempC}°C (${addCfg.sinterHoldMinutes} min)`,
+        rpmOrPowerLabel: `${Math.round(uvMw * 0.5)} mW · Micro-Passo`,
       },
     ];
   }
@@ -167,7 +196,7 @@ export function evaluateCamProcessVisualState(
   restartCount: number
 ): CamProcessVisualState {
   const clampedProgress = Math.max(0, Math.min(1, progress));
-  const toolChanges = buildToolChangeSequence(settings.machineType, toolpath);
+  const toolChanges = buildToolChangeSequence(settings.machineType, toolpath, settings);
 
   let activeToolEvent = toolChanges[0];
   for (const evt of toolChanges) {
@@ -210,6 +239,7 @@ export function evaluateCamProcessVisualState(
         progressPct: Math.round(clampedProgress * 100),
         cuttingLengthMm: toolpath.cuttingLengthMm,
         restartCount,
+        additiveSummary: toolpath.additiveSummary ?? null,
       }
     ),
   };

@@ -109,6 +109,10 @@ function sanitizeCamSettings(c: CamSettings): CamSettings {
     'cnc-3axis',
     'cnc-5axis',
     'robot-6axis',
+    'powder-metal',
+    'resin-sla',
+    'robot-weld',
+    'laser-cut',
   ];
   const validStrategies: CamSettings['strategy'][] = ['raster', 'isoparm', 'contour'];
   const validPosts: CamSettings['postFormat'][] = [
@@ -117,6 +121,10 @@ function sanitizeCamSettings(c: CamSettings): CamSettings {
     'kuka-krl',
     'abb-rapid',
     'manual-sheet',
+    'slm-powder',
+    'sla-resin',
+    'weld-tig-mig',
+    'laser-g',
   ];
   return {
     machineType: validMachines.includes(c.machineType) ? c.machineType : 'cnc-5axis',
@@ -128,6 +136,22 @@ function sanitizeCamSettings(c: CamSettings): CamSettings {
     safeZMm: clamp(c.safeZMm, 1, 500),
     cutSpeedMultiplier: clamp(c.cutSpeedMultiplier, 0.1, 5.0),
     postFormat: validPosts.includes(c.postFormat) ? c.postFormat : 'fanuc-nc',
+    ...(c.additiveConfig
+      ? {
+          additiveConfig: {
+            layerThicknessUm: clamp(c.additiveConfig.layerThicknessUm, 10, 150),
+            supportPattern: c.additiveConfig.supportPattern,
+            supportDensityPct: clamp(c.additiveConfig.supportDensityPct, 0, 60),
+            overhangAngleDeg: clamp(c.additiveConfig.overhangAngleDeg, 15, 75),
+            sinterLaserPowerW: clamp(c.additiveConfig.sinterLaserPowerW, 0.05, 1200),
+            sinterScanSpeedMmS: clamp(c.additiveConfig.sinterScanSpeedMmS, 100, 5000),
+            sinterTempC: clamp(c.additiveConfig.sinterTempC, 25, 1500),
+            sinterHoldMinutes: clamp(c.additiveConfig.sinterHoldMinutes, 5, 360),
+            atmosphere: c.additiveConfig.atmosphere,
+            hatchSpacingMm: clamp(c.additiveConfig.hatchSpacingMm, 0.03, 0.4),
+          },
+        }
+      : {}),
   };
 }
 
