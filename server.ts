@@ -16,16 +16,29 @@ import { computeScoobiiiVucProof } from './src/kernel/scoobiiiVuc';
 import { resolvePartEngineeringProfile } from './src/kernel/componentClassifier';
 import { selectOptimalLocalLlm } from './src/kernel/llmBootstrap';
 import { evaluateRackComparison } from './src/kernel/rackFrostbiteEngine';
+import {
+  CAM_PRODUCTION_PROGRAMS,
+  evaluateCamProcessVisualState,
+  getCamProductionProgram,
+  listCamProductionPrograms,
+} from './src/kernel/camProcessEngine';
+import { generateCamToolpath } from './src/kernel/camRobotics';
+import { buildCamOpenApiSpec, buildSwaggerHtml } from './src/server/camSwaggerSpec';
 import { ParametrixSqliteStore } from './src/server/sqliteStore';
 import type {
   AgentProviderId,
   ApplicationSegment,
   AuthProviderKind,
+  CamProgramTargetCategory,
+  CamServiceSourceKind,
+  CamSettings,
   EcosystemRole,
   FeaSettings,
   LogisticsModal,
+  MachineType,
   MaterialFinish,
   ParametricDesignParams,
+  PostProcessorFormat,
 } from './src/types/cad';
 
 const PORT = 3000;
@@ -696,6 +709,10 @@ LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` 
     - \`cad_optimize_surface_curvature\` (Análise |H| / Willmore e redução de massa)
     - \`cad_get_scoobiii_vuc_proof\` (Prova matemática determinística Cox-de Boor / Euler-Bernoulli / ISO)
 - **Manifesto JSON completo:** \`GET ${baseUrl}/api/agent/onboarding\` e \`GET ${baseUrl}/.well-known/agent.json\`
+- **Swagger & OpenAPI 3.0.3 (Serviços CAM via Upload, URL ou API):** \`GET ${baseUrl}/swagger\` e \`GET ${baseUrl}/api/openapi.json\`
+  - \`GET ${baseUrl}/api/cam/programs\` (Catálogo pré-programado Datacenter + Robôs Humanoides)
+  - \`POST ${baseUrl}/api/cam/services\` (Recebe arquivo base64/texto, URL externa ou payload JSON API)
+  - \`POST ${baseUrl}/api/cam/services/:id/restart\` (Reinicia qualquer processo CAM do começo ao fim com VUC)
 - **Bridge de Sessão Visual 3D (Browser):** \`window.__PARAMETRIX_MCP__\` (para isolar peças, explodir vista IX, Caneta Mágica, Máscara de Objetos e exportar \`.3dm\`/\`.stl\`/\`.dxf\`/\`.nc\`/\`.src\`).
 
 ## Limite Honesto sobre Autodesk Inventor (.IPT)
@@ -1644,7 +1661,7 @@ ${ragBlock}`;
     });
   });
 
-  // SQLite Ecosystem, ERP/CRM, Logistics GPS, Compute 20%, Remote Machines & VUC Ledger Routes
+  // SQLite Ecosystem, ERP/CRM, Logistics GPS, Compute 20%, Remote Machines, CAM Services & VUC Ledger Routes
   app.get('/api/sqlite/state', (_req, res) => {
     return res.json({
       projects: sqliteStore.listProjects(),
@@ -1654,6 +1671,237 @@ ${ragBlock}`;
       computeNodes: sqliteStore.listComputeNodes(),
       remoteMachines: sqliteStore.listRemoteMachines(),
       vucLedger: sqliteStore.listVucLedger(),
+      camServiceJobs: sqliteStore.listCamServiceJobs(),
+    });
+  });
+
+  // Swagger / OpenAPI 3.0.3 & Pre-Programmed Datacenter/Humanoid CAM Programs
+  app.get(['/api/openapi.json', '/openapi.json'], (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get('host') || `localhost:${PORT}`}`;
+    return res.json(buildCamOpenApiSpec(baseUrl));
+  });
+
+  app.get(['/swagger', '/api/docs'], (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get('host') || `localhost:${PORT}`}`;
+    return res.type('text/html; charset=utf-8').send(buildSwaggerHtml(baseUrl));
+  });
+
+  app.get('/api/cam/programs', (req, res) => {
+    const cat = req.query.category as CamProgramTargetCategory | undefined;
+    const programs = listCamProductionPrograms(
+      cat === 'datacenter' || cat === 'humanoid' ? cat : undefined
+    );
+    return res.json({
+      total: programs.length,
+      programs,
+    });
+  });
+
+  app.get('/api/cam/services', (_req, res) => {
+    return res.json({
+      services: sqliteStore.listCamServiceJobs(),
+      programsTotal: CAM_PRODUCTION_PROGRAMS.length,
+    });
+  });
+
+  app.post('/api/cam/services', async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const sourceKind: CamServiceSourceKind =
+        body.sourceKind === 'file' ||
+        body.sourceKind === 'url' ||
+        body.sourceKind === 'catalog'
+          ? body.sourceKind
+          : 'api';
+
+      const program =
+        typeof body.programId === 'string'
+          ? getCamProductionProgram(body.programId)
+          : undefined;
+
+      const targetCategory: CamProgramTargetCategory =
+        body.targetCategory === 'humanoid' || program?.category === 'humanoid'
+          ? 'humanoid'
+          : 'datacenter';
+
+      let filename = typeof body.filename === 'string' && body.filename.trim()
+        ? body.filename.trim()
+        : `${program?.id || 'custom_service'}.nc`;
+      let sourceRef =
+        typeof body.url === 'string' && body.url.trim()
+          ? body.url.trim()
+          : program
+            ? `program://${program.id}`
+            : `api://direct/${filename}`;
+
+      let parsedGeoSummary = '';
+
+      if (sourceKind === 'url') {
+        const rawUrl = typeof body.url === 'string' ? body.url.trim() : '';
+        if (!rawUrl) {
+          return res.status(400).json({ error: 'Informe o campo "url" quando sourceKind="url".' });
+        }
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(rawUrl);
+        } catch {
+          return res.status(400).json({ error: 'URL externa inválida para serviço CAM.' });
+        }
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          return res.status(400).json({ error: 'Apenas URLs HTTP/HTTPS são suportadas.' });
+        }
+        if (isDisallowedHostname(parsedUrl.hostname)) {
+          return res.status(400).json({ error: 'Host local ou rede privada bloqueada (SSRF).' });
+        }
+        const { fetchUrl } = normalizeSourceUrl(rawUrl);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12000);
+        try {
+          const remoteResp = await fetch(fetchUrl, {
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: { 'User-Agent': 'ParametrixCAM-ServiceIngest/1.0' },
+          });
+          if (!remoteResp.ok) {
+            return res.status(remoteResp.status).json({
+              error: `Falha ao buscar modelo CAD da URL (${remoteResp.status}).`,
+            });
+          }
+          const arrBuf = await remoteResp.arrayBuffer();
+          if (arrBuf.byteLength > MAX_FETCH_BYTES) {
+            return res.status(413).json({ error: 'Arquivo remoto excede 12 MB.' });
+          }
+          filename = decodeURIComponent(path.basename(parsedUrl.pathname) || filename);
+          sourceRef = rawUrl;
+          const lowerName = filename.toLowerCase();
+          if (lowerName.endsWith('.stp') || lowerName.endsWith('.step') || lowerName.endsWith('.ipt')) {
+            const briefing = await buildCadLlmBriefing(Buffer.from(arrBuf), filename);
+            parsedGeoSummary = `${briefing.format} via URL (${arrBuf.byteLength} bytes) · ${briefing.summaryStats.componentCount} peças`;
+          } else {
+            parsedGeoSummary = `Arquivo remoto via URL (${arrBuf.byteLength} bytes) · ${filename}`;
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+      } else if (sourceKind === 'file') {
+        const base64Data = typeof body.base64Data === 'string' ? body.base64Data.trim() : '';
+        const fileText = typeof body.fileText === 'string' ? body.fileText : '';
+        const buf = base64Data
+          ? Buffer.from(base64Data, 'base64')
+          : fileText
+            ? Buffer.from(fileText, 'utf8')
+            : Buffer.alloc(0);
+        if (buf.length === 0) {
+          return res.status(400).json({
+            error: 'Envie "base64Data" ou "fileText" quando sourceKind="file".',
+          });
+        }
+        sourceRef = `upload://${filename}`;
+        const lowerName = filename.toLowerCase();
+        if (lowerName.endsWith('.stp') || lowerName.endsWith('.step') || lowerName.endsWith('.ipt')) {
+          const briefing = await buildCadLlmBriefing(buf, filename);
+          parsedGeoSummary = `Upload ${briefing.format} (${buf.length} B) · ${briefing.summaryStats.componentCount} peças · ${briefing.llmSummaryText.slice(0, 90)}`;
+        } else {
+          const lineCount = buf.toString('utf8').split(/\r?\n/).length;
+          parsedGeoSummary = `Upload CAD (${buf.length} bytes · ${lineCount} linhas) · ${filename}`;
+        }
+      }
+
+      const machineType: MachineType =
+        (body.machineType as MachineType) || program?.machineType || 'cnc-5axis';
+      const postMap: Record<MachineType, PostProcessorFormat> = {
+        'powder-metal': 'slm-powder',
+        'resin-sla': 'sla-resin',
+        'robot-weld': 'weld-tig-mig',
+        'laser-cut': 'laser-g',
+        'robot-6axis': 'kuka-krl',
+        manual: 'manual-sheet',
+        'cnc-3axis': 'fanuc-nc',
+        'cnc-5axis': 'fanuc-nc',
+      };
+      const postFormat: PostProcessorFormat =
+        (body.postFormat as PostProcessorFormat) || program?.postFormat || postMap[machineType] || 'fanuc-nc';
+
+      const dims = body.dimensionsMm ?? {};
+      const designParams: ParametricDesignParams = {
+        preset: program?.designParamsPatch.preset ?? 'cavity',
+        spanX: Number(dims.spanX) || program?.designParamsPatch.spanX || 190,
+        spanY: Number(dims.spanY) || program?.designParamsPatch.spanY || 120,
+        archHeight: Number(dims.archHeight) || program?.designParamsPatch.archHeight || 26,
+        waveAmplitude: 8,
+        twistDeg: 0,
+        thicknessMm: program?.designParamsPatch.thicknessMm || 6,
+        uDivisions: 22,
+        vDivisions: 22,
+        ribCountU: 4,
+        ribCountV: 3,
+        ribHeightMm: 14,
+        attractorStrength: 0,
+      };
+      const camCfg: CamSettings = {
+        machineType,
+        strategy: program?.strategy || 'isoparm',
+        toolId: program?.toolId || 'tool-ball-8',
+        stepoverPct: 24,
+        stepdownMm: 2.0,
+        stockMarginMm: 0.15,
+        safeZMm: 25,
+        cutSpeedMultiplier: 1.0,
+        postFormat,
+        additiveConfig: body.additiveConfig || program?.additiveConfig,
+      };
+
+      const surface = buildNurbsSurfaceFromParams(designParams);
+      const mesh = tessellateNurbsSurface(surface, designParams.ribCountU, designParams.ribCountV, designParams.ribHeightMm);
+      const toolpath = generateCamToolpath(surface, mesh, camCfg);
+      const visualState = evaluateCamProcessVisualState(camCfg, toolpath, 0, 0);
+
+      const title =
+        typeof body.title === 'string' && body.title.trim()
+          ? body.title.trim()
+          : program?.title || `Serviço CAM (${sourceKind.toUpperCase()}) · ${filename}`;
+      const geometrySummary =
+        parsedGeoSummary ||
+        `${designParams.spanX}×${designParams.spanY}×${designParams.archHeight} mm · ${program?.subsystem || 'API Paramétrica'}`;
+
+      const job = sqliteStore.createCamServiceJob({
+        title,
+        targetCategory,
+        programId: program?.id || 'custom-api',
+        sourceKind,
+        sourceRef,
+        filename,
+        machineType,
+        postFormat,
+        estimatedMinutes: toolpath.estimatedMinutes,
+        cuttingLengthMm: toolpath.cuttingLengthMm,
+        postCodeSnippet: toolpath.postCode.split('\n').slice(0, 12).join('\n'),
+        geometrySummary,
+      });
+
+      broadcastWs('cam:service', job);
+      return res.status(201).json({
+        job,
+        postCode: toolpath.postCode,
+        toolChanges: visualState.toolChanges,
+        vucProof: visualState.vucProof,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  app.post('/api/cam/services/:id/restart', (req, res) => {
+    const restarted = sqliteStore.restartCamServiceJob(req.params.id);
+    if (!restarted) {
+      return res.status(404).json({ error: 'Serviço CAM não encontrado.' });
+    }
+    broadcastWs('cam:service', restarted);
+    return res.json({
+      job: restarted,
+      message: `Processo "${restarted.title}" reiniciado de 0% até 100% (ciclo #${restarted.restartCount}).`,
     });
   });
 

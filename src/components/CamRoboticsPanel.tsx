@@ -1,18 +1,28 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import {
+  Bot,
+  Cpu,
   Download,
+  ExternalLink,
+  FileCode2,
+  Globe,
   Pause,
   Play,
   RotateCcw,
   Send,
   ShieldCheck,
+  Upload,
   Wrench,
 } from 'lucide-react';
 import { triggerBlobDownload } from '../kernel/cadFormats';
+import { listCamProductionPrograms } from '../kernel/camProcessEngine';
 import { CAM_TOOLS, getDefaultAdditiveSettings } from '../kernel/camRobotics';
 import { AdditiveCamConfigPanel } from './AdditiveCamConfigPanel';
 import type {
   CamProcessVisualState,
+  CamProgramTargetCategory,
+  CamServiceJob,
+  CamServiceSourceKind,
   CamSettings,
   CamStrategy,
   MachineType,
@@ -20,6 +30,18 @@ import type {
   RemoteMachineTarget,
   ToolpathResult,
 } from '../types/cad';
+
+export interface CamServiceSubmissionInput {
+  sourceKind: CamServiceSourceKind;
+  title?: string;
+  programId?: string;
+  targetCategory?: CamProgramTargetCategory;
+  filename?: string;
+  fileText?: string;
+  base64Data?: string;
+  url?: string;
+  machineType?: MachineType;
+}
 
 interface CamRoboticsPanelProps {
   settings: CamSettings;
@@ -37,6 +59,10 @@ interface CamRoboticsPanelProps {
   camVisualState: CamProcessVisualState;
   remoteMachines?: RemoteMachineTarget[];
   onDispatchRemoteMachine?: (machineId: string) => Promise<void>;
+  camServiceJobs?: CamServiceJob[];
+  onLaunchProgram?: (programId: string) => void;
+  onSubmitCamService?: (payload: CamServiceSubmissionInput) => Promise<void>;
+  onRestartServiceJob?: (jobId: string) => Promise<void>;
 }
 
 const MACHINE_OPTIONS: {
@@ -71,8 +97,74 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
   camVisualState,
   remoteMachines = [],
   onDispatchRemoteMachine,
+  camServiceJobs = [],
+  onLaunchProgram,
+  onSubmitCamService,
+  onRestartServiceJob,
 }) => {
   const activeTool = CAM_TOOLS.find((t) => t.id === settings.toolId) ?? CAM_TOOLS[0];
+  const [progCategory, setProgCategory] = useState<CamProgramTargetCategory>('datacenter');
+  const [srvSource, setSrvSource] = useState<CamServiceSourceKind>('file');
+  const [srvTitle, setSrvTitle] = useState('Ordem CAM Externa Liquid Cooling');
+  const [srvUrl, setSrvUrl] = useState('https://example.com/peca-datacenter.step');
+  const [srvBusy, setSrvBusy] = useState(false);
+  const [srvError, setSrvError] = useState<string | null>(null);
+
+  const productionPrograms = useMemo(
+    () => listCamProductionPrograms(progCategory),
+    [progCategory]
+  );
+
+  const handleServiceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !onSubmitCamService) return;
+    setSrvBusy(true);
+    setSrvError(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      const base64Data = btoa(binary);
+      const isTextLike = /\.(stl|obj|dxf|step|stp|ifc|svg|nc|gcode)$/i.test(file.name);
+      const fileText = isTextLike ? new TextDecoder().decode(bytes.slice(0, 65536)) : undefined;
+      await onSubmitCamService({
+        sourceKind: 'file',
+        title: `Upload CAM: ${file.name}`,
+        targetCategory: progCategory,
+        filename: file.name,
+        base64Data,
+        fileText,
+        machineType: settings.machineType,
+      });
+    } catch (err) {
+      setSrvError(err instanceof Error ? err.message : 'Falha ao enviar arquivo para serviço CAM.');
+    } finally {
+      setSrvBusy(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleServiceUrlOrApiSubmit = async () => {
+    if (!onSubmitCamService) return;
+    setSrvBusy(true);
+    setSrvError(null);
+    try {
+      await onSubmitCamService({
+        sourceKind: srvSource,
+        title: srvTitle.trim() || undefined,
+        url: srvSource === 'url' ? srvUrl.trim() : undefined,
+        targetCategory: progCategory,
+        machineType: settings.machineType,
+      });
+    } catch (err) {
+      setSrvError(err instanceof Error ? err.message : 'Falha ao enviar ordem CAM.');
+    } finally {
+      setSrvBusy(false);
+    }
+  };
 
   const handleDownloadProgram = () => {
     const extMap: Record<PostProcessorFormat, string> = {
@@ -164,6 +256,192 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
           onChangeSettings={onChangeSettings}
           toolpath={toolpath}
         />
+
+        {/* Datacenter & Humanoid Robot Pre-Programmed CAM Processes */}
+        {onLaunchProgram && (
+          <section className="space-y-2.5 pt-3 border-t border-white/8">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-300">
+                Programas CAM · Datacenter & Humanoides
+              </span>
+              <div className="flex gap-1 bg-[#0c1017] p-0.5 rounded-lg border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setProgCategory('datacenter')}
+                  className={`px-2 py-1 text-[10px] font-semibold rounded flex items-center gap-1 cursor-pointer ${
+                    progCategory === 'datacenter'
+                      ? 'bg-cyan-500 text-slate-950'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Cpu className="w-3 h-3" />
+                  Datacenter
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProgCategory('humanoid')}
+                  className={`px-2 py-1 text-[10px] font-semibold rounded flex items-center gap-1 cursor-pointer ${
+                    progCategory === 'humanoid'
+                      ? 'bg-emerald-500 text-slate-950'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Bot className="w-3 h-3" />
+                  Humanoides
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              {productionPrograms.map((prog) => (
+                <div
+                  key={prog.id}
+                  className="p-2.5 bg-[#0c1017] border border-white/10 rounded-lg flex items-center justify-between gap-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-100 truncate">{prog.title}</div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {prog.subsystem} · {prog.machineType} · {prog.estimatedCycleMin} min
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onLaunchProgram(prog.id)}
+                    className="px-2 py-1.5 text-[10px] font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reiniciar 0→100%
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* CAM Service Ingestion (Upload, URL, API + Swagger Docs) */}
+        {onSubmitCamService && (
+          <section className="space-y-2.5 pt-3 border-t border-white/8">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-300">
+                Serviços CAM (Upload, URL, API)
+              </span>
+              <a
+                href="/swagger"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-semibold text-sky-300 hover:text-sky-200 flex items-center gap-1"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Swagger UI
+              </a>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1 p-1 bg-[#0c1017] border border-white/10 rounded-lg text-[11px]">
+              {(
+                [
+                  { id: 'file', label: 'Upload', icon: Upload },
+                  { id: 'url', label: 'URL', icon: Globe },
+                  { id: 'api', label: 'API JSON', icon: FileCode2 },
+                ] as const
+              ).map((src) => {
+                const Icon = src.icon;
+                return (
+                  <button
+                    key={src.id}
+                    type="button"
+                    onClick={() => setSrvSource(src.id)}
+                    className={`py-1.5 rounded flex items-center justify-center gap-1 font-medium cursor-pointer ${
+                      srvSource === src.id
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Icon className="w-3 h-3" />
+                    {src.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {srvSource === 'file' ? (
+              <label className="w-full min-h-[40px] px-3 py-2 bg-[#0c1017] border border-dashed border-sky-400/45 hover:border-sky-300 rounded-lg text-xs text-sky-200 flex items-center justify-center gap-2 cursor-pointer">
+                <Upload className="w-3.5 h-3.5" />
+                <span>{srvBusy ? 'Processando arquivo CAM...' : 'Enviar .STEP / .IPT / .STL / .DXF'}</span>
+                <input
+                  type="file"
+                  accept=".step,.stp,.ipt,.stl,.obj,.dxf,.3dm,.svg"
+                  onChange={handleServiceFileUpload}
+                  className="hidden"
+                />
+              </label>
+            ) : (
+              <div className="space-y-1.5">
+                <input
+                  type="text"
+                  value={srvTitle}
+                  onChange={(e) => setSrvTitle(e.target.value)}
+                  placeholder="Título da ordem CAM"
+                  className="w-full px-2.5 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none"
+                />
+                {srvSource === 'url' && (
+                  <input
+                    type="url"
+                    value={srvUrl}
+                    onChange={(e) => setSrvUrl(e.target.value)}
+                    placeholder="https://servidor/peca.step"
+                    className="w-full px-2.5 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none"
+                  />
+                )}
+                <button
+                  type="button"
+                  disabled={srvBusy}
+                  onClick={() => void handleServiceUrlOrApiSubmit()}
+                  className="w-full min-h-[34px] px-3 py-1.5 text-xs font-semibold bg-amber-500/20 border border-amber-400/45 text-amber-200 hover:bg-amber-500/30 rounded-lg cursor-pointer"
+                >
+                  {srvBusy ? 'Gerando Toolpath + VUC...' : 'Criar Serviço CAM & Gerar VUC'}
+                </button>
+              </div>
+            )}
+
+            {srvError && <div className="text-[11px] text-rose-400">{srvError}</div>}
+
+            {camServiceJobs.length > 0 && (
+              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
+                {camServiceJobs.slice(0, 6).map((job) => (
+                  <div
+                    key={job.id}
+                    className="p-2.5 bg-[#0c1017] border border-white/10 rounded-lg space-y-1 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-100 truncate">{job.title}</span>
+                      <span className="text-[10px] font-mono-tabular text-emerald-400 shrink-0">
+                        {job.status} #{job.restartCount}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {job.sourceKind} · {job.machineType} · {job.geometrySummary}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      <span className="text-[10px] font-mono-tabular text-slate-500 truncate">
+                        {job.vucHash.slice(0, 18)}...
+                      </span>
+                      {onRestartServiceJob && (
+                        <button
+                          type="button"
+                          onClick={() => void onRestartServiceJob(job.id)}
+                          className="px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/25 rounded flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <RotateCcw className="w-2.5 h-2.5" />
+                          Reiniciar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Live ATC Tool Change Sequence */}
         <section className="space-y-2 pt-3 border-t border-white/8">

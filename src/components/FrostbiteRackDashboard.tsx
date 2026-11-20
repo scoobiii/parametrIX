@@ -1,15 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import {
   Activity,
+  Bot,
   Cpu,
+  Droplets,
   Flame,
   Play,
+  RotateCcw,
   ShieldAlert,
   ShieldCheck,
   Zap,
 } from 'lucide-react';
+import { listCamProductionPrograms } from '../kernel/camProcessEngine';
 import {
   evaluateChipCamProfile,
+  evaluateFrostbiteDatacenterState,
   evaluateRackComparison,
 } from '../kernel/rackFrostbiteEngine';
 import type { ChipFabricationType, MachineType } from '../types/cad';
@@ -17,6 +22,7 @@ import type { ChipFabricationType, MachineType } from '../types/cad';
 interface FrostbiteRackDashboardProps {
   onLoadPresetById: (presetId: string) => void;
   onStartProcessCam: (machineType: MachineType) => void;
+  onLaunchCamProgram?: (programId: string) => void;
   onVerifyVucOnServer?: (domain: string, summary: string, payload: unknown) => Promise<void>;
   lastServerVucHex?: string | null;
 }
@@ -24,6 +30,7 @@ interface FrostbiteRackDashboardProps {
 export const FrostbiteRackDashboard: React.FC<FrostbiteRackDashboardProps> = ({
   onLoadPresetById,
   onStartProcessCam,
+  onLaunchCamProgram,
   onVerifyVucOnServer,
   lastServerVucHex,
 }) => {
@@ -33,6 +40,7 @@ export const FrostbiteRackDashboard: React.FC<FrostbiteRackDashboardProps> = ({
   const [substrateType, setSubstrateType] = useState<ChipFabricationType>('silicon-cmos');
   const [nodeNm, setNodeNm] = useState(7);
   const [dieAreaMm2, setDieAreaMm2] = useState(420);
+  const [maintenanceCycle, setMaintenanceCycle] = useState(0);
   const [verifyBusy, setVerifyBusy] = useState(false);
 
   const rackReport = useMemo(
@@ -44,6 +52,20 @@ export const FrostbiteRackDashboard: React.FC<FrostbiteRackDashboardProps> = ({
       }),
     [inputPowerMw, busVoltageVdc, ambientTempC]
   );
+
+  const dcState = useMemo(
+    () =>
+      evaluateFrostbiteDatacenterState({
+        inputPowerMw,
+        busVoltageVdc,
+        ambientTempC,
+        maintenanceCycle,
+      }),
+    [inputPowerMw, busVoltageVdc, ambientTempC, maintenanceCycle]
+  );
+
+  const dcPrograms = useMemo(() => listCamProductionPrograms('datacenter'), []);
+  const humanoidPrograms = useMemo(() => listCamProductionPrograms('humanoid'), []);
 
   const chipReport = useMemo(
     () => evaluateChipCamProfile(substrateType, nodeNm, dieAreaMm2),
@@ -91,11 +113,15 @@ export const FrostbiteRackDashboard: React.FC<FrostbiteRackDashboardProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => onStartProcessCam('robot-weld')}
+              onClick={() =>
+                onLaunchCamProgram
+                  ? onLaunchCamProgram('dc-coldplate')
+                  : onStartProcessCam('cnc-5axis')
+              }
               className="min-h-[42px] px-3.5 py-2 text-xs font-medium bg-[#141a24] border border-white/15 text-slate-200 hover:border-emerald-400/50 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 text-emerald-400" />
-              Fabricar Chassis CAM
+              Produzir Cold-Plate CAM
             </button>
           </div>
         </div>
@@ -260,6 +286,194 @@ export const FrostbiteRackDashboard: React.FC<FrostbiteRackDashboardProps> = ({
           <div className="text-slate-300 leading-relaxed">{rackReport.honestDisclosureNote}</div>
           <div className="font-mono-tabular text-sky-300 shrink-0">
             Ganho líquido: {rackReport.netComputeGainRatio}× · Economia HVAC: {rackReport.hvacSavingKw} kW
+          </div>
+        </div>
+
+        {/* Datacenter Pronto Funcional: Liquid Cooling + Robôs Humanoides (Sem Braço Mecânico) */}
+        <div className="bg-[#111620] border border-emerald-400/35 rounded-xl p-5 space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Droplets className="w-4 h-4 text-cyan-400" />
+                <h2 className="font-display text-base font-bold text-slate-100">
+                  Datacenter Pronto Funcional · Liquid Cooling 800 VDC (Sem Braço Mecânico)
+                </h2>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Operação contínua sem braço mecânico industrial: robôs humanoides autônomos realizam manutenção hidráulica e atualização hot-swap de servidores liquid cooling.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMaintenanceCycle((c) => c + 1)}
+              className="min-h-[38px] px-3.5 py-1.5 text-xs font-semibold bg-emerald-500/15 border border-emerald-400/45 text-emerald-200 hover:bg-emerald-500/25 rounded-lg flex items-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reiniciar Ciclo Humanoide (#{dcState.maintenanceCycle})
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs">
+            <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+              <div className="text-[10px] text-slate-500">Braço Mecânico</div>
+              <div className="font-mono-tabular font-semibold text-emerald-300 mt-0.5">
+                {dcState.hasMechanicalArm ? 'Ativo' : 'Nenhum (Humanoides)'}
+              </div>
+            </div>
+            <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+              <div className="text-[10px] text-slate-500">Supply / Return</div>
+              <div className="font-mono-tabular font-semibold text-cyan-300 mt-0.5">
+                {dcState.liquidCooling.supplyTempC}°C / {dcState.liquidCooling.returnTempC}°C
+              </div>
+            </div>
+            <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+              <div className="text-[10px] text-slate-500">Delta Térmico ΔT</div>
+              <div className="font-mono-tabular font-semibold text-amber-300 mt-0.5">
+                +{dcState.liquidCooling.deltaTC} °C
+              </div>
+            </div>
+            <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+              <div className="text-[10px] text-slate-500">Vazão Liquid Loop</div>
+              <div className="font-mono-tabular font-semibold text-slate-100 mt-0.5">
+                {dcState.liquidCooling.flowRateLpm} L/min
+              </div>
+            </div>
+            <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+              <div className="text-[10px] text-slate-500">Pressão / CDUs</div>
+              <div className="font-mono-tabular font-semibold text-slate-100 mt-0.5">
+                {dcState.liquidCooling.loopPressureBar} bar · {dcState.liquidCooling.cdusActive} CDUs
+              </div>
+            </div>
+            <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+              <div className="text-[10px] text-slate-500">PUE Operacional</div>
+              <div className="font-mono-tabular font-semibold text-emerald-400 mt-0.5">
+                {dcState.liquidCooling.pue} · Pronto
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {dcState.humanoidCrew.map((bot) => (
+              <div
+                key={bot.id}
+                className="p-3.5 bg-[#0c1017] border border-white/10 rounded-lg space-y-1.5 text-xs"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-semibold text-slate-100">
+                    <Bot className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <span>{bot.callsign}</span>
+                  </div>
+                  <span className="font-mono-tabular text-[11px] text-emerald-400">
+                    Bat. {bot.batteryPct}%
+                  </span>
+                </div>
+                <div className="text-[11px] font-mono-tabular text-sky-300">{bot.assignedBay}</div>
+                <div className="text-[11px] text-slate-300 leading-snug">{bot.currentTask}</div>
+                <div className="text-[10px] font-mono-tabular text-slate-500 flex justify-between pt-1 border-t border-white/8">
+                  <span>{bot.status}</span>
+                  <span>{bot.servicedLoopsCount} loops atendidos</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="text-[10px] font-mono-tabular text-emerald-400 truncate">
+            {dcState.vucProof.vucHash} · {dcState.vucProof.summary}
+          </div>
+        </div>
+
+        {/* Processos CAM Pré-Programados: Componentes do Datacenter & Robôs Humanoides */}
+        <div className="bg-[#111620] border border-white/10 rounded-xl p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="font-display text-base font-bold text-slate-100">
+                Processos CAM Pré-Programados · Componentes do Datacenter & Robôs Humanoides
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Cada processo fabrica integralmente os módulos do datacenter liquid cooling ou dos próprios robôs humanoides e pode ser reiniciado do começo ao fim (0% → 100%).
+              </p>
+            </div>
+            <a
+              href="/swagger"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-h-[36px] px-3 py-1.5 text-xs font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded-lg inline-flex items-center justify-center shrink-0"
+            >
+              Swagger / API CAM
+            </a>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-cyan-300">
+                Componentes do Datacenter ({dcPrograms.length})
+              </div>
+              <div className="space-y-2">
+                {dcPrograms.map((prog) => (
+                  <div
+                    key={prog.id}
+                    className="p-3 bg-[#0c1017] border border-white/10 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="font-semibold text-slate-100 truncate">{prog.title}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {prog.subsystem} · {prog.machineType} · {prog.estimatedCycleMin} min
+                      </div>
+                      <div className="text-[10px] font-mono-tabular text-slate-500">
+                        {prog.toleranceSpec}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onLaunchCamProgram
+                          ? onLaunchCamProgram(prog.id)
+                          : onStartProcessCam(prog.machineType)
+                      }
+                      className="min-h-[34px] px-3 py-1.5 text-[11px] font-semibold bg-cyan-500/15 border border-cyan-400/45 text-cyan-200 hover:bg-cyan-500/25 rounded-lg flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Iniciar / Reiniciar 0→100%
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-emerald-300">
+                Componentes dos Robôs Humanoides ({humanoidPrograms.length})
+              </div>
+              <div className="space-y-2">
+                {humanoidPrograms.map((prog) => (
+                  <div
+                    key={prog.id}
+                    className="p-3 bg-[#0c1017] border border-white/10 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="font-semibold text-slate-100 truncate">{prog.title}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {prog.subsystem} · {prog.machineType} · {prog.estimatedCycleMin} min
+                      </div>
+                      <div className="text-[10px] font-mono-tabular text-slate-500">
+                        {prog.toleranceSpec}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onLaunchCamProgram
+                          ? onLaunchCamProgram(prog.id)
+                          : onStartProcessCam(prog.machineType)
+                      }
+                      className="min-h-[34px] px-3 py-1.5 text-[11px] font-semibold bg-emerald-500/15 border border-emerald-400/45 text-emerald-200 hover:bg-emerald-500/25 rounded-lg flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Iniciar / Reiniciar 0→100%
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 

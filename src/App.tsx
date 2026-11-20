@@ -26,7 +26,7 @@ import {
 import { AdditiveCamConfigPanel } from './components/AdditiveCamConfigPanel';
 import { AgentVoiceCommandBar } from './components/AgentVoiceCommandBar';
 import { CadFilesPanel } from './components/CadFilesPanel';
-import { CamRoboticsPanel } from './components/CamRoboticsPanel';
+import { CamRoboticsPanel, type CamServiceSubmissionInput } from './components/CamRoboticsPanel';
 import { EcosystemHubPanel } from './components/EcosystemHubPanel';
 import { FrostbiteRackDashboard } from './components/FrostbiteRackDashboard';
 import { GrasshopperCanvas } from './components/GrasshopperCanvas';
@@ -47,7 +47,10 @@ import {
   exportOpenNurbs3DM,
   triggerBlobDownload,
 } from './kernel/cadFormats';
-import { evaluateCamProcessVisualState } from './kernel/camProcessEngine';
+import {
+  evaluateCamProcessVisualState,
+  getCamProductionProgram,
+} from './kernel/camProcessEngine';
 import { generateCamToolpath, getDefaultAdditiveSettings } from './kernel/camRobotics';
 import {
   SEGMENT_CATALOG,
@@ -99,6 +102,7 @@ import type {
   CadComponentPart,
   CadFeatureOperation,
   CadPlugin,
+  CamServiceJob,
   CamSettings,
   ComputeShareNode,
   ControlPoint4D,
@@ -178,6 +182,7 @@ export default function App() {
   const [computeNodes, setComputeNodes] = useState<ComputeShareNode[]>([]);
   const [erpRecords, setErpRecords] = useState<ErpCrmRecord[]>([]);
   const [remoteMachines, setRemoteMachines] = useState<RemoteMachineTarget[]>([]);
+  const [camServiceJobs, setCamServiceJobs] = useState<CamServiceJob[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Core Parametric NURBS & BIM state
@@ -762,12 +767,14 @@ export default function App() {
           logistics?: LogisticsTelemetryNode[];
           computeNodes?: ComputeShareNode[];
           remoteMachines?: RemoteMachineTarget[];
+          camServiceJobs?: CamServiceJob[];
         };
         if (data.erp) setErpRecords(data.erp);
         if (data.chat) setChatMessages(data.chat);
         if (data.logistics) setLogisticsNodes(data.logistics);
         if (data.computeNodes) setComputeNodes(data.computeNodes);
         if (data.remoteMachines) setRemoteMachines(data.remoteMachines);
+        if (data.camServiceJobs) setCamServiceJobs(data.camServiceJobs);
       } catch {
         // Offline tolerance
       }
@@ -803,6 +810,9 @@ export default function App() {
             setMcpEyeEvents((prev) =>
               prev.some((e) => e.id === eyeEvt.id) ? prev : [eyeEvt, ...prev.slice(0, 29)]
             );
+          } else if (msg.type === 'cam:service' && msg.payload) {
+            const job = msg.payload as CamServiceJob;
+            setCamServiceJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
           }
         } catch {
           // Ignore invalid WS frame
@@ -1334,6 +1344,82 @@ export default function App() {
       `Reinício produtivo CAM #${camRestartCount + 1} (${targetMachine}) · barra zerada com feixe/ferramenta visível`,
       { machineType: targetMachine, restartCount: camRestartCount + 1 }
     );
+  };
+
+  const handleLaunchCamProgram = (programId: string) => {
+    const prog = getCamProductionProgram(programId);
+    if (!prog) return;
+    setImportedModel(null);
+    setPartProfileOverride({
+      manufacturer: prog.category === 'datacenter' ? 'Frostbite DC Systems' : 'Frostbite Robotics',
+      modelCode: prog.id.toUpperCase(),
+      partName: prog.title,
+      intendedUse: prog.description,
+    });
+    setActiveSegment(prog.category === 'humanoid' ? 'robotica' : 'industrial-cnc');
+    setDesignParams((prev) => ({ ...prev, ...prog.designParamsPatch }));
+    setDisplay((d) => ({
+      ...d,
+      materialFinish: prog.material,
+      showMachine: true,
+      showToolpath: true,
+      fitViewTrigger: d.fitViewTrigger + 1,
+    }));
+    setCamSettings((prev) => ({
+      ...prev,
+      machineType: prog.machineType,
+      postFormat: prog.postFormat,
+      strategy: prog.strategy,
+      toolId: prog.toolId,
+      ...(prog.additiveConfig ? { additiveConfig: prog.additiveConfig } : {}),
+    }));
+    setSimProgress(0);
+    setSimPlaying(true);
+    setCamRestartCount((c) => c + 1);
+    setActiveTab('cam');
+    pushMcpEyeEvent(
+      'cam-output',
+      `CAM.Program.${prog.id}`,
+      `Programa CAM iniciado/reiniciado do zero (0%): ${prog.title} (${prog.machineType})`,
+      { programId: prog.id, category: prog.category, machineType: prog.machineType }
+    );
+  };
+
+  const handleSubmitCamService = async (payload: CamServiceSubmissionInput) => {
+    const resp = await fetch('/api/cam/services', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = (await resp.json()) as { job?: CamServiceJob; error?: string };
+    if (!resp.ok || !data.job) {
+      throw new Error(data.error || 'Erro ao registrar serviço CAM no servidor.');
+    }
+    const createdJob = data.job;
+    setCamServiceJobs((prev) => [createdJob, ...prev.filter((j) => j.id !== createdJob.id)]);
+    handleRestartCamProcess(createdJob.machineType);
+    pushMcpEyeEvent(
+      'cam-output',
+      `CAM.Service.${createdJob.sourceKind}`,
+      `Serviço CAM criado (${createdJob.sourceKind}): ${createdJob.title} · VUC ${createdJob.vucHash.slice(0, 14)}`,
+      { jobId: createdJob.id, vucHash: createdJob.vucHash }
+    );
+  };
+
+  const handleRestartCamServiceJob = async (jobId: string) => {
+    const resp = await fetch(`/api/cam/services/${encodeURIComponent(jobId)}/restart`, {
+      method: 'POST',
+    });
+    if (!resp.ok) return;
+    const data = (await resp.json()) as { job?: CamServiceJob };
+    if (!data.job) return;
+    const restarted = data.job;
+    setCamServiceJobs((prev) => [restarted, ...prev.filter((j) => j.id !== restarted.id)]);
+    if (restarted.programId && getCamProductionProgram(restarted.programId)) {
+      handleLaunchCamProgram(restarted.programId);
+    } else {
+      handleRestartCamProcess(restarted.machineType);
+    }
   };
 
   const handleSqliteOfflineLogin = async (payload: {
@@ -2143,6 +2229,10 @@ export default function App() {
                   camVisualState={camVisualState}
                   remoteMachines={remoteMachines}
                   onDispatchRemoteMachine={handleDispatchRemoteMachine}
+                  camServiceJobs={camServiceJobs}
+                  onLaunchProgram={handleLaunchCamProgram}
+                  onSubmitCamService={handleSubmitCamService}
+                  onRestartServiceJob={handleRestartCamServiceJob}
                 />
               </div>
               <div
@@ -2194,6 +2284,7 @@ export default function App() {
               handleRestartCamProcess(machineType);
               handleTabSwitch('cam');
             }}
+            onLaunchCamProgram={handleLaunchCamProgram}
             onVerifyVucOnServer={handleVerifyVucOnServer}
             lastServerVucHex={lastServerVucHex}
           />

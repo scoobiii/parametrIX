@@ -379,7 +379,7 @@ export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
     title: 'Rack #FrostbiteEngine vs @nvidia (1 MW · 800 VDC HVAC)',
     badge: '7nm CMOS · 800VDC',
     subtitle:
-      'Assembly 42U com barramento 800VDC, trocador HVAC líquido e lâminas 7nm Interaction-Net 500MHz (4.6×/W).',
+      'Datacenter pronto funcional com liquid cooling 800VDC (sem braço mecânico), robôs humanoides de manutenção/atualização e lâminas 7nm 500MHz.',
     segment: 'robotica',
     graphTemplateId: 'tpl-bim-shell',
     designParams: {
@@ -398,15 +398,15 @@ export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
       attractorStrength: 0,
     },
     camSettings: {
-      machineType: 'robot-weld',
+      machineType: 'cnc-5axis',
       strategy: 'contour',
-      toolId: 'tool-robot-spindle',
+      toolId: 'tool-ball-8',
       stepoverPct: 24,
       stepdownMm: 2.0,
       stockMarginMm: 0.15,
       safeZMm: 30,
       cutSpeedMultiplier: 1.0,
-      postFormat: 'weld-tig-mig',
+      postFormat: 'fanuc-nc',
     },
     feaSettings: {
       loadNewtons: 4200,

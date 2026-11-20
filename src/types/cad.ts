@@ -946,5 +946,79 @@ export interface VoiceActionIntent {
   feedbackText: string;
 }
 
+export type CamProgramTargetCategory = 'datacenter' | 'humanoid';
 
+export type CamServiceSourceKind = 'file' | 'url' | 'api' | 'catalog';
 
+export interface CamProductionProgram {
+  id: string;
+  title: string;
+  category: CamProgramTargetCategory;
+  subsystem: string;
+  material: MaterialFinish;
+  machineType: MachineType;
+  postFormat: PostProcessorFormat;
+  strategy: CamStrategy;
+  toolId: string;
+  designParamsPatch: Partial<ParametricDesignParams>;
+  additiveConfig?: AdditiveManufacturingSettings;
+  estimatedCycleMin: number;
+  toleranceSpec: string;
+  description: string;
+}
+
+export interface CamServiceJob {
+  id: string;
+  title: string;
+  targetCategory: CamProgramTargetCategory;
+  programId: string;
+  sourceKind: CamServiceSourceKind;
+  sourceRef: string;
+  filename: string;
+  machineType: MachineType;
+  postFormat: PostProcessorFormat;
+  status: 'em-fila' | 'executando' | 'reiniciado' | 'concluido';
+  progressPct: number;
+  restartCount: number;
+  estimatedMinutes: number;
+  cuttingLengthMm: number;
+  postCodeSnippet: string;
+  geometrySummary: string;
+  vucHash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HumanoidMaintenanceRobot {
+  id: string;
+  callsign: string;
+  role: 'liquid-cooling' | 'blade-upgrade' | 'busbar-calibration';
+  assignedBay: string;
+  currentTask: string;
+  status: 'em-manutencao' | 'atualizando-servidor' | 'inspecionando-cdus';
+  batteryPct: number;
+  servicedLoopsCount: number;
+  jointPostureDeg: number;
+}
+
+export interface LiquidCoolingLoopTelemetry {
+  coolantType: string;
+  supplyTempC: number;
+  returnTempC: number;
+  deltaTC: number;
+  flowRateLpm: number;
+  loopPressureBar: number;
+  cdusActive: number;
+  pue: number;
+}
+
+export interface FrostbiteDatacenterState {
+  operationalStatus: 'pronto-funcional';
+  hasMechanicalArm: false;
+  busVoltageVdc: number;
+  inputPowerMw: number;
+  maintenanceCycle: number;
+  liquidCooling: LiquidCoolingLoopTelemetry;
+  humanoidCrew: HumanoidMaintenanceRobot[];
+  vucProof: VucExecutionProof;
+}

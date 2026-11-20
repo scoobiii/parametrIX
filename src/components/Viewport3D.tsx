@@ -638,6 +638,223 @@ function buildRobot6AxisRig(): RobotRig {
   return { root, turret, upperArmPivot, forearmPivot, wristPivot, spindleTip };
 }
 
+interface FrostbiteHumanoidRig {
+  root: THREE.Group;
+  torsoPivot: THREE.Group;
+  headPivot: THREE.Group;
+  leftArmPivot: THREE.Group;
+  rightArmPivot: THREE.Group;
+}
+
+interface FrostbiteDatacenterRig {
+  root: THREE.Group;
+  humanoidA: FrostbiteHumanoidRig;
+  humanoidB: FrostbiteHumanoidRig;
+}
+
+function buildFrostbiteHumanoid(
+  x: number,
+  z: number,
+  rotY: number,
+  accentHex: number
+): FrostbiteHumanoidRig {
+  const root = new THREE.Group();
+  root.position.set(x, 0, z);
+  root.rotation.y = rotY;
+
+  const armorMat = new THREE.MeshStandardMaterial({
+    color: 0xe2e8f0,
+    metalness: 0.35,
+    roughness: 0.34,
+  });
+  const frameMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    metalness: 0.72,
+    roughness: 0.38,
+  });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color: accentHex,
+    metalness: 0.45,
+    roughness: 0.25,
+    emissive: accentHex,
+    emissiveIntensity: 0.25,
+  });
+  const visorMat = new THREE.MeshPhysicalMaterial({
+    color: 0x0f172a,
+    metalness: 0.2,
+    roughness: 0.1,
+    clearcoat: 0.9,
+  });
+
+  // Feet & Legs (grounded at y=0)
+  for (const side of [-1, 1]) {
+    const lx = side * 9;
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(10, 6, 16), frameMat);
+    boot.position.set(lx, 3, 2);
+    boot.castShadow = true;
+    root.add(boot);
+
+    const shin = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 3.8, 30, 14), armorMat);
+    shin.position.set(lx, 21, 0);
+    shin.castShadow = true;
+    root.add(shin);
+
+    const knee = new THREE.Mesh(new THREE.SphereGeometry(4.6, 12, 12), frameMat);
+    knee.position.set(lx, 37, 0);
+    root.add(knee);
+
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(5, 4.4, 28, 14), armorMat);
+    thigh.position.set(lx, 52, 0);
+    thigh.castShadow = true;
+    root.add(thigh);
+  }
+
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(26, 11, 15), frameMat);
+  pelvis.position.set(0, 68, 0);
+  pelvis.castShadow = true;
+  root.add(pelvis);
+
+  const torsoPivot = new THREE.Group();
+  torsoPivot.position.set(0, 74, 0);
+  root.add(torsoPivot);
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(30, 34, 18), armorMat);
+  torso.position.set(0, 18, 0);
+  torso.castShadow = true;
+  torsoPivot.add(torso);
+
+  const chestCore = new THREE.Mesh(new THREE.CylinderGeometry(4.8, 4.8, 3, 18), accentMat);
+  chestCore.rotation.x = Math.PI / 2;
+  chestCore.position.set(0, 21, 9.2);
+  torsoPivot.add(chestCore);
+
+  const backpack = new THREE.Mesh(new THREE.BoxGeometry(22, 26, 10), frameMat);
+  backpack.position.set(0, 19, -12);
+  backpack.castShadow = true;
+  torsoPivot.add(backpack);
+
+  const headPivot = new THREE.Group();
+  headPivot.position.set(0, 39, 0);
+  torsoPivot.add(headPivot);
+
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(4, 4.5, 6, 12), frameMat);
+  neck.position.set(0, 1, 0);
+  headPivot.add(neck);
+
+  const skull = new THREE.Mesh(new THREE.BoxGeometry(15, 16, 16), armorMat);
+  skull.position.set(0, 10, 0);
+  skull.castShadow = true;
+  headPivot.add(skull);
+
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(13.4, 6.5, 3), visorMat);
+  visor.position.set(0, 10.5, 7.2);
+  headPivot.add(visor);
+
+  const visorGlow = new THREE.Mesh(new THREE.BoxGeometry(11.5, 1.8, 1), accentMat);
+  visorGlow.position.set(0, 10.5, 8.6);
+  headPivot.add(visorGlow);
+
+  const createArm = (side: -1 | 1) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 19, 31, 0);
+    torsoPivot.add(pivot);
+
+    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(5.2, 12, 12), frameMat);
+    pivot.add(shoulder);
+
+    const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(3.8, 3.4, 24, 12), armorMat);
+    upperArm.position.set(0, -12, 0);
+    upperArm.castShadow = true;
+    pivot.add(upperArm);
+
+    const elbow = new THREE.Mesh(new THREE.SphereGeometry(3.8, 10, 10), frameMat);
+    elbow.position.set(0, -25, 0);
+    pivot.add(elbow);
+
+    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 2.8, 22, 12), armorMat);
+    forearm.position.set(0, -33, 9);
+    forearm.rotation.x = Math.PI / 3;
+    forearm.castShadow = true;
+    pivot.add(forearm);
+
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(5.5, 5, 8.5), accentMat);
+    hand.position.set(0, -39, 19.5);
+    pivot.add(hand);
+
+    return pivot;
+  };
+
+  const leftArmPivot = createArm(-1);
+  const rightArmPivot = createArm(1);
+
+  return { root, torsoPivot, headPivot, leftArmPivot, rightArmPivot };
+}
+
+function buildFrostbiteDatacenterRig(): FrostbiteDatacenterRig {
+  const root = new THREE.Group();
+
+  const cduFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    metalness: 0.72,
+    roughness: 0.38,
+  });
+  const manifoldMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8,
+    metalness: 0.88,
+    roughness: 0.22,
+  });
+  const supplyMat = new THREE.MeshStandardMaterial({
+    color: 0x06b6d4,
+    metalness: 0.45,
+    roughness: 0.25,
+    emissive: 0x0891b2,
+    emissiveIntensity: 0.35,
+  });
+  const returnMat = new THREE.MeshStandardMaterial({
+    color: 0xf97316,
+    metalness: 0.45,
+    roughness: 0.28,
+    emissive: 0xc2410c,
+    emissiveIntensity: 0.28,
+  });
+
+  // Flanking Liquid-Cooling CDU Cabinets + Dual Thermal Manifolds (Zero Mechanical Arm)
+  for (const side of [-1, 1]) {
+    const cx = side * 145;
+    const cdu = new THREE.Mesh(new THREE.BoxGeometry(36, 138, 64), cduFrameMat);
+    cdu.position.set(cx, 69, -20);
+    cdu.castShadow = true;
+    cdu.receiveShadow = true;
+    root.add(cdu);
+
+    const header = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 5.5, 118, 16), manifoldMat);
+    header.position.set(cx - side * 22, 68, -20);
+    header.castShadow = true;
+    root.add(header);
+
+    const supplyCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(cx - side * 22, 22, -20),
+      new THREE.Vector3(cx - side * 46, 22, -32),
+      new THREE.Vector3(side * 78, 22, -55),
+    ]);
+    root.add(new THREE.Mesh(new THREE.TubeGeometry(supplyCurve, 18, 3.2, 10, false), supplyMat));
+
+    const returnCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(cx - side * 22, 112, -20),
+      new THREE.Vector3(cx - side * 46, 112, -32),
+      new THREE.Vector3(side * 78, 112, -55),
+    ]);
+    root.add(new THREE.Mesh(new THREE.TubeGeometry(returnCurve, 18, 3.2, 10, false), returnMat));
+  }
+
+  // Two Autonomous Bipedal Humanoid Maintenance & Upgrade Robots
+  const humanoidA = buildFrostbiteHumanoid(-62, 106, Math.PI, 0x38bdf8);
+  const humanoidB = buildFrostbiteHumanoid(68, 102, Math.PI - 0.25, 0x10b981);
+  root.add(humanoidA.root, humanoidB.root);
+
+  return { root, humanoidA, humanoidB };
+}
+
 export const Viewport3D: React.FC<Viewport3DProps> = ({
   surface,
   meshData,
@@ -714,6 +931,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     magicPenActive,
     components,
     camVisualState,
+    isFrostbiteDatacenter: false,
     onSimProgressChange,
     onSelectControlPoint,
     onUpdateDisplay,
@@ -735,6 +953,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     magicPenActive,
     components,
     camVisualState,
+    isFrostbiteDatacenter: Boolean(
+      importedModel?.filename.includes('Frostbite') || partProfile?.modelCode?.startsWith('FB-')
+    ),
     onSimProgressChange,
     onSelectControlPoint,
     onUpdateDisplay,
@@ -869,6 +1090,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     measureGroup: THREE.Group;
     spindleGroup: THREE.Group;
     robotRig: RobotRig;
+    frostbiteDcRig: FrostbiteDatacenterRig;
     processFx: ProcessFxRig;
     clipPlane: THREE.Plane;
     zebraTex: THREE.CanvasTexture;
@@ -1058,10 +1280,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     const spindleGroup = buildSpindleGroup();
     const robotRig = buildRobot6AxisRig();
+    const frostbiteDcRig = buildFrostbiteDatacenterRig();
     const processFx = buildProcessFxRig();
     spindleGroup.visible = false;
     robotRig.root.visible = false;
-    scene.add(spindleGroup, robotRig.root, processFx.root);
+    frostbiteDcRig.root.visible = false;
+    scene.add(spindleGroup, robotRig.root, frostbiteDcRig.root, processFx.root);
 
     // Visual IX Section Plane Helper (green frame + translucent cut sheet)
     const sectionHelperGroup = new THREE.Group();
@@ -1116,7 +1340,21 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     }
 
     const updateMachinePose = (progress: number) => {
-      const { toolpath: tp, machineType: mType } = stateRef.current;
+      const { toolpath: tp, machineType: mType, isFrostbiteDatacenter } = stateRef.current;
+
+      const phase = progress * Math.PI * 2;
+      if (isFrostbiteDatacenter) {
+        frostbiteDcRig.humanoidA.torsoPivot.rotation.y = Math.sin(phase) * 0.14;
+        frostbiteDcRig.humanoidA.headPivot.rotation.y = Math.sin(phase * 1.5) * 0.18;
+        frostbiteDcRig.humanoidA.leftArmPivot.rotation.x = -0.35 + Math.sin(phase) * 0.22;
+        frostbiteDcRig.humanoidA.rightArmPivot.rotation.x = -0.42 - Math.cos(phase) * 0.24;
+
+        frostbiteDcRig.humanoidB.torsoPivot.rotation.y = -Math.cos(phase) * 0.12;
+        frostbiteDcRig.humanoidB.headPivot.rotation.y = -Math.sin(phase) * 0.15;
+        frostbiteDcRig.humanoidB.leftArmPivot.rotation.x = -0.4 + Math.cos(phase * 1.2) * 0.2;
+        frostbiteDcRig.humanoidB.rightArmPivot.rotation.x = -0.32 + Math.sin(phase * 1.2) * 0.22;
+      }
+
       if (!tp || tp.points.length === 0) return;
 
       const idxFloat = Math.max(0, Math.min(1, progress)) * (tp.points.length - 1);
@@ -1135,14 +1373,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       const ny = THREE.MathUtils.lerp(p0.nz, p1.nz, frac);
       const nz = THREE.MathUtils.lerp(-p0.ny, -p1.ny, frac);
 
-      if (mType === 'robot-6axis' || mType === 'robot-weld') {
+      if (!isFrostbiteDatacenter && (mType === 'robot-6axis' || mType === 'robot-weld')) {
         const ik = solveRobot6AxisIK(wx, wy, wz, [nx, ny, nz]);
         robotRig.turret.rotation.y = ik.j1;
         robotRig.upperArmPivot.rotation.z = ik.j2;
         robotRig.forearmPivot.rotation.z = -ik.j3;
         robotRig.wristPivot.rotation.z = ik.j5;
         robotRig.spindleTip.rotation.y += mType === 'robot-weld' ? 0.05 : 0.35;
-      } else {
+      } else if (!isFrostbiteDatacenter) {
         spindleGroup.position.set(wx, wy, wz);
         _vec3A.set(nx, ny, nz).normalize();
         _quatA.setFromUnitVectors(_upVec, _vec3A);
@@ -1150,7 +1388,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       }
 
       const fxState = stateRef.current.camVisualState;
-      const showFx = Boolean(stateRef.current.display.showMachine && fxState);
+      const showFx = Boolean(stateRef.current.display.showMachine && !isFrostbiteDatacenter && fxState);
       processFx.root.visible = showFx;
       if (fxState) {
         processFx.root.position.set(wx, wy, wz);
@@ -1622,6 +1860,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       measureGroup,
       spindleGroup,
       robotRig,
+      frostbiteDcRig,
       processFx,
       clipPlane,
       zebraTex,
@@ -2254,9 +2493,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const showMachine =
       display.showMachine && Boolean(toolpath && toolpath.points.length > 0);
     const isRobotRig = machineType === 'robot-6axis' || machineType === 'robot-weld';
-    refs.spindleGroup.visible = showMachine && !isRobotRig;
-    refs.robotRig.root.visible = showMachine && isRobotRig;
-    refs.processFx.root.visible = showMachine && Boolean(camVisualState);
+    const isFrostbiteDatacenter = Boolean(
+      importedModel?.filename.includes('Frostbite') || partProfile?.modelCode?.startsWith('FB-')
+    );
+    refs.frostbiteDcRig.root.visible = isFrostbiteDatacenter;
+    refs.spindleGroup.visible = showMachine && !isRobotRig && !isFrostbiteDatacenter;
+    refs.robotRig.root.visible = showMachine && isRobotRig && !isFrostbiteDatacenter;
+    refs.processFx.root.visible = showMachine && !isFrostbiteDatacenter && Boolean(camVisualState);
 
     // TransformControls Gizmo attachment
     const tHelper = refs.transformControls.getHelper();

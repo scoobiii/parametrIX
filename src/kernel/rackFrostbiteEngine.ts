@@ -1,6 +1,8 @@
 import type {
   ChipCamReport,
   ChipFabricationType,
+  FrostbiteDatacenterState,
+  HumanoidMaintenanceRobot,
   RackArchitectureSpec,
   RackComparisonReport,
 } from '../types/cad';
@@ -11,6 +13,13 @@ export interface RackComparisonInput {
   busVoltageVdc: number;
   ambientTempC: number;
   frostbitePerfMultiplier?: number;
+}
+
+export interface FrostbiteDatacenterInput {
+  inputPowerMw: number;
+  busVoltageVdc: number;
+  ambientTempC: number;
+  maintenanceCycle?: number;
 }
 
 /**
@@ -125,6 +134,108 @@ export function evaluateRackComparison(input: RackComparisonInput): RackComparis
       'RACK_FROSTBITE_1MW_800VDC',
       `Comparativo 1MW (${vdc}VDC): Ganho ${netComputeGainRatio}× · Economia HVAC ${hvacSavingKw} kW`,
       payloadForVuc
+    ),
+  };
+}
+
+/**
+ * Evaluates operational state of the Frostbite Liquid-Cooling Datacenter:
+ * Ready & functional datacenter with NO mechanical arm, serviced by autonomous
+ * humanoid robots performing server blade updates & liquid-cooling maintenance.
+ */
+export function evaluateFrostbiteDatacenterState(
+  input: FrostbiteDatacenterInput
+): FrostbiteDatacenterState {
+  const mw = Math.max(0.2, Math.min(4.0, Number(input.inputPowerMw) || 1.0));
+  const vdc = Math.max(400, Math.min(1200, Number(input.busVoltageVdc) || 800));
+  const ambientC = Math.max(15, Math.min(42, Number(input.ambientTempC) || 24));
+  const cycle = Math.max(0, Math.floor(input.maintenanceCycle ?? 0));
+
+  const ambientPenalty = Math.max(0, (ambientC - 22) * 0.008);
+  const pue = Number((1.08 + ambientPenalty * 0.65).toFixed(3));
+  const supplyTempC = Number((18.5 + (ambientC - 20) * 0.25).toFixed(1));
+  const deltaTC = Number((9.4 + mw * 3.8).toFixed(1));
+  const returnTempC = Number((supplyTempC + deltaTC).toFixed(1));
+  const flowRateLpm = Number((mw * 380).toFixed(1));
+  const loopPressureBar = Number((2.4 + mw * 0.35).toFixed(2));
+  const cdusActive = mw >= 1.5 ? 4 : 2;
+
+  const bayPool = ['Rack-A01 · Cold-Plate', 'Rack-B04 · Barramento 800VDC', 'CDU-Leste · Manifold'];
+  const taskPool = [
+    'Troca de cartucho Cold-Plate & purga de microbolhas',
+    'Atualização hot-swap de lâminas Frostbite 7nm CMOS',
+    'Inspeção térmica e torque de engates rápidos 800VDC',
+  ];
+
+  const humanoidCrew: HumanoidMaintenanceRobot[] = [
+    {
+      id: 'hum-op-01',
+      callsign: 'FBE-Humanoide-01',
+      role: 'liquid-cooling',
+      assignedBay: bayPool[cycle % 3],
+      currentTask: taskPool[cycle % 3],
+      status: 'em-manutencao',
+      batteryPct: 96 - (cycle % 7),
+      servicedLoopsCount: 14 + cycle,
+      jointPostureDeg: 18 + (cycle % 5) * 6,
+    },
+    {
+      id: 'hum-op-02',
+      callsign: 'FBE-Humanoide-02',
+      role: 'blade-upgrade',
+      assignedBay: bayPool[(cycle + 1) % 3],
+      currentTask: taskPool[(cycle + 1) % 3],
+      status: 'atualizando-servidor',
+      batteryPct: 92 - (cycle % 5),
+      servicedLoopsCount: 11 + cycle,
+      jointPostureDeg: 28 + (cycle % 4) * 5,
+    },
+    {
+      id: 'hum-op-03',
+      callsign: 'FBE-Humanoide-03',
+      role: 'busbar-calibration',
+      assignedBay: bayPool[(cycle + 2) % 3],
+      currentTask: taskPool[(cycle + 2) % 3],
+      status: 'inspecionando-cdus',
+      batteryPct: 94 - (cycle % 6),
+      servicedLoopsCount: 9 + cycle,
+      jointPostureDeg: 12 + (cycle % 6) * 4,
+    },
+  ];
+
+  const payload = {
+    mw,
+    vdc,
+    ambientC,
+    cycle,
+    supplyTempC,
+    returnTempC,
+    flowRateLpm,
+    cdusActive,
+    hasMechanicalArm: false,
+  };
+
+  return {
+    operationalStatus: 'pronto-funcional',
+    hasMechanicalArm: false,
+    busVoltageVdc: vdc,
+    inputPowerMw: Number(mw.toFixed(2)),
+    maintenanceCycle: cycle,
+    liquidCooling: {
+      coolantType: 'Fluido Dielétrico / Água-Glicol Cold-Plate 800VDC',
+      supplyTempC,
+      returnTempC,
+      deltaTC,
+      flowRateLpm,
+      loopPressureBar,
+      cdusActive,
+      pue,
+    },
+    humanoidCrew,
+    vucProof: buildVucExecutionProof(
+      'FROSTBITE_DC_HUMANOID_CREW',
+      `Datacenter Liquid Cooling (${supplyTempC}°C→${returnTempC}°C) · 3 Humanoides · Ciclo #${cycle}`,
+      payload
     ),
   };
 }

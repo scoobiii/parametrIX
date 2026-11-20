@@ -3,9 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  CAM_PRODUCTION_PROGRAMS,
   PROCESS_LABELS,
   buildToolChangeSequence,
   evaluateCamProcessVisualState,
+  getCamProductionProgram,
+  listCamProductionPrograms,
 } from '../src/kernel/camProcessEngine';
 import { generateCamToolpath } from '../src/kernel/camRobotics';
 import {
@@ -24,6 +27,7 @@ import {
 import { buildNurbsSurfaceFromParams, tessellateNurbsSurface } from '../src/kernel/nurbs';
 import {
   evaluateChipCamProfile,
+  evaluateFrostbiteDatacenterState,
   evaluateRackComparison,
 } from '../src/kernel/rackFrostbiteEngine';
 import { parseVoiceCommand } from '../src/kernel/voiceCommandParser';
@@ -117,6 +121,37 @@ describe('rackFrostbiteEngine kernel', () => {
     expect(hyb.tileCount).toBe(256);
     expect(hyb.vucProof.vucHash).toMatch(/^VUC-[0-9A-F]{64}$/);
   });
+
+  it('evaluates functional liquid-cooling Frostbite Datacenter with humanoid crew and NO mechanical arm', () => {
+    const baseDc = evaluateFrostbiteDatacenterState({
+      inputPowerMw: 1.0,
+      busVoltageVdc: 800,
+      ambientTempC: 24,
+    });
+    expect(baseDc.operationalStatus).toBe('pronto-funcional');
+    expect(baseDc.hasMechanicalArm).toBe(false);
+    expect(baseDc.liquidCooling.cdusActive).toBe(2);
+    expect(baseDc.humanoidCrew).toHaveLength(3);
+    expect(baseDc.vucProof.vucHash).toMatch(/^VUC-[0-9A-F]{64}$/);
+
+    const highLoadDc = evaluateFrostbiteDatacenterState({
+      inputPowerMw: 1.8,
+      busVoltageVdc: 800,
+      ambientTempC: 28,
+      maintenanceCycle: 2,
+    });
+    expect(highLoadDc.liquidCooling.cdusActive).toBe(4);
+    expect(highLoadDc.maintenanceCycle).toBe(2);
+
+    const fallbackDc = evaluateFrostbiteDatacenterState({
+      inputPowerMw: 0,
+      busVoltageVdc: 0,
+      ambientTempC: 0,
+      maintenanceCycle: 1,
+    });
+    expect(fallbackDc.inputPowerMw).toBe(1);
+    expect(fallbackDc.busVoltageVdc).toBe(800);
+  });
 });
 
 describe('camProcessEngine kernel', () => {
@@ -184,6 +219,15 @@ describe('camProcessEngine kernel', () => {
     const cncFinish = evaluateCamProcessVisualState(baseCam, tp, 0.9, 1);
     expect(cncFinish.activeToolEvent.toolNumber).toBe('T03');
     expect(cncFinish.vucProof.vucHash).toMatch(/^VUC-[0-9A-F]{64}$/);
+
+    // Datacenter & Humanoid Robot pre-programmed CAM catalog
+    expect(CAM_PRODUCTION_PROGRAMS).toHaveLength(9);
+    expect(listCamProductionPrograms()).toHaveLength(9);
+    expect(listCamProductionPrograms('datacenter')).toHaveLength(5);
+    expect(listCamProductionPrograms('humanoid')).toHaveLength(4);
+    expect(getCamProductionProgram('dc-coldplate')?.category).toBe('datacenter');
+    expect(getCamProductionProgram('hum-actuator')?.category).toBe('humanoid');
+    expect(getCamProductionProgram('missing-program')).toBeUndefined();
   });
 });
 
@@ -501,6 +545,46 @@ describe('ecosystemErpLogistics & ParametrixSqliteStore', () => {
 
     // VUC ledger
     expect(store.listVucLedger().length).toBeGreaterThan(0);
+
+    // CAM service jobs: seeded jobs, create (auto ID & explicit ID), and full restart
+    expect(store.listCamServiceJobs().length).toBeGreaterThanOrEqual(2);
+    const camJobAuto = store.createCamServiceJob({
+      title: 'Cold-Plate URL Sync',
+      targetCategory: 'datacenter',
+      programId: 'dc-coldplate',
+      sourceKind: 'url',
+      sourceRef: 'https://example.com/coldplate.step',
+      filename: 'coldplate.step',
+      machineType: 'cnc-5axis',
+      postFormat: 'fanuc-nc',
+      estimatedMinutes: 18.4,
+      cuttingLengthMm: 2950,
+      postCodeSnippet: 'G90 G21\nG01 X10 Y10',
+      geometrySummary: '190x120x18 mm',
+    });
+    expect(camJobAuto.status).toBe('executando');
+
+    const camJobExplicit = store.createCamServiceJob({
+      id: 'cam-srv-custom-1',
+      title: 'Torso Humanoide API',
+      targetCategory: 'humanoid',
+      programId: 'hum-torso',
+      sourceKind: 'api',
+      sourceRef: 'api://cam/services',
+      filename: 'torso.slm.nc',
+      machineType: 'powder-metal',
+      postFormat: 'slm-powder',
+      estimatedMinutes: 42.0,
+      cuttingLengthMm: 6200,
+      postCodeSnippet: 'LPBF START',
+      geometrySummary: '195x145x56 mm',
+    });
+    expect(camJobExplicit.id).toBe('cam-srv-custom-1');
+    expect(store.restartCamServiceJob('non-existent-cam-job')).toBeNull();
+    const restartedCamJob = store.restartCamServiceJob('cam-srv-custom-1');
+    expect(restartedCamJob?.status).toBe('reiniciado');
+    expect(restartedCamJob?.restartCount).toBe(1);
+    expect(restartedCamJob?.progressPct).toBe(0);
 
     // Reopen second store on same file DB to exercise non-empty seed skip branches
     const reopen = new ParametrixSqliteStore(fileDbPath);

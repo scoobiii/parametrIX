@@ -12,6 +12,9 @@ import { computeDeterministicVucHash } from '../kernel/vucHash';
 import type {
   AuthProviderKind,
   AuthUserProfile,
+  CamProgramTargetCategory,
+  CamServiceJob,
+  CamServiceSourceKind,
   ComputeShareNode,
   EcosystemChatMessage,
   EcosystemRole,
@@ -19,6 +22,7 @@ import type {
   LogisticsModal,
   LogisticsTelemetryNode,
   MachineType,
+  PostProcessorFormat,
   RemoteMachineTarget,
 } from '../types/cad';
 
@@ -168,6 +172,28 @@ export class ParametrixSqliteStore {
         payload_json TEXT NOT NULL,
         sha256_hex TEXT NOT NULL,
         created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS cam_service_jobs (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        target_category TEXT NOT NULL,
+        program_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        machine_type TEXT NOT NULL,
+        post_format TEXT NOT NULL,
+        status TEXT NOT NULL,
+        progress_pct REAL NOT NULL DEFAULT 0,
+        restart_count INTEGER NOT NULL DEFAULT 0,
+        estimated_minutes REAL NOT NULL,
+        cutting_length_mm REAL NOT NULL,
+        post_code_snippet TEXT NOT NULL,
+        geometry_summary TEXT NOT NULL,
+        vuc_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
     `);
   }
@@ -433,6 +459,86 @@ export class ParametrixSqliteStore {
         content:
           'Célula Foxconn online (@foxconn.cam.br). Pronto para receber arquivos .STL/.NC/.SRC com prova VUC e despachar via iFood/99 ou modal Rodo-Ferro-Aero-Fluvial.',
       });
+    }
+
+    const camJobCount = (
+      this.db.prepare('SELECT COUNT(*) as c FROM cam_service_jobs').get() as { c: number }
+    ).c;
+    if (camJobCount === 0) {
+      const camSeeds: CamServiceJob[] = [
+        {
+          id: 'cam-srv-dc-coldplate',
+          title: 'Cold-Plate Liquid Cooling 800VDC (Lote Frostbite)',
+          targetCategory: 'datacenter',
+          programId: 'dc-coldplate',
+          sourceKind: 'catalog',
+          sourceRef: 'program://dc-coldplate',
+          filename: 'coldplate_frostbite_800vdc.nc',
+          machineType: 'cnc-5axis',
+          postFormat: 'fanuc-nc',
+          status: 'executando',
+          progressPct: 35,
+          restartCount: 0,
+          estimatedMinutes: 24.5,
+          cuttingLengthMm: 4820,
+          postCodeSnippet: 'G90 G21 G17\nM06 T03 (Fresa Esferica 8mm)\nG01 X95.0 Y60.0 Z18.0 F1800',
+          geometrySummary: '190×120×18 mm · Micro-canais Liquid Cooling',
+          vucHash: computeDeterministicVucHash('CAM_SERVICE_SEED', 'cam-srv-dc-coldplate'),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'cam-srv-hum-actuator',
+          title: 'Atuador Harmônico Humanoide Manutenção DC',
+          targetCategory: 'humanoid',
+          programId: 'hum-actuator',
+          sourceKind: 'catalog',
+          sourceRef: 'program://hum-actuator',
+          filename: 'humanoide_atuador_harmonico.nc',
+          machineType: 'cnc-5axis',
+          postFormat: 'fanuc-nc',
+          status: 'em-fila',
+          progressPct: 0,
+          restartCount: 0,
+          estimatedMinutes: 22.8,
+          cuttingLengthMm: 3910,
+          postCodeSnippet: 'G90 G21 G17\nM06 T02 (Desbaste Ti-6Al-4V)\nG01 X67.5 Y67.5 Z42.0 F1450',
+          geometrySummary: '135×135×42 mm · Junta Ombro/Joelho IT6',
+          vucHash: computeDeterministicVucHash('CAM_SERVICE_SEED', 'cam-srv-hum-actuator'),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+      const stmt = this.db.prepare(
+        `INSERT INTO cam_service_jobs (
+          id, title, target_category, program_id, source_kind, source_ref, filename,
+          machine_type, post_format, status, progress_pct, restart_count, estimated_minutes,
+          cutting_length_mm, post_code_snippet, geometry_summary, vuc_hash, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const j of camSeeds) {
+        stmt.run(
+          j.id,
+          j.title,
+          j.targetCategory,
+          j.programId,
+          j.sourceKind,
+          j.sourceRef,
+          j.filename,
+          j.machineType,
+          j.postFormat,
+          j.status,
+          j.progressPct,
+          j.restartCount,
+          j.estimatedMinutes,
+          j.cuttingLengthMm,
+          j.postCodeSnippet,
+          j.geometrySummary,
+          j.vucHash,
+          j.createdAt,
+          j.updatedAt
+        );
+      }
     }
   }
 
@@ -956,5 +1062,157 @@ export class ParametrixSqliteStore {
       sha256Hex: String(r.sha256_hex),
       createdAt: String(r.created_at),
     }));
+  }
+
+  private mapCamServiceRow(r: Record<string, unknown>): CamServiceJob {
+    return {
+      id: String(r.id),
+      title: String(r.title),
+      targetCategory: r.target_category as CamProgramTargetCategory,
+      programId: String(r.program_id),
+      sourceKind: r.source_kind as CamServiceSourceKind,
+      sourceRef: String(r.source_ref),
+      filename: String(r.filename),
+      machineType: r.machine_type as MachineType,
+      postFormat: r.post_format as PostProcessorFormat,
+      status: r.status as CamServiceJob['status'],
+      progressPct: Number(r.progress_pct),
+      restartCount: Number(r.restart_count),
+      estimatedMinutes: Number(r.estimated_minutes),
+      cuttingLengthMm: Number(r.cutting_length_mm),
+      postCodeSnippet: String(r.post_code_snippet),
+      geometrySummary: String(r.geometry_summary),
+      vucHash: String(r.vuc_hash),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at),
+    };
+  }
+
+  public listCamServiceJobs(): CamServiceJob[] {
+    const rows = this.db
+      .prepare('SELECT * FROM cam_service_jobs ORDER BY updated_at DESC LIMIT 50')
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapCamServiceRow(r));
+  }
+
+  public createCamServiceJob(input: {
+    id?: string;
+    title: string;
+    targetCategory: CamProgramTargetCategory;
+    programId: string;
+    sourceKind: CamServiceSourceKind;
+    sourceRef: string;
+    filename: string;
+    machineType: MachineType;
+    postFormat: PostProcessorFormat;
+    estimatedMinutes: number;
+    cuttingLengthMm: number;
+    postCodeSnippet: string;
+    geometrySummary: string;
+  }): CamServiceJob {
+    const now = new Date().toISOString();
+    const id = input.id || `cam-srv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const vucHash = computeDeterministicVucHash('CAM_SERVICE_CREATE', {
+      id,
+      title: input.title,
+      sourceKind: input.sourceKind,
+      programId: input.programId,
+      machineType: input.machineType,
+      cuttingLengthMm: input.cuttingLengthMm,
+    });
+    this.db
+      .prepare(
+        `INSERT INTO cam_service_jobs (
+          id, title, target_category, program_id, source_kind, source_ref, filename,
+          machine_type, post_format, status, progress_pct, restart_count, estimated_minutes,
+          cutting_length_mm, post_code_snippet, geometry_summary, vuc_hash, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        input.title,
+        input.targetCategory,
+        input.programId,
+        input.sourceKind,
+        input.sourceRef,
+        input.filename,
+        input.machineType,
+        input.postFormat,
+        'executando',
+        0,
+        0,
+        input.estimatedMinutes,
+        input.cuttingLengthMm,
+        input.postCodeSnippet,
+        input.geometrySummary,
+        vucHash,
+        now,
+        now
+      );
+    this.recordVucProof(
+      'CAM_SERVICE_INGEST',
+      `Serviço CAM (${input.sourceKind}): ${input.title}`,
+      { id, sourceRef: input.sourceRef, vucHash }
+    );
+    return {
+      id,
+      title: input.title,
+      targetCategory: input.targetCategory,
+      programId: input.programId,
+      sourceKind: input.sourceKind,
+      sourceRef: input.sourceRef,
+      filename: input.filename,
+      machineType: input.machineType,
+      postFormat: input.postFormat,
+      status: 'executando',
+      progressPct: 0,
+      restartCount: 0,
+      estimatedMinutes: input.estimatedMinutes,
+      cuttingLengthMm: input.cuttingLengthMm,
+      postCodeSnippet: input.postCodeSnippet,
+      geometrySummary: input.geometrySummary,
+      vucHash,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  public restartCamServiceJob(jobId: string): CamServiceJob | null {
+    const existing = this.db
+      .prepare('SELECT * FROM cam_service_jobs WHERE id = ?')
+      .get(jobId) as Record<string, unknown> | undefined;
+    if (!existing) return null;
+
+    const current = this.mapCamServiceRow(existing);
+    const nextRestartCount = current.restartCount + 1;
+    const now = new Date().toISOString();
+    const vucHash = computeDeterministicVucHash('CAM_SERVICE_RESTART', {
+      id: current.id,
+      restartCount: nextRestartCount,
+      programId: current.programId,
+      machineType: current.machineType,
+    });
+    this.db
+      .prepare(
+        `UPDATE cam_service_jobs
+         SET status = ?, progress_pct = 0, restart_count = ?, vuc_hash = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run('reiniciado', nextRestartCount, vucHash, now, jobId);
+
+    this.recordVucProof(
+      'CAM_SERVICE_RESTART',
+      `Reinício completo #${nextRestartCount}: ${current.title}`,
+      { jobId, nextRestartCount, vucHash }
+    );
+
+    return {
+      ...current,
+      status: 'reiniciado',
+      progressPct: 0,
+      restartCount: nextRestartCount,
+      vucHash,
+      updatedAt: now,
+    };
   }
 }

@@ -1,11 +1,13 @@
 import type {
   CamProcessVisualState,
+  CamProductionProgram,
+  CamProgramTargetCategory,
   CamSettings,
   CamToolChangeEvent,
   MachineType,
   ToolpathResult,
 } from '../types/cad';
-import { resolveAdditiveSettings } from './camRobotics';
+import { getDefaultAdditiveSettings, resolveAdditiveSettings } from './camRobotics';
 import { buildVucExecutionProof } from './vucHash';
 
 export const PROCESS_LABELS: Record<MachineType, string> = {
@@ -243,4 +245,179 @@ export function evaluateCamProcessVisualState(
       }
     ),
   };
+}
+
+export const CAM_PRODUCTION_PROGRAMS: CamProductionProgram[] = [
+  {
+    id: 'dc-coldplate',
+    title: 'Cold-Plate Micro-Canais Liquid Cooling (Cobre/Al)',
+    category: 'datacenter',
+    subsystem: 'Refrigeração Líquida Direta no Chip',
+    material: 'aluminum',
+    machineType: 'cnc-5axis',
+    postFormat: 'fanuc-nc',
+    strategy: 'isoparm',
+    toolId: 'tool-ball-4',
+    designParamsPatch: { preset: 'cavity', spanX: 190, spanY: 120, archHeight: 18, thicknessMm: 6.5 },
+    estimatedCycleMin: 24.5,
+    toleranceSpec: 'ISO 2768-f · Planicidade ±0.03 mm',
+    description: 'Usinagem 5-eixos de micro-aletas para trocador térmico direct-to-chip 800VDC.',
+  },
+  {
+    id: 'dc-manifold',
+    title: 'Manifold & Engate Rápido Liquid Cooling (LPBF)',
+    category: 'datacenter',
+    subsystem: 'Distribuição Hidráulica Rack 42U',
+    material: 'titanium',
+    machineType: 'powder-metal',
+    postFormat: 'slm-powder',
+    strategy: 'isoparm',
+    toolId: 'tool-ball-4',
+    designParamsPatch: { preset: 'shell', spanX: 210, spanY: 95, archHeight: 36, thicknessMm: 5.0 },
+    additiveConfig: {
+      ...getDefaultAdditiveSettings('powder-metal'),
+      layerThicknessUm: 40,
+      sinterTempC: 1220,
+      supportPattern: 'tree-branch',
+    },
+    estimatedCycleMin: 58.0,
+    toleranceSpec: 'ASTM F3001 · Estanqueidade 6 bar',
+    description: 'Sinterização LPBF a pó metálico sem costura para coletor liquid cooling de baixa perda de carga.',
+  },
+  {
+    id: 'dc-rack-frame',
+    title: 'Chassis Rack 42U & Barramento 800 VDC',
+    category: 'datacenter',
+    subsystem: 'Infraestrutura Elétrica 1 MW',
+    material: 'aluminum',
+    machineType: 'laser-cut',
+    postFormat: 'laser-g',
+    strategy: 'contour',
+    toolId: 'tool-flat-12',
+    designParamsPatch: { preset: 'diagrid', spanX: 240, spanY: 150, archHeight: 44, thicknessMm: 8.0 },
+    estimatedCycleMin: 16.2,
+    toleranceSpec: 'ISO 9013 · Corte Laser 4 kW',
+    description: 'Corte e gravação laser para colunas estruturais 42U e isolamento dielétrico do barramento 800 VDC.',
+  },
+  {
+    id: 'dc-hvac-cdu',
+    title: 'Bloco Trocador CDU Liquid Cooling 1 MW',
+    category: 'datacenter',
+    subsystem: 'Unidade de Distribuição Térmica (CDU)',
+    material: 'aluminum',
+    machineType: 'cnc-3axis',
+    postFormat: 'fanuc-nc',
+    strategy: 'raster',
+    toolId: 'tool-flat-12',
+    designParamsPatch: { preset: 'cavity', spanX: 220, spanY: 140, archHeight: 48, thicknessMm: 10.0 },
+    estimatedCycleMin: 31.0,
+    toleranceSpec: 'ASME Y14.5 · Sedes O-Ring H7',
+    description: 'Fresagem de câmara pressurizada para bombeamento redundante N+1 do datacenter Frostbite.',
+  },
+  {
+    id: 'dc-frostbite-tile',
+    title: 'Interposer & Dissipador Lâmina 7nm Frostbite',
+    category: 'datacenter',
+    subsystem: 'Nó Computacional Interaction-Net 500MHz',
+    material: 'glass',
+    machineType: 'cnc-5axis',
+    postFormat: 'fanuc-nc',
+    strategy: 'isoparm',
+    toolId: 'tool-ball-4',
+    designParamsPatch: { preset: 'cavity', spanX: 170, spanY: 170, archHeight: 22, thicknessMm: 5.5 },
+    estimatedCycleMin: 27.4,
+    toleranceSpec: 'Sub-micrométrico · Pré-Silício GDS',
+    description: 'Suporte de lâmina e interface térmica para tiles CMOS 7nm sem coerência de cache.',
+  },
+  {
+    id: 'hum-torso',
+    title: 'Endoesqueleto Torácico Robô Humanoide (LPBF Ti)',
+    category: 'humanoid',
+    subsystem: 'Estrutura Central Humanoide DC',
+    material: 'titanium',
+    machineType: 'powder-metal',
+    postFormat: 'slm-powder',
+    strategy: 'isoparm',
+    toolId: 'tool-ball-8',
+    designParamsPatch: { preset: 'diagrid', spanX: 195, spanY: 145, archHeight: 56, thicknessMm: 5.8 },
+    additiveConfig: {
+      ...getDefaultAdditiveSettings('powder-metal'),
+      layerThicknessUm: 45,
+      sinterTempC: 1260,
+      atmosphere: 'vacuum',
+      supportPattern: 'lattice-grid',
+    },
+    estimatedCycleMin: 74.0,
+    toleranceSpec: 'ISO 10218 · Carga 120 kg',
+    description: 'Impressão metálica a pó topológica para tronco leve do humanoide de manutenção em corredores quentes.',
+  },
+  {
+    id: 'hum-actuator',
+    title: 'Carcaça Atuador Harmônico de Junta (5-Eixos)',
+    category: 'humanoid',
+    subsystem: 'Articulação Ombro / Joelho Humanoide',
+    material: 'titanium',
+    machineType: 'cnc-5axis',
+    postFormat: 'fanuc-nc',
+    strategy: 'contour',
+    toolId: 'tool-ball-8',
+    designParamsPatch: { preset: 'impeller', spanX: 135, spanY: 135, archHeight: 42, thicknessMm: 7.0 },
+    estimatedCycleMin: 22.8,
+    toleranceSpec: 'IT6 · Concentricidade ≤ 0.015 mm',
+    description: 'Usinagem simultânea 5-eixos para alojamento de redutor harmônico e estator BLDC.',
+  },
+  {
+    id: 'hum-visor-head',
+    title: 'Cabeça Sensorial Visão Stereo + LiDAR (Resina SLA)',
+    category: 'humanoid',
+    subsystem: 'Percepção & Navegação Autônoma',
+    material: 'glass',
+    machineType: 'resin-sla',
+    postFormat: 'sla-resin',
+    strategy: 'contour',
+    toolId: 'tool-ball-4',
+    designParamsPatch: { preset: 'shell', spanX: 145, spanY: 120, archHeight: 48, thicknessMm: 3.6 },
+    additiveConfig: {
+      ...getDefaultAdditiveSettings('resin-sla'),
+      layerThicknessUm: 35,
+      sinterTempC: 65,
+      supportPattern: 'tree-branch',
+    },
+    estimatedCycleMin: 42.0,
+    toleranceSpec: 'SLA 405nm · 35 µm Alta Resolução',
+    description: 'Carena óptica SLA dielétrica para sensores térmicos IR e leitura de QR/estado em racks.',
+  },
+  {
+    id: 'hum-hand-effector',
+    title: 'Efetuador Bimanual Quick-Disconnect Liquid Cooling',
+    category: 'humanoid',
+    subsystem: 'Ferramenta de Troca Hot-Swap em Servidor',
+    material: 'carbon-fiber',
+    machineType: 'powder-metal',
+    postFormat: 'slm-powder',
+    strategy: 'isoparm',
+    toolId: 'tool-ball-4',
+    designParamsPatch: { preset: 'cavity', spanX: 160, spanY: 110, archHeight: 32, thicknessMm: 4.5 },
+    additiveConfig: {
+      ...getDefaultAdditiveSettings('powder-metal'),
+      layerThicknessUm: 30,
+      sinterTempC: 1180,
+      atmosphere: 'nitrogen',
+      supportPattern: 'linear-fin',
+    },
+    estimatedCycleMin: 39.5,
+    toleranceSpec: 'Sem Faísca · Isolado 1000 VDC',
+    description: 'Garra bimanual para acoplar/desacoplar válvulas de fluido refrigerante e gavetas de servidor sem parada.',
+  },
+];
+
+export function listCamProductionPrograms(
+  category?: CamProgramTargetCategory
+): CamProductionProgram[] {
+  if (!category) return CAM_PRODUCTION_PROGRAMS;
+  return CAM_PRODUCTION_PROGRAMS.filter((p) => p.category === category);
+}
+
+export function getCamProductionProgram(programId: string): CamProductionProgram | undefined {
+  return CAM_PRODUCTION_PROGRAMS.find((p) => p.id === programId);
 }
