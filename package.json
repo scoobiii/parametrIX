@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "tsx --watch server.ts",
     "start": "node server.ts",
     "build": "vite build",
     "preview": "vite preview",
@@ -13,9 +13,9 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "audit:cad": "tsx scripts/cad_engine_audit.ts",
-    "onboard": "bash scripts/onboard.sh",
-    "vuc:proof": "tsx scripts/generate_vuc_proof.ts",
-    "ci": "npm run lint && npm run test:coverage && npm run audit:cad && npm run build && npm run vuc:proof"
+    "ci": "npm run lint && npm run test:coverage && npm run audit:cad && npm run build",
+    "dev:vite": "vite --host 0.0.0.0 --port 5173",
+    "dev:all": "tsx --watch server.ts"
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
