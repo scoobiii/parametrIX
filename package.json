@@ -13,9 +13,11 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "audit:cad": "tsx scripts/cad_engine_audit.ts",
-    "ci": "npm run lint && npm run test:coverage && npm run audit:cad && npm run build",
+    "ci": "npm run lint && npm run test:coverage && npm run audit:cad && npm run build && npm run vuc:proof",
     "dev:vite": "vite --host 0.0.0.0 --port 5173",
-    "dev:all": "tsx --watch server.ts"
+    "dev:all": "tsx --watch server.ts",
+    "onboard": "bash scripts/onboard.sh",
+    "vuc:proof": "tsx scripts/generate_vuc_proof.ts"
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
