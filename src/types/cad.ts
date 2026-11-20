@@ -3,6 +3,8 @@ export type WorkspaceTab =
   | 'viewport'
   | 'grasshopper'
   | 'cam'
+  | 'frostbite'
+  | 'ecosystem'
   | 'sustainability'
   | 'mcp'
   | 'plugins'
@@ -153,14 +155,26 @@ export interface GraphWire {
   toPortId: string;
 }
 
-export type MachineType = 'manual' | 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis';
+export type MachineType =
+  | 'manual'
+  | 'cnc-3axis'
+  | 'cnc-5axis'
+  | 'robot-6axis'
+  | 'powder-metal'
+  | 'resin-sla'
+  | 'robot-weld'
+  | 'laser-cut';
 export type CamStrategy = 'raster' | 'isoparm' | 'contour';
 export type PostProcessorFormat =
   | 'fanuc-nc'
   | 'grbl-gcode'
   | 'kuka-krl'
   | 'abb-rapid'
-  | 'manual-sheet';
+  | 'manual-sheet'
+  | 'slm-powder'
+  | 'sla-resin'
+  | 'weld-tig-mig'
+  | 'laser-g';
 
 export interface CamTool {
   id: string;
@@ -640,5 +654,260 @@ export interface CarbonFootprintReport {
   machineBenchmarks: MachineCarbonBenchmark[];
   optimizationTips: string[];
 }
+
+export type AgentProviderId =
+  | 'gemini'
+  | 'claude'
+  | 'manus'
+  | 'grok'
+  | 'deepseek'
+  | 'qwen'
+  | 'meta'
+  | 'local-llm';
+
+export type AuthProviderKind =
+  | 'proprietary'
+  | 'google'
+  | 'microsoft'
+  | 'oracle'
+  | 'zoho'
+  | 'apple'
+  | 'email';
+
+export type EcosystemRole =
+  | 'client'
+  | 'cam_provider'
+  | 'logistics'
+  | 'supplier'
+  | 'compute_node';
+
+export type LogisticsModal = 'road' | 'rail' | 'air' | 'river';
+
+export type ChipFabricationType = 'silicon-cmos' | 'optical-photonic' | 'hybrid-soc';
+
+export interface VucExecutionProof {
+  vucHash: string;
+  domain: string;
+  summary: string;
+  timestamp: string;
+  deterministicSeed: string;
+}
+
+export interface RackArchitectureSpec {
+  id: 'nvidia-1mw' | 'frostbite-1mw';
+  label: string;
+  architectureName: string;
+  nodeProcess: string;
+  clockMhz: number;
+  busVoltageVdc: number;
+  rackInputPowerKw: number;
+  hvacCoolingKw: number;
+  effectiveComputePowerKw: number;
+  pue: number;
+  perfPerWattMultiplier: number;
+  effectiveEquivalentWorkUnits: number;
+  memoryCoherenceOverheadPct: number;
+  thermalDensityWPerCm2: number;
+  isPreSiliconResearch: boolean;
+  isOpticalOrQuantum: boolean;
+  publicVendorDataAvailable: boolean;
+  missingPublicDataFields: string[];
+  explanatoryAnalogy: string;
+}
+
+export interface RackComparisonReport {
+  nvidiaRack: RackArchitectureSpec;
+  frostbiteRack: RackArchitectureSpec;
+  busVoltageVdc: number;
+  inputPowerMw: number;
+  netComputeGainRatio: number;
+  hvacSavingKw: number;
+  thermalHeadroomC: number;
+  honestDisclosureNote: string;
+  vucProof: VucExecutionProof;
+}
+
+export interface ChipCamReport {
+  substrateType: ChipFabricationType;
+  label: string;
+  nodeNm: number;
+  dieAreaMm2: number;
+  tileCount: number;
+  waferDiameterMm: number;
+  diesPerWafer: number;
+  lithoPasses: number;
+  opticalCouplersCount: number;
+  interconnectPitchUm: number;
+  thermalDesignPowerW: number;
+  manufacturingNotes: string;
+  vucProof: VucExecutionProof;
+}
+
+export interface CamToolChangeEvent {
+  atProgress: number;
+  toolNumber: string;
+  toolName: string;
+  toolKind: 'milling' | 'ball' | 'laser-head' | 'weld-torch' | 'powder-recoater' | 'uv-projector' | 'probe';
+  operationLabel: string;
+  rpmOrPowerLabel: string;
+}
+
+export interface CamProcessVisualState {
+  machineType: MachineType;
+  processLabel: string;
+  activeToolEvent: CamToolChangeEvent;
+  toolChanges: CamToolChangeEvent[];
+  showLaserRay: boolean;
+  showWeldWireAndArc: boolean;
+  showPowderCone: boolean;
+  showResinUvBeam: boolean;
+  restartCount: number;
+  vucProof: VucExecutionProof;
+}
+
+export interface SystemResourceSnapshot {
+  cpuCores: number;
+  cpuLoadPct: number;
+  totalRamGb: number;
+  freeRamGb: number;
+  gpuTier: 'none' | 'integrated' | 'dedicated-mid' | 'datacenter';
+  gpuName: string;
+  osPlatform: string;
+  networkMbps: number;
+  loggedInUsers: number;
+}
+
+export interface LocalLlmRecommendation {
+  modelId: string;
+  displayName: string;
+  quantization: string;
+  estimatedRamGb: number;
+  estimatedTokPerSec: number;
+  tier: 'ultra-light' | 'compact' | 'balanced' | 'workstation';
+  rationale: string;
+}
+
+export interface McpEyeEvent {
+  id: string;
+  direction: 'mcp-input' | 'cam-output' | 'viewport-action' | 'agent-feedback';
+  source: string;
+  summary: string;
+  payloadPreview: string;
+  vucHash: string;
+  timestamp: string;
+}
+
+export interface AutonomousAgentConfig {
+  enabled: boolean;
+  agentName: string;
+  handleAt: string;
+  phone: string;
+  address: string;
+  autoRestartCam: boolean;
+  autoAssignLogistics: boolean;
+  targetCapabilities: string[];
+}
+
+export interface AuthUserProfile {
+  id: string;
+  email: string;
+  displayName: string;
+  provider: AuthProviderKind;
+  role: EcosystemRole;
+  handleAt: string;
+  phone: string;
+  address: string;
+  computeSharePct: number;
+  offlineMode: boolean;
+  agentConfig: AutonomousAgentConfig;
+  sessionToken?: string;
+}
+
+export interface EcosystemChatMessage {
+  id: string;
+  room: string;
+  senderId: string;
+  senderName: string;
+  senderRole: EcosystemRole;
+  isAgent: boolean;
+  content: string;
+  lat?: number;
+  lng?: number;
+  vucHash: string;
+  createdAt: string;
+}
+
+export interface LogisticsTelemetryNode {
+  id: string;
+  driverName: string;
+  serviceTag: 'iFood' | '99' | 'Autônomo' | 'Ferrovia' | 'Aéreo' | 'Fluvial';
+  modal: LogisticsModal;
+  lat: number;
+  lng: number;
+  status: 'em-rota' | 'coletando' | 'entregue' | 'hub-aguardando';
+  routeLabel: string;
+  speedKmh: number;
+  updatedAt: string;
+}
+
+export interface ErpCrmRecord {
+  id: string;
+  kind: 'lead' | 'order' | 'inventory' | 'shipment' | 'invoice';
+  title: string;
+  status: 'aberto' | 'em-producao' | 'em-transito' | 'concluido';
+  partyName: string;
+  segment: ApplicationSegment;
+  amountBrl: number;
+  modal?: LogisticsModal;
+  ownerRole: EcosystemRole;
+  vucHash: string;
+  updatedAt: string;
+}
+
+export interface ComputeShareNode {
+  id: string;
+  userId: string;
+  label: string;
+  osName: string;
+  cpuCores: number;
+  gpuName: string;
+  sharePct: number;
+  tflopsEst: number;
+  active: boolean;
+  updatedAt: string;
+}
+
+export interface RemoteMachineTarget {
+  id: string;
+  name: string;
+  machineType: MachineType;
+  protocol: 'OPC-UA' | 'HTTP-Moonraker' | 'SSH-KUKA-Bridge' | 'GRBL-Serial-WS';
+  endpointUrl: string;
+  status: 'online' | 'executando' | 'standby';
+  lastJobVuc: string;
+  updatedAt: string;
+}
+
+export interface VoiceActionIntent {
+  transcript: string;
+  matched: boolean;
+  action:
+    | 'restart-cam'
+    | 'play-cam'
+    | 'pause-cam'
+    | 'set-process'
+    | 'load-preset'
+    | 'run-fea'
+    | 'optimize-curvature'
+    | 'open-tab'
+    | 'start-wizard'
+    | 'export-stl'
+    | 'select-agent'
+    | 'toggle-explode'
+    | 'unknown';
+  param?: string;
+  feedbackText: string;
+}
+
 
 

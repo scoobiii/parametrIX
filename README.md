@@ -64,11 +64,35 @@ Plataforma paramétrica full-stack para modelagem NURBS, análise estrutural FEA
 - **Tradutor Anti-Alucinação & Anti-Estouro de Tokens (`POST /api/cad/llm-briefing`)**: Converte arquivos binários `.IPT` (OLE2 + zlib + ACIS SAT/Display Mesh) e `.STEP/.STP` (OpenCASCADE B-Rep WASM) em um briefing estruturado e compacto (< 600 tokens em `llmSummaryText`, bounding boxes em `mm`, papéis mecânicos, normas sugeridas e iProperties) — sem despejar milhares de floats de vértices na janela do LLM. Caso o `.IPT` use ShapeManager ASM criptografado sem malha exposta, devolve `geometryStatus: "metadata_only_asm_encrypted"` com streams OLE2, tokens e instrução clara de exportação `.STEP`.
 - **MCP HTTP JSON-RPC 2.0 (`POST /api/mcp`)**: Suporta `initialize`, `tools/list` e `tools/call` com execução stateless server-side para `cad_inspect_ipt_step_briefing`, `cad_get_agent_onboarding`, `cad_run_structural_fea`, `cad_evaluate_nurbs_metrics`, `cad_optimize_surface_curvature` e `cad_get_scoobiii_vuc_proof`, além do bridge de cena 3D em `window.__PARAMETRIX_MCP__`.
 
+### 12. Rack `#FrostbiteEngine` vs `@nvidia` (`1 MW Bus & 800 VDC HVAC`) + Prova VUC
+- Módulo `src/kernel/rackFrostbiteEngine.ts` e painel `FrostbiteRackDashboard.tsx` comparam lado a lado um rack **1 MW / 800 VDC** baseado em **Frostbite** (CPU por **interaction nets** no estilo HVM/Bend, reescrita local em grafo sem cache/coerência/locks) frente a um rack **@nvidia** equivalente, calculando entregas líquidas, PUE térmico e hash SHA-256 **VUC** verificável em tempo real (`POST /api/vuc/verify`).
+- **Transparência Técnica Pré-Silício**: Especificações de Frostbite estritamente documentadas como **tiles em silício CMOS binário térmico padrão a 7 nm**, **500 MHz** até **GDS final** (co-design por enxame de agentes), **4,6× desempenho/Watt**, **pré-silício** (**não óptico e não quântico**), com ausência declarada de dados públicos de fornecedores, processos CAM comerciais, CAPEX/OPEX ou ROI.
+
+### 13. Campo Visual Centralizado, Menus Recuados nas Bordas & Voz Full-App
+- **Workspace 3D Centralizado (PC / Tablet / Mobile-First)**: Campo visual centralizado por padrão, com **menus recuados nas bordas esquerda (`CAD / FEA`) e direita (`CAM / VUC`)** revelados ao tocar/passar nas bordas, preservando visibilidade máxima da peça e atalhos de voz/toolbar inferior mobile.
+- **Comandos de Voz Universais (`voiceCommandParser.ts` + Web Speech API)**: Controle por voz (`pt-BR`) para reiniciar o CAM, alternar processos (`powder-metal`, `resin-sla`, `robot-weld`, `laser-cut`), rodar FEA, otimizar curvatura NURBS, abrir o assistente de novo projeto, carregar presets e exportar entregas.
+
+### 14. CAM Multi-Processo Reiniciável, Troca de Ferramentas & FX 3D em Tempo Real
+- **8 Modalidades Produtivas**: `cnc-5axis`, `cnc-3axis`, `robot-6axis`, `powder-metal` (SLM/LPBF), `resin-sla` (UV), `robot-weld` (TIG/MIG arame + arco), `laser-cut` (feixe + ponto focal) e `manual`, incluindo **CAM de CPU / GPU / SoC Silício, Óptico e Híbrido** de última geração.
+- **Reinício Determinístico & FX Visíveis**: Qualquer projeto pode reiniciar o processo produtivo CAM do zero (`0%`), gerando novo hash VUC, linha do tempo ATC de troca de ferramentas e renderização 3D ativa do raio laser, fio de solda/arco elétrico, cone de pó metálico ou cone UV de resina.
+- **Exportação & Despacho em Máquina Remota**: Além do download `.3dm/.stl/.dxf/.nc/.src`, permite conectar/despachar direto para máquinas remotas via `OPC-UA`, `HTTP-Moonraker` ou `SSH-KUKA-Bridge`.
+
+### 15. Autenticação Proprietária SQLite (`localhost`), Login Offline & Multi-Agentes MCP Eye
+- **SQLite Nativo (`node:sqlite` via `ParametrixSqliteStore`)**: Persistência local em `data/parametrix.sqlite` para usuários, projetos, histórico de chat WebSocket, registros ERP/CRM, telemetria GPS logística, nós de compartilhamento de processamento (20%), máquinas remotas e ledger VUC.
+- **Login Offline 1-Clique**: Aceita provedores `Google`, `Microsoft`, `Oracle`, `Zoho`, `Apple` ou e-mail genérico, além de credenciais proprietárias `localhost` sem depender de nuvem externa.
+- **Assistente em Tempo Real (Do Zero)**: `ProjectWizardModal` cria projetos paramétricos inéditos passo a passo a partir de dimensões, material, segmento e processo CAM.
+- **Menu Multi-Agente + Bootstrap Local (`llmBootstrap.ts`)**: Seleção direta de `Gemini`, `Claude`, `Manus`, `Grok`, `DeepSeek`, `Qwen`, `Meta` ou `LLM Local` com **Olho MCP** exibindo entradas/saídas espaciais e leitura ao vivo de CPU/GPU/RAM/Rede/usuários logados (`/api/system/resources`) para recomendar/acionar o modelo local mais leve e eficiente.
+
+### 16. Ecossistema Colaborativo, Logística Multimodal GPS & ERP/CRM Aberto
+- **Chat em Tempo Real por Perfil (`/ws`)**: Comunicação entre **Cliente**, **Provedor CAM/Fab (CNC/Foxconn/Robôs)**, **Logística (iFood/99/Autônomos)** e **Fornecedor de Insumos**, com agentes autônomos reconfiguráveis por `@handle`, telefone e endereço.
+- **Rastreamento GPS & Compartilhamento de 20% Compute**: Monitoramento multimodal ponto a ponto (**Rodoviário, Ferroviário, Aéreo e Fluvial**) com coordenadas em tempo real e pool de compartilhamento voluntário de 20% da capacidade dos dispositivos conectados.
+- **ERP / CRM Open Free**: Gestão integrada de ordens de produção, fornecedores, lotes de insumos, cotações e entregas sem custo de licença.
+
 ---
 
 ## Auditoria Experimental do Motor CAD / Inventor `.IPT` / CAE / CAM
 
-Todos os submódulos críticos são verificados pela suíte determinística [`scripts/cad_engine_audit.ts`](scripts/cad_engine_audit.ts) (`npm run audit:cad`). Durante a auditoria técnica, **15 bugs reais** foram isolados e corrigidos (evoluindo de **5/20** para **22/22 testes aprovados**, incluindo validação do briefing LLM para `.IPT` / `.STEP`):
+Todos os submódulos críticos são verificados pela suíte determinística [`scripts/cad_engine_audit.ts`](scripts/cad_engine_audit.ts) (`npm run audit:cad`, **26/26 testes aprovados**) e pela suíte unitária/integração **Vitest com cobertura V8 de 100%** em todo o kernel e no store SQLite (`npm run ci`). Durante a auditoria técnica, bugs reais foram isolados e corrigidos:
 
 ### Arquitetura do Decoder Autodesk Inventor (`.IPT`)
 Arquivos `.IPT` modernos usam contêineres compostos Microsoft **OLE2 / CFB** com múltiplos fluxos comprimidos proprietários (*ShapeManager ASM* binário, *B-Rep/ACIS*, e eventualmente *Graphics Display Mesh* pré-tesselado):
@@ -97,8 +121,8 @@ Arquivos `.IPT` modernos usam contêineres compostos Microsoft **OLE2 / CFB** co
 ## Stack & Arquitetura
 
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS v4, Three.js (`OrbitControls`, `TransformControls`, `RoomEnvironment`), Lucide Icons.
-- **Backend (`server.ts`, porta `3000`)**: Express + Vite middleware, `occt-import-js` (OpenCASCADE WASM), `cfb` + `zlib` (OLE2 `.ipt`), `@google/genai` (Agente RAG + MCP Tool Calling em `/api/rag-mcp-agent`), Onboarding & MCP JSON-RPC (`/llms.txt`, `/api/agent/onboarding`, `/api/cad/llm-briefing`, `/api/mcp`), rotas estáticas `/gitpage` e `/docs`.
-- **Banco & Autenticação**: Firebase Authentication (Google) e Cloud Firestore com isolamento estrito por `uid`.
+- **Backend (`server.ts`, porta `3000`)**: Express + WebSocket (`/ws`) + Vite middleware, `node:sqlite` (`ParametrixSqliteStore`), `occt-import-js` (OpenCASCADE WASM), `cfb` + `zlib` (OLE2 `.ipt`), `@google/genai` + hub multi-agente (`/api/agent/multi-chat`), telemetria OS (`/api/system/resources`), despacho remoto (`/api/remote-machine/dispatch`), ledger VUC (`/api/vuc/verify`), Onboarding & MCP JSON-RPC (`/llms.txt`, `/api/agent/onboarding`, `/api/cad/llm-briefing`, `/api/mcp`), rotas estáticas `/gitpage` e `/docs`.
+- **Banco & Autenticação**: Modo proprietário local SQLite + login offline (`Google`, `Microsoft`, `Oracle`, `Zoho`, `Apple`, e-mail genérico) e integração opcional Firebase Authentication / Cloud Firestore com isolamento por `uid`.
 
 ## Como Publicar a GitPage no GitHub Pages
 
@@ -107,14 +131,17 @@ Arquivos `.IPT` modernos usam contêineres compostos Microsoft **OLE2 / CFB** co
 3. Em **Build and deployment**, selecione **Deploy from a branch** → Branch `main` e pasta `/docs`.
 4. Localmente ou no ambiente Node.js, acesse diretamente `http://localhost:3000/gitpage/`.
 
-## Scripts
+## Scripts & CI (`100% Cobertura V8`)
 
 ```bash
-npm run dev        # Inicia server.ts + Vite em http://localhost:3000 (e /gitpage)
-npm run audit:cad  # Executa a suíte de auditoria experimental do motor CAD/IPT/CAE/CAM (22 testes)
-npm run lint       # Verificação de tipos TypeScript (tsc --noEmit)
-npm run build      # Build de produção Vite (dist/)
-npm run start      # Servidor em produção (node server.ts)
+npm run dev            # Inicia server.ts + WebSocket + Vite em http://localhost:3000 (e /gitpage)
+npm run lint           # Verificação de tipos TypeScript (tsc --noEmit)
+npm run test:coverage  # Suíte Vitest com 100% statements/branches/functions/lines (V8)
+npm run audit:cad      # Suíte de auditoria determinística do motor CAD/IPT/CAE/CAM (26 testes)
+npm run build          # Build de produção Vite (dist/)
+npm run ci             # Gate obrigatório: lint + 100% coverage + audit:cad + build
+npm run start          # Servidor em produção (node server.ts)
 ```
+
 
 

@@ -29,6 +29,13 @@ export default defineConfig({
         'src/kernel/camRobotics.ts',
         'src/kernel/structuralFea.ts',
         'src/kernel/mcpServer.ts',
+        'src/kernel/vucHash.ts',
+        'src/kernel/rackFrostbiteEngine.ts',
+        'src/kernel/camProcessEngine.ts',
+        'src/kernel/llmBootstrap.ts',
+        'src/kernel/voiceCommandParser.ts',
+        'src/kernel/ecosystemErpLogistics.ts',
+        'src/server/sqliteStore.ts',
       ],
       thresholds: {
         lines: 100,

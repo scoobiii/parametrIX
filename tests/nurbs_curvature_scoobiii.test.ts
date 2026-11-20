@@ -94,7 +94,7 @@ describe('nurbs kernel', () => {
     }
 
     // Smooth high-relief surfaces calibrated to 0.25..0.5 and 0.5..0.75 bands of curvatureToRgb
-    for (const archH of [8000, 14000]) {
+    for (const archH of [2800, 5200]) {
       const smoothRamp = buildNurbsSurfaceFromParams({
         ...baseParams,
         preset: 'shell',

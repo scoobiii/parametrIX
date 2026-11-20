@@ -132,7 +132,9 @@ export function generateCamToolpath(
   };
 
   const isMultiAxis =
-    settings.machineType === 'cnc-5axis' || settings.machineType === 'robot-6axis';
+    settings.machineType === 'cnc-5axis' ||
+    settings.machineType === 'robot-6axis' ||
+    settings.machineType === 'robot-weld';
 
   if (settings.strategy === 'isoparm' || settings.strategy === 'raster') {
     const spanApprox = Math.max(40, bbox.size[2]);
@@ -429,11 +431,21 @@ function generatePostProcessorCode(
     return lines.join('\n');
   }
 
-  // Default: ISO G-Code (Fanuc / LinuxCNC / GRBL)
+  // Default: ISO G-Code (Fanuc / LinuxCNC / GRBL / Additive SLM / SLA / Weld / Laser)
   const is5Axis = settings.machineType === 'cnc-5axis';
+  const modeTag =
+    fmt === 'slm-powder'
+      ? 'LPBF METAL POWDER 400W'
+      : fmt === 'sla-resin'
+        ? 'SLA UV RESIN 405NM'
+        : fmt === 'weld-tig-mig'
+          ? 'ROBOTIC WIRE ARC MIG/TIG 195A'
+          : fmt === 'laser-g'
+            ? 'FIBER LASER 4KW'
+            : tool.name.toUpperCase();
   const lines = [
     `%`,
-    `O1001 (PARAMETRIX CAM - ${tool.name.toUpperCase()})`,
+    `O1001 (PARAMETRIX CAM - ${modeTag})`,
     `G21 G90 G17 G94`,
     `T01 M06`,
     `S${rpm} M03`,

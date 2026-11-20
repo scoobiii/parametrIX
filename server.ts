@@ -1,9 +1,12 @@
 import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
+import http from 'http';
+import os from 'os';
 import path from 'path';
 import { GoogleGenAI, Type, type Content, type FunctionDeclaration } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { WebSocketServer, WebSocket } from 'ws';
 import { buildCadLlmBriefing, parseIptWithOle2, parseStepWithOcct } from './serverCadParser';
 import { MCP_TOOLS_CATALOG } from './src/kernel/mcpServer';
 import { buildNurbsSurfaceFromParams, tessellateNurbsSurface } from './src/kernel/nurbs';
@@ -11,9 +14,16 @@ import { evaluateStructuralFea } from './src/kernel/structuralFea';
 import { analyzeCurvatureAndOptimizeWeight } from './src/kernel/curvatureOptimizer';
 import { computeScoobiiiVucProof } from './src/kernel/scoobiiiVuc';
 import { resolvePartEngineeringProfile } from './src/kernel/componentClassifier';
+import { selectOptimalLocalLlm } from './src/kernel/llmBootstrap';
+import { evaluateRackComparison } from './src/kernel/rackFrostbiteEngine';
+import { ParametrixSqliteStore } from './src/server/sqliteStore';
 import type {
+  AgentProviderId,
   ApplicationSegment,
+  AuthProviderKind,
+  EcosystemRole,
   FeaSettings,
+  LogisticsModal,
   MaterialFinish,
   ParametricDesignParams,
 } from './src/types/cad';
@@ -1426,6 +1436,305 @@ ${ragBlock}`;
     }
   });
 
+  const sqliteStore = new ParametrixSqliteStore();
+  const httpServer = http.createServer(app);
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+  const broadcastWs = (type: string, payload: unknown) => {
+    const raw = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(raw);
+      }
+    }
+  };
+
+  wss.on('connection', (socket) => {
+    socket.send(
+      JSON.stringify({
+        type: 'ecosystem:sync',
+        payload: {
+          connectedClients: wss.clients.size,
+          chat: sqliteStore.listChatMessages().slice(-30),
+          logistics: sqliteStore.listLogisticsNodes(),
+          computeNodes: sqliteStore.listComputeNodes(),
+        },
+      })
+    );
+
+    socket.on('message', (data) => {
+      try {
+        const msg = JSON.parse(String(data)) as { type?: string; payload?: Record<string, unknown> };
+        if (msg.type === 'chat:send' && msg.payload) {
+          const saved = sqliteStore.appendChatMessage({
+            room: String(msg.payload.room || 'geral'),
+            senderId: String(msg.payload.senderId || 'anon'),
+            senderName: String(msg.payload.senderName || 'Engenheiro Local'),
+            senderRole: (msg.payload.senderRole as EcosystemRole) || 'client',
+            isAgent: Boolean(msg.payload.isAgent),
+            content: String(msg.payload.content || ''),
+            lat: typeof msg.payload.lat === 'number' ? msg.payload.lat : undefined,
+            lng: typeof msg.payload.lng === 'number' ? msg.payload.lng : undefined,
+          });
+          broadcastWs('chat:message', saved);
+        } else if (msg.type === 'logistics:ping' && msg.payload) {
+          const updated = sqliteStore.upsertLogisticsNode({
+            id: String(msg.payload.id || `log-gps-${Date.now()}`),
+            driverName: String(msg.payload.driverName || 'Entregador Autônomo GPS'),
+            serviceTag: (msg.payload.serviceTag as 'iFood' | '99' | 'Autônomo') || 'Autônomo',
+            modal: (msg.payload.modal as LogisticsModal) || 'road',
+            lat: Number(msg.payload.lat) || -23.5505,
+            lng: Number(msg.payload.lng) || -46.6333,
+            status: 'em-rota',
+            routeLabel: String(msg.payload.routeLabel || 'Rastreamento Celular Real-Time'),
+            speedKmh: Number(msg.payload.speedKmh) || 38,
+          });
+          broadcastWs('logistics:location', updated);
+        } else if (msg.type === 'mcp:eye' && msg.payload) {
+          broadcastWs('mcp:eye', msg.payload);
+        }
+      } catch {
+        // Ignore malformed WS frame safely
+      }
+    });
+  });
+
+  // Proprietary & Offline SQLite Auth Endpoints
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const profile = sqliteStore.loginOrRegister({
+        email: String(req.body?.email || ''),
+        displayName: typeof req.body?.displayName === 'string' ? req.body.displayName : undefined,
+        provider: (req.body?.provider as AuthProviderKind) || 'proprietary',
+        role: (req.body?.role as EcosystemRole) || 'client',
+        password: typeof req.body?.password === 'string' ? req.body.password : undefined,
+        handleAt: typeof req.body?.handleAt === 'string' ? req.body.handleAt : undefined,
+        phone: typeof req.body?.phone === 'string' ? req.body.phone : undefined,
+        address: typeof req.body?.address === 'string' ? req.body.address : undefined,
+        offlineMode: Boolean(req.body?.offlineMode),
+      });
+      return res.json({ profile });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/auth/profile', (req, res) => {
+    const updated = sqliteStore.updateUserProfile({
+      userId: String(req.body?.userId || ''),
+      role: (req.body?.role as EcosystemRole) || 'client',
+      handleAt: String(req.body?.handleAt || '@parametrix'),
+      phone: String(req.body?.phone || ''),
+      address: String(req.body?.address || ''),
+      computeSharePct: Number(req.body?.computeSharePct ?? 20),
+      agentConfig: req.body?.agentConfig,
+    });
+    if (!updated) {
+      return res.status(404).json({ error: 'Usuário SQLite não encontrado.' });
+    }
+    broadcastWs('compute:pool', sqliteStore.listComputeNodes());
+    return res.json({ profile: updated });
+  });
+
+  // Real-time Resource Telemetry + Auto Local LLM Bootstrap Selector
+  app.get('/api/system/resources', (req, res) => {
+    const cpus = os.cpus();
+    const totalRamGb = Number((os.totalmem() / (1024 ** 3)).toFixed(2));
+    const freeRamGb = Number((os.freemem() / (1024 ** 3)).toFixed(2));
+    const load1m = os.loadavg()[0] || 0.25;
+    const cpuLoadPct = Number(Math.min(100, (load1m / Math.max(1, cpus.length)) * 100).toFixed(1));
+    const gpuHint = String(req.query.gpuName || 'Host Runtime GPU');
+    const gpuTier = /rtx|a100|h100|b200|nvidia/i.test(gpuHint)
+      ? 'datacenter'
+      : /radeon|gtx|arc|apple m/i.test(gpuHint)
+        ? 'dedicated-mid'
+        : 'integrated';
+
+    const snapshot = {
+      cpuCores: cpus.length,
+      cpuLoadPct,
+      totalRamGb,
+      freeRamGb,
+      gpuTier: gpuTier as 'none' | 'integrated' | 'dedicated-mid' | 'datacenter',
+      gpuName: gpuHint,
+      osPlatform: `${os.platform()} ${os.release()} (${os.arch()})`,
+      networkMbps: Number(req.query.networkMbps || 250),
+      loggedInUsers: Math.max(1, sqliteStore.getUserCount(), wss.clients.size),
+    };
+    const recommendation = selectOptimalLocalLlm(snapshot);
+    return res.json({ snapshot, recommendation, wsClients: wss.clients.size });
+  });
+
+  // Multi-Agent Dropdown Router + MCP Eye Feedback Loop
+  app.post('/api/agent/multi-chat', async (req, res) => {
+    const agentId = (req.body?.agentId as AgentProviderId) || 'gemini';
+    const userMessage = String(req.body?.userMessage || '');
+    const eyeEvents = Array.isArray(req.body?.eyeEvents) ? req.body.eyeEvents : [];
+    const cadSummary = req.body?.cadSummary ?? {};
+    const externalEndpoint = typeof req.body?.externalEndpoint === 'string' ? req.body.externalEndpoint : '';
+
+    if (agentId === 'gemini' && process.env.GEMINI_API_KEY) {
+      try {
+        const ai = getGeminiClient();
+        const { response, usedModel } = await generateContentWithFallback(ai, {
+          systemInstruction: `Você é o Agente CAD/CAM Parametrix com "Olho MCP" ativo. Você enxerga tanto os parâmetros de entrada MCP quanto as saídas em tempo real do CAM/Viewport.\nEstado CAD: ${JSON.stringify(cadSummary)}\nÚltimos eventos MCP Eye: ${JSON.stringify(eyeEvents.slice(0, 6))}`,
+          contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+        });
+        const proof = sqliteStore.recordVucProof('AGENT_MULTI_CHAT', `Gemini (${usedModel})`, {
+          agentId,
+          userMessage,
+        });
+        return res.json({
+          agentId,
+          modelUsed: usedModel,
+          reply: response.text || 'Ação analisada via Gemini + Olho MCP.',
+          vucHash: proof.vucHash,
+        });
+      } catch (err) {
+        const friendly = formatFriendlyGeminiError(err);
+        return res.status(friendly.status).json({ error: friendly.message });
+      }
+    }
+
+    if (externalEndpoint && /^http:\/\/(localhost|127\.0\.0\.1)/.test(externalEndpoint)) {
+      // Allows local Ollama / llama.cpp localhost execution when user points Local LLM endpoint to localhost
+      try {
+        const localResp = await fetch(`${externalEndpoint.replace(/\/$/, '')}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: String(req.body?.localModelId || 'qwen2.5:1.5b'),
+            prompt: `[Parametrix MCP Eye]\nEstado: ${JSON.stringify(cadSummary)}\nPergunta: ${userMessage}`,
+            stream: false,
+          }),
+        });
+        if (localResp.ok) {
+          const data = (await localResp.json()) as { response?: string };
+          const proof = sqliteStore.recordVucProof('AGENT_LOCAL_OLLAMA', `Localhost LLM`, {
+            agentId,
+            userMessage,
+          });
+          return res.json({
+            agentId,
+            modelUsed: String(req.body?.localModelId || 'ollama-local'),
+            reply: data.response || 'Resposta executada no LLM local.',
+            vucHash: proof.vucHash,
+          });
+        }
+      } catch {
+        // Fall through cleanly to contextual MCP Eye bridge reply below
+      }
+    }
+
+    const proof = sqliteStore.recordVucProof('AGENT_BRIDGE_EYE', `Agente ${agentId} via MCP Eye`, {
+      agentId,
+      userMessage,
+      eyeCount: eyeEvents.length,
+    });
+    const lastEye = eyeEvents[0]?.summary || 'Viewport 3D + CAM em sincronia';
+    const reply =
+      `[${agentId.toUpperCase()} · MCP Eye Ativo] Recebi sua solicitação ("${userMessage}"). ` +
+      `Entrada MCP + saída visual CAM observada ("${lastEye}"). ` +
+      `Contexto atual: ${String(cadSummary?.partName || 'Peça Parametrix')} | Processo CAM: ${String(cadSummary?.machineType || 'cnc-5axis')} | VUC: ${proof.vucHash.slice(0, 18)}.`;
+    return res.json({
+      agentId,
+      modelUsed: String(req.body?.localModelId || agentId),
+      reply,
+      vucHash: proof.vucHash,
+    });
+  });
+
+  // SQLite Ecosystem, ERP/CRM, Logistics GPS, Compute 20%, Remote Machines & VUC Ledger Routes
+  app.get('/api/sqlite/state', (_req, res) => {
+    return res.json({
+      projects: sqliteStore.listProjects(),
+      erp: sqliteStore.listErpRecords(),
+      chat: sqliteStore.listChatMessages(),
+      logistics: sqliteStore.listLogisticsNodes(),
+      computeNodes: sqliteStore.listComputeNodes(),
+      remoteMachines: sqliteStore.listRemoteMachines(),
+      vucLedger: sqliteStore.listVucLedger(),
+    });
+  });
+
+  app.post('/api/sqlite/projects', (req, res) => {
+    const saved = sqliteStore.saveProject({
+      id: typeof req.body?.id === 'string' ? req.body.id : undefined,
+      ownerId: String(req.body?.ownerId || 'local-user'),
+      name: String(req.body?.name || 'Projeto Parametrix'),
+      presetId: String(req.body?.presetId || 'shell'),
+      segment: String(req.body?.segment || 'industrial-cnc'),
+      paramsJson: JSON.stringify(req.body?.designParams ?? {}),
+      camJson: JSON.stringify(req.body?.camSettings ?? {}),
+    });
+    return res.json({ project: saved });
+  });
+
+  app.post('/api/sqlite/erp', (req, res) => {
+    const rec = sqliteStore.createErpRecord({
+      kind: req.body?.kind || 'order',
+      title: String(req.body?.title || 'Ordem CAM'),
+      status: req.body?.status || 'aberto',
+      partyName: String(req.body?.partyName || 'Cliente Local'),
+      segment: req.body?.segment || 'industrial-cnc',
+      amountBrl: Number(req.body?.amountBrl) || 1200,
+      modal: req.body?.modal || 'road',
+      ownerRole: req.body?.ownerRole || 'client',
+    });
+    return res.json({ record: rec });
+  });
+
+  app.post('/api/sqlite/chat', (req, res) => {
+    const msg = sqliteStore.appendChatMessage({
+      room: String(req.body?.room || 'geral'),
+      senderId: String(req.body?.senderId || 'local-user'),
+      senderName: String(req.body?.senderName || 'Operador'),
+      senderRole: (req.body?.senderRole as EcosystemRole) || 'client',
+      isAgent: Boolean(req.body?.isAgent),
+      content: String(req.body?.content || ''),
+      lat: typeof req.body?.lat === 'number' ? req.body.lat : undefined,
+      lng: typeof req.body?.lng === 'number' ? req.body.lng : undefined,
+    });
+    broadcastWs('chat:message', msg);
+    return res.json({ message: msg });
+  });
+
+  app.post('/api/sqlite/logistics', (req, res) => {
+    const node = sqliteStore.upsertLogisticsNode({
+      id: String(req.body?.id || `log-${Date.now()}`),
+      driverName: String(req.body?.driverName || 'Entregador Autônomo GPS'),
+      serviceTag: req.body?.serviceTag || 'Autônomo',
+      modal: (req.body?.modal as LogisticsModal) || 'road',
+      lat: Number(req.body?.lat) || -23.5505,
+      lng: Number(req.body?.lng) || -46.6333,
+      status: req.body?.status || 'em-rota',
+      routeLabel: String(req.body?.routeLabel || 'Rastreamento Celular Ativo'),
+      speedKmh: Number(req.body?.speedKmh) || 40,
+    });
+    broadcastWs('logistics:location', node);
+    return res.json({ node });
+  });
+
+  app.post('/api/sqlite/remote-machines/:id/dispatch', (req, res) => {
+    const updated = sqliteStore.dispatchRemoteMachineJob(
+      req.params.id,
+      String(req.body?.projectName || 'Projeto Parametrix'),
+      String(req.body?.postCode || '')
+    );
+    if (!updated) {
+      return res.status(404).json({ error: 'Máquina remota não cadastrada.' });
+    }
+    return res.json({ machine: updated });
+  });
+
+  app.post('/api/vuc/verify', (req, res) => {
+    const domain = String(req.body?.domain || 'FROSTBITE_RACK');
+    const summary = String(req.body?.summary || 'Verificação VUC');
+    const payload = req.body?.payload ?? evaluateRackComparison({ inputPowerMw: 1, busVoltageVdc: 800, ambientTempC: 24 });
+    const entry = sqliteStore.recordVucProof(domain, summary, payload);
+    return res.json({ entry });
+  });
+
   const docsDir = path.resolve(process.cwd(), 'docs');
   if (fs.existsSync(docsDir)) {
     app.use('/gitpage', express.static(docsDir));
@@ -1448,8 +1757,8 @@ ${ragBlock}`;
     }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Parametrix CAD Studio server running at http://0.0.0.0:${PORT}`);
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`Parametrix CAD Studio (SQLite + WS + Vite) running at http://0.0.0.0:${PORT}`);
   });
 }
 

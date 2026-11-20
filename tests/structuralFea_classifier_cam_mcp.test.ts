@@ -452,6 +452,18 @@ describe('camRobotics kernel', () => {
     });
     expect(rRasterKukaShort.points.length).toBeLessThanOrEqual(220);
     expect(rRasterKukaShort.postCode).not.toContain('pontos LIN no arquivo exportado completo');
+
+    const rSlm = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'powder-metal', strategy: 'raster', stepoverPct: 60, postFormat: 'slm-powder' });
+    expect(rSlm.postCode).toContain('LPBF METAL POWDER 400W');
+
+    const rSla = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'resin-sla', strategy: 'raster', stepoverPct: 60, postFormat: 'sla-resin' });
+    expect(rSla.postCode).toContain('SLA UV RESIN 405NM');
+
+    const rWeld = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'robot-weld', strategy: 'raster', stepoverPct: 60, postFormat: 'weld-tig-mig' });
+    expect(rWeld.postCode).toContain('ROBOTIC WIRE ARC MIG/TIG 195A');
+
+    const rLaser = generateCamToolpath(surface, compactMesh, { ...cam5x, machineType: 'laser-cut', strategy: 'raster', stepoverPct: 60, postFormat: 'laser-g' });
+    expect(rLaser.postCode).toContain('FIBER LASER 4KW');
   });
 
   it('solves 6-axis robot inverse kinematics for reachable and unreachable targets', () => {

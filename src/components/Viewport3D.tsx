@@ -35,6 +35,7 @@ import { ACCEPTED_CAD_EXTENSIONS } from '../kernel/workspacePresets';
 import type {
   CadComponentPart,
   CadFeatureOperation,
+  CamProcessVisualState,
   CameraPreset,
   DisplayMode,
   EvaluatedMesh,
@@ -197,6 +198,7 @@ interface Viewport3DProps {
   onExportCertificate?: (filename: string, kind: 'REPORT' | 'MCP', summary: string) => void;
   compact?: boolean;
   onOpenHelp?: () => void;
+  camVisualState?: CamProcessVisualState | null;
 }
 
 const _vec3A = new THREE.Vector3();
@@ -454,10 +456,12 @@ function buildSpindleGroup(): THREE.Group {
   });
 
   const cutter = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.2, 26, 20), steelMat);
+  cutter.name = 'atc_cutter';
   cutter.position.y = 13;
   cutter.castShadow = true;
 
   const collet = new THREE.Mesh(new THREE.CylinderGeometry(8.5, 6.2, 14, 16), collarMat);
+  collet.name = 'atc_collar';
   collet.position.y = 32;
   collet.castShadow = true;
 
@@ -475,6 +479,61 @@ function buildSpindleGroup(): THREE.Group {
 
   g.add(cutter, collet, nut, body, flange);
   return g;
+}
+
+interface ProcessFxRig {
+  root: THREE.Group;
+  laserRay: THREE.Mesh;
+  laserSpot: THREE.Mesh;
+  weldWire: THREE.Mesh;
+  weldArc: THREE.Mesh;
+  powderCone: THREE.Mesh;
+  resinUvCone: THREE.Mesh;
+}
+
+function buildProcessFxRig(): ProcessFxRig {
+  const root = new THREE.Group();
+  root.visible = false;
+
+  const laserRay = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.1, 0.45, 78, 12),
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.9 })
+  );
+  laserRay.position.y = 39;
+
+  const laserSpot = new THREE.Mesh(
+    new THREE.SphereGeometry(3.8, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xf43f5e, transparent: true, opacity: 0.92 })
+  );
+  laserSpot.position.y = 0.5;
+
+  const weldWire = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.65, 0.65, 34, 8),
+    new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.85, roughness: 0.2 })
+  );
+  weldWire.position.set(4, 17, 0);
+  weldWire.rotation.z = -0.22;
+
+  const weldArc = new THREE.Mesh(
+    new THREE.SphereGeometry(5.5, 14, 14),
+    new THREE.MeshBasicMaterial({ color: 0x93c5fd, transparent: true, opacity: 0.88 })
+  );
+  weldArc.position.y = 1.5;
+
+  const powderCone = new THREE.Mesh(
+    new THREE.ConeGeometry(16, 36, 20, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
+  );
+  powderCone.position.y = 18;
+
+  const resinUvCone = new THREE.Mesh(
+    new THREE.ConeGeometry(11, 56, 20, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.42, side: THREE.DoubleSide })
+  );
+  resinUvCone.position.y = 28;
+
+  root.add(laserRay, laserSpot, weldWire, weldArc, powderCone, resinUvCone);
+  return { root, laserRay, laserSpot, weldWire, weldArc, powderCone, resinUvCone };
 }
 
 interface RobotRig {
@@ -605,6 +664,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   onExportCertificate,
   compact = false,
   onOpenHelp,
+  camVisualState = null,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -653,6 +713,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     pendingPick,
     magicPenActive,
     components,
+    camVisualState,
     onSimProgressChange,
     onSelectControlPoint,
     onUpdateDisplay,
@@ -673,6 +734,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     pendingPick,
     magicPenActive,
     components,
+    camVisualState,
     onSimProgressChange,
     onSelectControlPoint,
     onUpdateDisplay,
@@ -807,6 +869,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     measureGroup: THREE.Group;
     spindleGroup: THREE.Group;
     robotRig: RobotRig;
+    processFx: ProcessFxRig;
     clipPlane: THREE.Plane;
     zebraTex: THREE.CanvasTexture;
     carbonAlbedoTex: THREE.CanvasTexture;
@@ -995,9 +1058,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     const spindleGroup = buildSpindleGroup();
     const robotRig = buildRobot6AxisRig();
+    const processFx = buildProcessFxRig();
     spindleGroup.visible = false;
     robotRig.root.visible = false;
-    scene.add(spindleGroup, robotRig.root);
+    scene.add(spindleGroup, robotRig.root, processFx.root);
 
     // Visual IX Section Plane Helper (green frame + translucent cut sheet)
     const sectionHelperGroup = new THREE.Group();
@@ -1071,18 +1135,64 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       const ny = THREE.MathUtils.lerp(p0.nz, p1.nz, frac);
       const nz = THREE.MathUtils.lerp(-p0.ny, -p1.ny, frac);
 
-      if (mType === 'robot-6axis') {
+      if (mType === 'robot-6axis' || mType === 'robot-weld') {
         const ik = solveRobot6AxisIK(wx, wy, wz, [nx, ny, nz]);
         robotRig.turret.rotation.y = ik.j1;
         robotRig.upperArmPivot.rotation.z = ik.j2;
         robotRig.forearmPivot.rotation.z = -ik.j3;
         robotRig.wristPivot.rotation.z = ik.j5;
-        robotRig.spindleTip.rotation.y += 0.35;
+        robotRig.spindleTip.rotation.y += mType === 'robot-weld' ? 0.05 : 0.35;
       } else {
         spindleGroup.position.set(wx, wy, wz);
         _vec3A.set(nx, ny, nz).normalize();
         _quatA.setFromUnitVectors(_upVec, _vec3A);
         spindleGroup.quaternion.copy(_quatA);
+      }
+
+      const fxState = stateRef.current.camVisualState;
+      const showFx = Boolean(stateRef.current.display.showMachine && fxState);
+      processFx.root.visible = showFx;
+      if (fxState) {
+        processFx.root.position.set(wx, wy, wz);
+        _vec3A.set(nx, ny, nz).normalize();
+        _quatA.setFromUnitVectors(_upVec, _vec3A);
+        processFx.root.quaternion.copy(_quatA);
+        processFx.laserRay.visible = fxState.showLaserRay;
+        processFx.laserSpot.visible = fxState.showLaserRay;
+        processFx.weldWire.visible = fxState.showWeldWireAndArc;
+        processFx.weldArc.visible = fxState.showWeldWireAndArc;
+        processFx.powderCone.visible = fxState.showPowderCone;
+        processFx.resinUvCone.visible = fxState.showResinUvBeam;
+
+        // Physical Tool Change adaptation (ATC swap color/diameter on spindle collar & cutter)
+        const collarMesh = spindleGroup.getObjectByName('atc_collar') as THREE.Mesh | undefined;
+        const cutterMesh = spindleGroup.getObjectByName('atc_cutter') as THREE.Mesh | undefined;
+        const kind = fxState.activeToolEvent.toolKind;
+        if (collarMesh && cutterMesh) {
+          const mat = collarMesh.material as THREE.MeshStandardMaterial;
+          if (kind === 'probe') {
+            mat.color.setHex(0x22c55e);
+            cutterMesh.scale.set(0.55, 1, 0.55);
+          } else if (kind === 'laser-head') {
+            mat.color.setHex(0x06b6d4);
+            cutterMesh.scale.set(0.4, 0.7, 0.4);
+          } else if (kind === 'weld-torch') {
+            mat.color.setHex(0xef4444);
+            cutterMesh.scale.set(0.85, 0.9, 0.85);
+          } else if (kind === 'uv-projector') {
+            mat.color.setHex(0xa855f7);
+            cutterMesh.scale.set(1.2, 0.65, 1.2);
+          } else if (kind === 'powder-recoater') {
+            mat.color.setHex(0x94a3b8);
+            cutterMesh.scale.set(1.8, 0.5, 0.6);
+          } else if (kind === 'ball') {
+            mat.color.setHex(0xf59e0b);
+            cutterMesh.scale.set(0.9, 1.0, 0.9);
+          } else {
+            mat.color.setHex(0x38bdf8);
+            cutterMesh.scale.set(1.25, 1.0, 1.25);
+          }
+        }
       }
 
       setLiveReadout({
@@ -1512,6 +1622,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       measureGroup,
       spindleGroup,
       robotRig,
+      processFx,
       clipPlane,
       zebraTex,
       carbonAlbedoTex,
@@ -2135,15 +2246,17 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     refs.bimGroup.visible =
       showParametric &&
       (display.showBimRibs || iso === 'ribs-u' || iso === 'ribs-v' || iso.startsWith('BIM-'));
-    refs.toolpathGroup.visible = display.showToolpath && !hasImported;
+    refs.toolpathGroup.visible = display.showToolpath;
     refs.importedGroup.visible = hasImported && (display.showImportedOverlay || iso === 'imported' || iso.startsWith('COMP-'));
     refs.importedWireGroup.visible =
       refs.importedMeshGroup.children.length === 0 || display.mode === 'wireframe';
 
     const showMachine =
-      !hasImported && display.showMachine && Boolean(toolpath && toolpath.points.length > 0);
-    refs.spindleGroup.visible = showMachine && machineType !== 'robot-6axis';
-    refs.robotRig.root.visible = showMachine && machineType === 'robot-6axis';
+      display.showMachine && Boolean(toolpath && toolpath.points.length > 0);
+    const isRobotRig = machineType === 'robot-6axis' || machineType === 'robot-weld';
+    refs.spindleGroup.visible = showMachine && !isRobotRig;
+    refs.robotRig.root.visible = showMachine && isRobotRig;
+    refs.processFx.root.visible = showMachine && Boolean(camVisualState);
 
     // TransformControls Gizmo attachment
     const tHelper = refs.transformControls.getHelper();

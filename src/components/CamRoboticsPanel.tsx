@@ -1,12 +1,22 @@
 import React from 'react';
-import { Download, Pause, Play, RotateCcw, Wrench } from 'lucide-react';
+import {
+  Download,
+  Pause,
+  Play,
+  RotateCcw,
+  Send,
+  ShieldCheck,
+  Wrench,
+} from 'lucide-react';
 import { triggerBlobDownload } from '../kernel/cadFormats';
 import { CAM_TOOLS } from '../kernel/camRobotics';
 import type {
+  CamProcessVisualState,
   CamSettings,
   CamStrategy,
   MachineType,
   PostProcessorFormat,
+  RemoteMachineTarget,
   ToolpathResult,
 } from '../types/cad';
 
@@ -18,17 +28,30 @@ interface CamRoboticsPanelProps {
   simProgress: number;
   onTogglePlay: () => void;
   onScrub: (next: number) => void;
+  onRestartProcess: () => void;
   showToolpath: boolean;
   showMachine: boolean;
   onToggleToolpath: () => void;
   onToggleMachine: () => void;
+  camVisualState: CamProcessVisualState;
+  remoteMachines?: RemoteMachineTarget[];
+  onDispatchRemoteMachine?: (machineId: string) => Promise<void>;
 }
 
-const MACHINE_OPTIONS: { id: MachineType; label: string; defaultPost: PostProcessorFormat }[] = [
-  { id: 'manual', label: 'Usinagem Manual', defaultPost: 'manual-sheet' },
-  { id: 'cnc-3axis', label: 'CNC 3-Eixos', defaultPost: 'fanuc-nc' },
-  { id: 'cnc-5axis', label: 'CNC 5-Eixos', defaultPost: 'fanuc-nc' },
-  { id: 'robot-6axis', label: 'Robô 6-Eixos', defaultPost: 'kuka-krl' },
+const MACHINE_OPTIONS: {
+  id: MachineType;
+  label: string;
+  subtitle: string;
+  defaultPost: PostProcessorFormat;
+}[] = [
+  { id: 'powder-metal', label: 'Pó Metálico (LPBF)', subtitle: 'Laser + Recoater', defaultPost: 'slm-powder' },
+  { id: 'resin-sla', label: 'Resina UV (SLA)', subtitle: 'Feixe UV 405nm', defaultPost: 'sla-resin' },
+  { id: 'robot-weld', label: 'Robô Solda MIG/TIG', subtitle: 'Fio + Arco Visíveis', defaultPost: 'weld-tig-mig' },
+  { id: 'laser-cut', label: 'Laser Fibra 4 kW', subtitle: 'Raio + Rota', defaultPost: 'laser-g' },
+  { id: 'cnc-5axis', label: 'CNC 5-Eixos', subtitle: 'Troca ATC', defaultPost: 'fanuc-nc' },
+  { id: 'cnc-3axis', label: 'CNC 3-Eixos', subtitle: 'Fresagem Padrão', defaultPost: 'fanuc-nc' },
+  { id: 'robot-6axis', label: 'Robô 6-Eixos KUKA', subtitle: 'Cinemática KRL', defaultPost: 'kuka-krl' },
+  { id: 'manual', label: 'Usinagem Manual', subtitle: 'Folha DRO', defaultPost: 'manual-sheet' },
 ];
 
 export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
@@ -39,10 +62,14 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
   simProgress,
   onTogglePlay,
   onScrub,
+  onRestartProcess,
   showToolpath,
   showMachine,
   onToggleToolpath,
   onToggleMachine,
+  camVisualState,
+  remoteMachines = [],
+  onDispatchRemoteMachine,
 }) => {
   const activeTool = CAM_TOOLS.find((t) => t.id === settings.toolId) ?? CAM_TOOLS[0];
 
@@ -53,18 +80,22 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
       'kuka-krl': 'src',
       'abb-rapid': 'mod',
       'manual-sheet': 'txt',
+      'slm-powder': 'slm.nc',
+      'sla-resin': 'sla.gcode',
+      'weld-tig-mig': 'weld.src',
+      'laser-g': 'laser.nc',
     };
     const blob = new Blob([toolpath.postCode], { type: 'text/plain;charset=utf-8' });
-    triggerBlobDownload(blob, `parametrix_usinagem.${extMap[settings.postFormat]}`);
+    triggerBlobDownload(blob, `parametrix_cam.${extMap[settings.postFormat]}`);
   };
 
   return (
-    <div className="w-full md:w-[350px] lg:w-[380px] h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden">
-      <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+    <div className="w-full md:w-[350px] lg:w-[385px] h-full border-r border-white/10 bg-[#111620] flex flex-col shrink-0 overflow-hidden">
+      <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Wrench className="w-4 h-4 text-amber-400 shrink-0" />
           <h2 className="font-display text-sm font-semibold text-slate-100 truncate">
-            CAM, Ferramentas & Robótica
+            CAM, Troca ATC & Robótica
           </h2>
         </div>
         <span className="text-[11px] font-mono-tabular text-emerald-400 shrink-0">
@@ -73,10 +104,33 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
-        {/* Machine Mode Selector */}
+        {/* Restart CAM + VUC Proof Banner */}
+        <div className="p-3 bg-[#0c1017] border border-amber-400/30 rounded-lg space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-mono-tabular text-amber-300 font-semibold">
+              Reinício CAM #{camVisualState.restartCount} · {camVisualState.activeToolEvent.toolNumber}
+            </span>
+            <span className="text-[10px] font-mono-tabular text-emerald-400 flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3" />
+              {camVisualState.vucProof.vucHash.slice(0, 12)}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onRestartProcess}
+            className="w-full min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reiniciar Processo Produtivo CAM (Zero + VUC)
+          </button>
+        </div>
+
+        {/* Machine Mode Selector (8 Processes) */}
         <section className="space-y-2">
-          <div className="text-xs font-medium text-slate-400">Processo de Fabricação</div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="text-xs font-medium text-slate-400">
+            Processo Produtivo (CNC, Pó Metálico, Resina, Solda, Laser)
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
             {MACHINE_OPTIONS.map((m) => (
               <button
                 key={m.id}
@@ -87,15 +141,56 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
                     postFormat: m.defaultPost,
                   })
                 }
-                className={`min-h-[42px] px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors text-left cursor-pointer ${
+                className={`min-h-[46px] px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors text-left cursor-pointer ${
                   settings.machineType === m.id
-                    ? 'border-amber-400/70 bg-amber-500/15 text-amber-200'
+                    ? 'border-amber-400/70 bg-amber-500/15 text-amber-100'
                     : 'border-white/8 bg-[#0c1017] text-slate-400 hover:text-slate-200'
                 }`}
               >
-                {m.label}
+                <div className="truncate font-semibold">{m.label}</div>
+                <div className="text-[10px] text-slate-500 truncate">{m.subtitle}</div>
               </button>
             ))}
+          </div>
+        </section>
+
+        {/* Live ATC Tool Change Sequence */}
+        <section className="space-y-2 pt-3 border-t border-white/8">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-medium text-slate-400">Troca de Ferramentas em Tempo Real</span>
+            <span className="font-mono-tabular text-sky-400">
+              {camVisualState.activeToolEvent.toolNumber} ativo
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {camVisualState.toolChanges.map((tc) => {
+              const isCurrent = tc.toolNumber === camVisualState.activeToolEvent.toolNumber;
+              return (
+                <button
+                  key={tc.toolNumber}
+                  type="button"
+                  onClick={() => onScrub(tc.atProgress)}
+                  className={`w-full text-left px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
+                    isCurrent
+                      ? 'border-emerald-400/60 bg-emerald-500/12 text-slate-100'
+                      : 'border-white/8 bg-[#0c1017] text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-semibold">
+                    <span className="truncate">
+                      {tc.toolNumber} · {tc.toolName}
+                    </span>
+                    <span className="font-mono-tabular text-[11px] text-sky-400 shrink-0 ml-2">
+                      {Math.round(tc.atProgress * 100)}%
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">{tc.operationLabel}</div>
+                  <div className="text-[10px] font-mono-tabular text-slate-500 mt-0.5">
+                    {tc.rpmOrPowerLabel} · {tc.toolKind}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </section>
 
@@ -133,7 +228,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
 
         {/* Strategy & Cutting Params */}
         <section className="space-y-3 pt-3 border-t border-white/8">
-          <div className="text-xs font-medium text-slate-400">Estratégia & Regime de Corte</div>
+          <div className="text-xs font-medium text-slate-400">Estratégia & Regime</div>
           <div className="grid grid-cols-3 gap-1 p-1 bg-[#0c1017] border border-white/8 rounded-lg">
             {(
               [
@@ -196,10 +291,9 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
             />
           </div>
 
-          {/* Real Calculated Machining Metrics */}
           <div className="grid grid-cols-2 gap-2 p-2.5 bg-[#0c1017] border border-white/8 rounded-lg text-xs">
             <div>
-              <div className="text-[10px] text-slate-500">Rotação Eixo</div>
+              <div className="text-[10px] text-slate-500">Rotação / Potência</div>
               <div className="font-mono-tabular text-slate-100">
                 {toolpath.spindleRpm.toLocaleString('pt-BR')} RPM
               </div>
@@ -211,13 +305,13 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
               </div>
             </div>
             <div>
-              <div className="text-[10px] text-slate-500">Percurso de Corte</div>
+              <div className="text-[10px] text-slate-500">Percurso Ativo</div>
               <div className="font-mono-tabular text-emerald-400">
                 {toolpath.cuttingLengthMm.toLocaleString('pt-BR')} mm
               </div>
             </div>
             <div>
-              <div className="text-[10px] text-slate-500">Volume Removido</div>
+              <div className="text-[10px] text-slate-500">Volume / Depósito</div>
               <div className="font-mono-tabular text-sky-400">
                 {toolpath.removedVolumeCm3} cm³
               </div>
@@ -228,13 +322,13 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
         {/* Simulation Playback Controls */}
         <section className="space-y-2.5 pt-3 border-t border-white/8">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-medium text-slate-400">Simulação Cinemática 3D</span>
+            <span className="font-medium text-slate-400">Simulação Cinemática & Feixes 3D</span>
             <span className="font-mono-tabular text-slate-300">
               {Math.round(simProgress * 100)}%
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               onClick={onTogglePlay}
@@ -247,7 +341,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
               type="button"
               onClick={() => onScrub(0)}
               className="p-1.5 rounded-lg border border-white/10 text-slate-300 hover:text-white cursor-pointer"
-              title="Reiniciar"
+              title="Zerar barra"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
@@ -271,7 +365,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
                   : 'border-white/10 text-slate-400'
               }`}
             >
-              Cabeçote
+              Cabeçote / Feixe
             </button>
           </div>
 
@@ -286,7 +380,39 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
           />
         </section>
 
-        {/* Post-Processor Code / Manual Sheet Output */}
+        {/* Remote Machine Execution */}
+        {remoteMachines.length > 0 && onDispatchRemoteMachine && (
+          <section className="space-y-2 pt-3 border-t border-white/8">
+            <div className="text-xs font-medium text-slate-400">
+              Execução em Máquina Remota (OPC-UA / KUKA / Moonraker)
+            </div>
+            <div className="space-y-1.5">
+              {remoteMachines.slice(0, 3).map((m) => (
+                <div
+                  key={m.id}
+                  className="p-2.5 bg-[#0c1017] border border-white/10 rounded-lg flex items-center justify-between gap-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-100 truncate">{m.name}</div>
+                    <div className="text-[10px] font-mono-tabular text-slate-400 truncate">
+                      {m.protocol} · {m.status}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void onDispatchRemoteMachine(m.id)}
+                    className="px-2.5 py-1 text-[11px] font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    <Send className="w-3 h-3" />
+                    Enviar
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Post-Processor Code Output */}
         <section className="space-y-2 pt-3 border-t border-white/8">
           <div className="flex items-center justify-between gap-2">
             <select
@@ -297,11 +423,15 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
               }
               className="flex-1 px-2.5 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-200 outline-none cursor-pointer"
             >
-              <option value="fanuc-nc">ISO G-Code (Fanuc / Mach3 .nc)</option>
+              <option value="slm-powder">LPBF Pó Metálico (.slm.nc)</option>
+              <option value="sla-resin">SLA Resina UV (.sla.gcode)</option>
+              <option value="weld-tig-mig">Robô Solda MIG/TIG (.weld.src)</option>
+              <option value="laser-g">Laser Fibra 4kW (.laser.nc)</option>
+              <option value="fanuc-nc">ISO G-Code Fanuc (.nc)</option>
               <option value="grbl-gcode">GRBL / LinuxCNC (.gcode)</option>
               <option value="kuka-krl">Robô KUKA KRL (.src)</option>
               <option value="abb-rapid">Robô ABB RAPID (.mod)</option>
-              <option value="manual-sheet">Folha de Usinagem Manual / DRO</option>
+              <option value="manual-sheet">Folha Manual / DRO (.txt)</option>
             </select>
 
             <button

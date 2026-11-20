@@ -1,29 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box,
+  Boxes,
   Cpu,
   ExternalLink,
+  Flame,
   FolderOpen,
+  Globe,
   Home,
+  KeyRound,
   Leaf,
   LogIn,
   LogOut,
   MoreHorizontal,
   Network,
   Puzzle,
+  RotateCcw,
   Save,
+  Send,
   ShieldCheck,
   Sigma,
+  SlidersHorizontal,
   Terminal,
   X,
 } from 'lucide-react';
+import { AgentVoiceCommandBar } from './components/AgentVoiceCommandBar';
 import { CadFilesPanel } from './components/CadFilesPanel';
 import { CamRoboticsPanel } from './components/CamRoboticsPanel';
+import { EcosystemHubPanel } from './components/EcosystemHubPanel';
+import { FrostbiteRackDashboard } from './components/FrostbiteRackDashboard';
 import { GrasshopperCanvas } from './components/GrasshopperCanvas';
 import { McpToolsPanel } from './components/McpToolsPanel';
+import { OfflineAuthModal } from './components/OfflineAuthModal';
 import { OnboardingHelpView } from './components/OnboardingHelpView';
 import { ParametricSidebar } from './components/ParametricSidebar';
 import { PluginsSdkPanel } from './components/PluginsSdkPanel';
+import { ProjectWizardModal } from './components/ProjectWizardModal';
 import { ScoobiiiVucModal } from './components/ScoobiiiVucModal';
 import { SustainabilityDashboard } from './components/SustainabilityDashboard';
 import { Viewport3D } from './components/Viewport3D';
@@ -35,6 +46,7 @@ import {
   exportOpenNurbs3DM,
   triggerBlobDownload,
 } from './kernel/cadFormats';
+import { evaluateCamProcessVisualState } from './kernel/camProcessEngine';
 import { generateCamToolpath } from './kernel/camRobotics';
 import {
   SEGMENT_CATALOG,
@@ -42,11 +54,13 @@ import {
   resolvePartEngineeringProfile,
 } from './kernel/componentClassifier';
 import { analyzeCurvatureAndOptimizeWeight } from './kernel/curvatureOptimizer';
+import { buildUserProfileWithRole } from './kernel/ecosystemErpLogistics';
 import { GRAPH_TEMPLATES, evaluateGraphPipeline } from './kernel/graphEngine';
 import {
   evaluateLayerToleranceCompliance,
   inferDefaultLayerSpecs,
 } from './kernel/layerTolerances';
+import { createMcpEyeEvent } from './kernel/llmBootstrap';
 import {
   MCP_TOOLS_CATALOG,
   type McpRuntimeContext,
@@ -61,8 +75,10 @@ import {
   evaluateStructuralFea,
   synthesizeOptimizedParams,
 } from './kernel/structuralFea';
+import { parseVoiceCommand } from './kernel/voiceCommandParser';
 import {
   type FullWorkspacePreset,
+  WORKSPACE_PROJECT_PRESETS,
   parseUploadedCadOrImageFile,
 } from './kernel/workspacePresets';
 import {
@@ -75,12 +91,19 @@ import {
 } from './services/userWorkspaceStore';
 import type {
   AgentChatMessage,
+  AgentProviderId,
   ApplicationSegment,
+  AuthProviderKind,
+  AuthUserProfile,
   CadComponentPart,
   CadFeatureOperation,
   CadPlugin,
   CamSettings,
+  ComputeShareNode,
   ControlPoint4D,
+  EcosystemChatMessage,
+  EcosystemRole,
+  ErpCrmRecord,
   FeaComparisonReport,
   FeaResult,
   FeaSettings,
@@ -89,24 +112,36 @@ import type {
   ImportedCadModel,
   IsoThreadSpec,
   LayerToleranceSpec,
+  LocalLlmRecommendation,
+  LogisticsModal,
+  LogisticsTelemetryNode,
   MachineType,
   MaterialFinish,
+  McpEyeEvent,
   ParametricDesignParams,
   PartEngineeringProfile,
+  PostProcessorFormat,
   RagSourceDocument,
+  RemoteMachineTarget,
   SessionDeliverable,
+  SystemResourceSnapshot,
   ViewportDisplayState,
+  VoiceActionIntent,
   WorkspaceTab,
 } from './types/cad';
 
 export default function App() {
   const { user, authReady, authBusy, signInWithGoogle, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('onboarding');
+  // Edge-retractable menus: tucked by default on narrow viewports so the 3D scene stays centered
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.innerWidth < 1024
+    () => typeof window !== 'undefined' && window.innerWidth < 1200
   );
+  const [rightEdgeDrawerOpen, setRightEdgeDrawerOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [offlineAuthOpen, setOfflineAuthOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [scoobiiiModalOpen, setScoobiiiModalOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [mobileCamPane, setMobileCamPane] = useState<'viewport' | 'panel'>('viewport');
@@ -116,6 +151,33 @@ export default function App() {
   const [savedProjects, setSavedProjects] = useState<SavedCadProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
+
+  // Proprietary SQLite Offline Auth + Ecosystem Hub + Multi-Agent + Voice + VUC state
+  const [sqliteProfile, setSqliteProfile] = useState<AuthUserProfile>(() =>
+    buildUserProfileWithRole(
+      {
+        id: 'local-default-op',
+        email: 'engenheiro@parametrix.local',
+        displayName: 'Operador Local',
+        provider: 'proprietary',
+        offlineMode: true,
+      },
+      'client'
+    )
+  );
+  const [selectedAgentId, setSelectedAgentId] = useState<AgentProviderId>('gemini');
+  const [systemResources, setSystemResources] = useState<SystemResourceSnapshot | null>(null);
+  const [localLlmRec, setLocalLlmRec] = useState<LocalLlmRecommendation | null>(null);
+  const [mcpEyeEvents, setMcpEyeEvents] = useState<McpEyeEvent[]>([]);
+  const [camRestartCount, setCamRestartCount] = useState(0);
+  const [lastVoiceStatus, setLastVoiceStatus] = useState<string | null>(null);
+  const [lastServerVucHex, setLastServerVucHex] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<EcosystemChatMessage[]>([]);
+  const [logisticsNodes, setLogisticsNodes] = useState<LogisticsTelemetryNode[]>([]);
+  const [computeNodes, setComputeNodes] = useState<ComputeShareNode[]>([]);
+  const [erpRecords, setErpRecords] = useState<ErpCrmRecord[]>([]);
+  const [remoteMachines, setRemoteMachines] = useState<RemoteMachineTarget[]>([]);
+  const wsRef = useRef<WebSocket | null>(null);
 
   // Core Parametric NURBS & BIM state
   const [designParams, setDesignParams] = useState<ParametricDesignParams>({
@@ -298,10 +360,21 @@ export default function App() {
     return buildParametricComponentParts(surface, meshData, partProfile);
   }, [importedModel, surface, meshData, partProfile]);
 
-  // 5. Generate CAM Toolpath
+  // 5. Generate CAM Toolpath & Tool-Change Visual FX State
   const toolpath = useMemo(
     () => generateCamToolpath(surface, meshData, effectiveCamSettings),
     [surface, meshData, effectiveCamSettings]
+  );
+
+  const camVisualState = useMemo(
+    () =>
+      evaluateCamProcessVisualState(
+        effectiveCamSettings,
+        toolpath,
+        simProgress,
+        camRestartCount
+      ),
+    [effectiveCamSettings, toolpath, simProgress, camRestartCount]
   );
 
   // 6. Evaluate Structural FEA with Certification Thresholds & Magic Pen Features
@@ -657,6 +730,92 @@ export default function App() {
       setSessionSeconds((s) => s + 1);
     }, 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  // Poll OS/Hardware telemetry & hydrate local SQLite + WebSocket ecosystem bus
+  useEffect(() => {
+    let active = true;
+
+    const fetchResources = async () => {
+      try {
+        const resp = await fetch('/api/system/resources');
+        if (!resp.ok || !active) return;
+        const data = (await resp.json()) as {
+          snapshot: SystemResourceSnapshot;
+          recommendation: LocalLlmRecommendation;
+        };
+        setSystemResources(data.snapshot);
+        setLocalLlmRec(data.recommendation);
+      } catch {
+        // Offline tolerance
+      }
+    };
+
+    const fetchSqliteState = async () => {
+      try {
+        const resp = await fetch('/api/sqlite/state');
+        if (!resp.ok || !active) return;
+        const data = (await resp.json()) as {
+          erp?: ErpCrmRecord[];
+          chat?: EcosystemChatMessage[];
+          logistics?: LogisticsTelemetryNode[];
+          computeNodes?: ComputeShareNode[];
+          remoteMachines?: RemoteMachineTarget[];
+        };
+        if (data.erp) setErpRecords(data.erp);
+        if (data.chat) setChatMessages(data.chat);
+        if (data.logistics) setLogisticsNodes(data.logistics);
+        if (data.computeNodes) setComputeNodes(data.computeNodes);
+        if (data.remoteMachines) setRemoteMachines(data.remoteMachines);
+      } catch {
+        // Offline tolerance
+      }
+    };
+
+    void fetchResources();
+    void fetchSqliteState();
+    const resTimer = window.setInterval(() => void fetchResources(), 15000);
+
+    let ws: WebSocket | null = null;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      wsRef.current = ws;
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(String(ev.data)) as { type?: string; payload?: unknown };
+          if (msg.type === 'chat:message' && msg.payload) {
+            const incoming = msg.payload as EcosystemChatMessage;
+            setChatMessages((prev) =>
+              prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]
+            );
+          } else if (msg.type === 'logistics:location' && msg.payload) {
+            const node = msg.payload as LogisticsTelemetryNode;
+            setLogisticsNodes((prev) => {
+              const filtered = prev.filter((n) => n.id !== node.id);
+              return [node, ...filtered];
+            });
+          } else if (msg.type === 'compute:pool' && Array.isArray(msg.payload)) {
+            setComputeNodes(msg.payload as ComputeShareNode[]);
+          } else if (msg.type === 'mcp:eye' && msg.payload) {
+            const eyeEvt = msg.payload as McpEyeEvent;
+            setMcpEyeEvents((prev) =>
+              prev.some((e) => e.id === eyeEvt.id) ? prev : [eyeEvt, ...prev.slice(0, 29)]
+            );
+          }
+        } catch {
+          // Ignore invalid WS frame
+        }
+      };
+    } catch {
+      // Ignore WS setup failure in restricted test environments
+    }
+
+    return () => {
+      active = false;
+      window.clearInterval(resTimer);
+      if (ws) ws.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -1115,6 +1274,338 @@ export default function App() {
     };
   };
 
+  const pushMcpEyeEvent = (
+    direction: McpEyeEvent['direction'],
+    source: string,
+    summary: string,
+    payload: unknown
+  ) => {
+    const evt = createMcpEyeEvent(direction, source, summary, payload);
+    setMcpEyeEvents((prev) => [evt, ...prev.slice(0, 29)]);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'mcp:eye', payload: evt }));
+    }
+  };
+
+  const defaultPostForMachine = (machineType: MachineType): PostProcessorFormat => {
+    switch (machineType) {
+      case 'powder-metal':
+        return 'slm-powder';
+      case 'resin-sla':
+        return 'sla-resin';
+      case 'robot-weld':
+        return 'weld-tig-mig';
+      case 'laser-cut':
+        return 'laser-g';
+      case 'robot-6axis':
+        return 'kuka-krl';
+      case 'manual':
+        return 'manual-sheet';
+      default:
+        return 'fanuc-nc';
+    }
+  };
+
+  const handleRestartCamProcess = (overrideMachine?: MachineType) => {
+    const targetMachine = overrideMachine ?? camSettings.machineType;
+    if (overrideMachine) {
+      setCamSettings((prev) => ({
+        ...prev,
+        machineType: overrideMachine,
+        postFormat: defaultPostForMachine(overrideMachine),
+      }));
+    }
+    setSimProgress(0);
+    setSimPlaying(true);
+    setCamRestartCount((c) => c + 1);
+    setDisplay((d) => ({ ...d, showMachine: true, showToolpath: true }));
+    pushMcpEyeEvent(
+      'cam-output',
+      `CAM.${targetMachine}`,
+      `Reinício produtivo CAM #${camRestartCount + 1} (${targetMachine}) · barra zerada com feixe/ferramenta visível`,
+      { machineType: targetMachine, restartCount: camRestartCount + 1 }
+    );
+  };
+
+  const handleSqliteOfflineLogin = async (payload: {
+    email: string;
+    displayName: string;
+    provider: AuthProviderKind;
+    role: EcosystemRole;
+    password?: string;
+    handleAt?: string;
+    phone?: string;
+    address?: string;
+    offlineMode: boolean;
+  }) => {
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = (await resp.json()) as { profile?: AuthUserProfile; error?: string };
+    if (!resp.ok || !data.profile) {
+      throw new Error(data.error || 'Falha na autenticação SQLite.');
+    }
+    setSqliteProfile(data.profile);
+    pushMcpEyeEvent(
+      'agent-feedback',
+      `Auth.${payload.provider}`,
+      `Sessão SQLite ativa: ${data.profile.displayName} (${data.profile.role})`,
+      { role: data.profile.role, offlineMode: data.profile.offlineMode }
+    );
+  };
+
+  const handleUpdateSqliteProfile = async (patch: Partial<AuthUserProfile>) => {
+    const merged: AuthUserProfile = {
+      ...sqliteProfile,
+      ...patch,
+      agentConfig: {
+        ...sqliteProfile.agentConfig,
+        ...(patch.agentConfig ?? {}),
+      },
+    };
+    setSqliteProfile(merged);
+    try {
+      const resp = await fetch('/api/auth/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: merged.id,
+          role: merged.role,
+          handleAt: merged.handleAt,
+          phone: merged.phone,
+          address: merged.address,
+          computeSharePct: merged.computeSharePct,
+          agentConfig: merged.agentConfig,
+        }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as { profile?: AuthUserProfile };
+        if (data.profile) setSqliteProfile(data.profile);
+      }
+    } catch {
+      // Offline optimistic update already applied
+    }
+  };
+
+  const handleSendMultiAgentPrompt = async (
+    prompt: string,
+    externalEndpoint: string,
+    modelId?: string
+  ): Promise<string> => {
+    pushMcpEyeEvent('mcp-input', `Agent.${selectedAgentId}`, prompt, { modelId });
+    try {
+      const resp = await fetch('/api/agent/multi-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: selectedAgentId,
+          userMessage: prompt,
+          eyeEvents: mcpEyeEvents.slice(0, 8),
+          cadSummary: {
+            partName: partProfile.partName,
+            machineType: effectiveCamSettings.machineType,
+            activeTool: camVisualState.activeToolEvent.toolName,
+            safetyFactor: feaResult.safetyFactor,
+          },
+          externalEndpoint,
+          localModelId: modelId,
+        }),
+      });
+      const data = (await resp.json()) as { reply?: string; vucHash?: string; error?: string };
+      const text = data.reply || data.error || 'Resposta registrada pelo agente.';
+      pushMcpEyeEvent('agent-feedback', `Agent.${selectedAgentId}`, text, {
+        vucHash: data.vucHash,
+      });
+      return text;
+    } catch {
+      return `[${selectedAgentId}] Bridge offline: Olho MCP observando ${camVisualState.processLabel}.`;
+    }
+  };
+
+  const handleVoiceTranscript = (transcript: string): VoiceActionIntent => {
+    const intent = parseVoiceCommand(transcript);
+    setLastVoiceStatus(`${intent.feedbackText}`);
+    pushMcpEyeEvent('mcp-input', 'VoiceControl', `"${transcript}" → ${intent.action}`, intent);
+
+    if (intent.action === 'restart-cam') {
+      handleRestartCamProcess();
+    } else if (intent.action === 'play-cam') {
+      setDisplay((d) => ({ ...d, showMachine: true, showToolpath: true }));
+      setSimPlaying(true);
+    } else if (intent.action === 'pause-cam') {
+      setSimPlaying(false);
+    } else if (intent.action === 'set-process' && intent.param) {
+      handleRestartCamProcess(intent.param as MachineType);
+    } else if (intent.action === 'open-tab' && intent.param) {
+      handleTabSwitch(intent.param as WorkspaceTab);
+    } else if (intent.action === 'start-wizard') {
+      setWizardOpen(true);
+    } else if (intent.action === 'run-fea') {
+      handleRunFea(undefined, true);
+    } else if (intent.action === 'optimize-curvature') {
+      handleApplyCurvatureOptimization();
+    } else if (intent.action === 'toggle-explode') {
+      setDisplay((d) => ({ ...d, explodeFactor: d.explodeFactor > 0 ? 0 : 0.45 }));
+    } else if (intent.action === 'export-stl') {
+      handleExportFormat('stl', 'assembly');
+    } else if (intent.action === 'load-preset' && intent.param) {
+      const preset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === intent.param);
+      if (preset) handleApplyFullPreset(preset, true);
+    }
+    return intent;
+  };
+
+  const handleVerifyVucOnServer = async (
+    domain: string,
+    summary: string,
+    payload: unknown
+  ) => {
+    const resp = await fetch('/api/vuc/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, summary, payload }),
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as { entry?: { vucHash?: string } };
+      if (data.entry?.vucHash) {
+        setLastServerVucHex(data.entry.vucHash);
+        pushMcpEyeEvent('agent-feedback', `VUC.${domain}`, summary, data.entry);
+      }
+    }
+  };
+
+  const handleDispatchRemoteMachine = async (machineId: string) => {
+    try {
+      const resp = await fetch(`/api/sqlite/remote-machines/${machineId}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectName: partProfile.partName,
+          postCode: toolpath.postCode,
+        }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as { machine?: RemoteMachineTarget };
+        if (data.machine) {
+          setRemoteMachines((prev) =>
+            prev.map((m) => (m.id === data.machine!.id ? data.machine! : m))
+          );
+          pushMcpEyeEvent(
+            'cam-output',
+            `Remote.${data.machine.protocol}`,
+            `Job enviado para ${data.machine.name} (${data.machine.lastJobVuc})`,
+            data.machine
+          );
+        }
+      }
+    } catch {
+      // Ignore offline network errors
+    }
+  };
+
+  const handleSendEcosystemChat = async (room: string, content: string, asAgent = false) => {
+    const body = {
+      room,
+      senderId: sqliteProfile.id,
+      senderName: asAgent ? sqliteProfile.agentConfig.agentName : sqliteProfile.displayName,
+      senderRole: sqliteProfile.role,
+      isAgent: asAgent,
+      content,
+    };
+    const resp = await fetch('/api/sqlite/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as { message?: EcosystemChatMessage };
+      if (data.message) {
+        setChatMessages((prev) =>
+          prev.some((m) => m.id === data.message!.id) ? prev : [...prev, data.message!]
+        );
+      }
+    }
+  };
+
+  const handlePingGpsLocation = async (modal: LogisticsModal, routeLabel: string) => {
+    let lat = -23.5505;
+    let lng = -46.6333;
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      await new Promise<void>((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            lat = Number(pos.coords.latitude.toFixed(5));
+            lng = Number(pos.coords.longitude.toFixed(5));
+            resolve();
+          },
+          () => resolve(),
+          { timeout: 2500 }
+        );
+      });
+    }
+    const resp = await fetch('/api/sqlite/logistics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: `gps-${sqliteProfile.id}`,
+        driverName: sqliteProfile.displayName,
+        serviceTag:
+          sqliteProfile.role === 'logistics' ? 'Autônomo' : 'iFood',
+        modal,
+        lat,
+        lng,
+        status: 'em-rota',
+        routeLabel,
+        speedKmh: modal === 'air' ? 680 : modal === 'rail' ? 78 : modal === 'river' ? 28 : 46,
+      }),
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as { node?: LogisticsTelemetryNode };
+      if (data.node) {
+        setLogisticsNodes((prev) => [data.node!, ...prev.filter((n) => n.id !== data.node!.id)]);
+      }
+    }
+  };
+
+  const handleAddErpRecord = async (
+    rec: Omit<ErpCrmRecord, 'id' | 'vucHash' | 'updatedAt'>
+  ) => {
+    const resp = await fetch('/api/sqlite/erp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rec),
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as { record?: ErpCrmRecord };
+      if (data.record) {
+        setErpRecords((prev) => [data.record!, ...prev]);
+      }
+    }
+  };
+
+  const handleRunAutonomousProjectWorkflow = (role: EcosystemRole) => {
+    const presetMap: Record<EcosystemRole, string> = {
+      client: 'preset-frostbite-rack',
+      cam_provider: 'preset-metal-powder',
+      logistics: 'preset-soc-hybrid',
+      supplier: 'preset-resin-sla',
+      compute_node: 'preset-frostbite-rack',
+    };
+    const preset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === presetMap[role]);
+    if (preset) {
+      handleApplyFullPreset(preset, true);
+      handleRestartCamProcess(preset.camSettings.machineType);
+      pushMcpEyeEvent(
+        'agent-feedback',
+        `Autonomous.${role}`,
+        `Agente autônomo executou fluxo completo (${preset.title}) para ${sqliteProfile.handleAt}`,
+        { phone: sqliteProfile.phone, address: sqliteProfile.address }
+      );
+    }
+  };
+
   useEffect(() => {
     (window as unknown as Record<string, unknown>).__PARAMETRIX_MCP__ = {
       protocol: '2024-11-05',
@@ -1125,16 +1616,21 @@ export default function App() {
         mcpJsonRpc: '/api/mcp',
       },
       listTools: () => MCP_TOOLS_CATALOG,
-      callTool: (name: string, args: Record<string, unknown> = {}) =>
-        executeMcpToolCall(name, args, mcpContextRef.current),
+      callTool: (name: string, args: Record<string, unknown> = {}) => {
+        const log = executeMcpToolCall(name, args, mcpContextRef.current);
+        pushMcpEyeEvent('mcp-input', `MCP.${name}`, log.responseJson.slice(0, 120), args);
+        return log;
+      },
     };
   }, []);
 
   const navItems: { id: WorkspaceTab; label: string }[] = [
     { id: 'onboarding', label: 'Início / Ajuda' },
     { id: 'viewport', label: 'Modelagem 3D' },
-    { id: 'grasshopper', label: 'Grasshopper' },
     { id: 'cam', label: 'CAM & Robô' },
+    { id: 'frostbite', label: 'Frostbite 1MW' },
+    { id: 'ecosystem', label: 'Ecossistema & ERP' },
+    { id: 'grasshopper', label: 'Grasshopper' },
     { id: 'sustainability', label: 'Pegada CO₂' },
     { id: 'mcp', label: 'MCP Tools' },
     { id: 'plugins', label: 'Plugins SDK' },
@@ -1185,6 +1681,17 @@ export default function App() {
         </nav>
 
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setOfflineAuthOpen(true)}
+            className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#141a24] border border-emerald-400/35 text-emerald-200 hover:border-emerald-400 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer font-mono-tabular"
+            title={`Auth SQLite Localhost (${sqliteProfile.provider}) · ${sqliteProfile.role}`}
+          >
+            <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden lg:inline">{sqliteProfile.handleAt}</span>
+            <span className="lg:hidden hidden sm:inline">Offline Auth</span>
+          </button>
+
           {authReady &&
             (user ? (
               <button
@@ -1215,7 +1722,7 @@ export default function App() {
                 className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-white/30 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <LogIn className="w-3.5 h-3.5 text-sky-400" />
-                <span className="hidden sm:inline">{authBusy ? 'Entrando...' : 'Entrar Google'}</span>
+                <span className="hidden xl:inline">{authBusy ? 'Entrando...' : 'Google Cloud'}</span>
               </button>
             ))}
 
@@ -1224,10 +1731,24 @@ export default function App() {
             onClick={() => setExportModalOpen(true)}
             className="min-h-[38px] px-3 sm:px-4 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Exportar
+            Exportar / Máquina
           </button>
         </div>
       </header>
+
+      <AgentVoiceCommandBar
+        selectedAgentId={selectedAgentId}
+        onSelectAgent={setSelectedAgentId}
+        systemResources={systemResources}
+        localLlmRec={localLlmRec}
+        mcpEyeEvents={mcpEyeEvents}
+        onSendAgentPrompt={handleSendMultiAgentPrompt}
+        onVoiceTranscript={handleVoiceTranscript}
+        onOpenWizard={() => setWizardOpen(true)}
+        onRestartCam={() => handleRestartCamProcess()}
+        camRestartCount={camRestartCount}
+        lastVoiceStatus={lastVoiceStatus}
+      />
 
       {/* Main Active Workspace */}
       <main className="flex-1 min-h-0 flex overflow-hidden relative">
@@ -1252,60 +1773,71 @@ export default function App() {
         )}
 
         {activeTab === 'viewport' && (
-          <>
-            <ParametricSidebar
-              collapsed={sidebarCollapsed}
-              onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
-              params={designParams}
-              onChangeParams={(patch) =>
-                setDesignParams((prev) => ({ ...prev, ...patch }))
-              }
-              surface={surface}
-              bimElements={meshData.bimElements}
-              components={components}
-              partProfile={partProfile}
-              activeSegment={activeSegment}
-              onChangeSegment={handleSetSegment}
-              onApplyProfileCriteriaToFea={handleApplyProfileCriteriaToFea}
-              display={display}
-              onUpdateDisplay={(patch) => setDisplay((d) => ({ ...d, ...patch }))}
-              selectedControlPoint={selectedControlPoint}
-              onSelectControlPoint={setSelectedControlPoint}
-              onUpdateControlPoint={(u, v, patch) =>
-                setCpOverrides((prev) => ({
-                  ...prev,
-                  [`${u}-${v}`]: { ...(prev[`${u}-${v}`] ?? {}), ...patch },
-                }))
-              }
-              onResetControlPointOverrides={() => setCpOverrides({})}
-              hasOverrides={Object.keys(cpOverrides).length > 0}
-              hasImportedModel={Boolean(importedModel)}
-              feaSettings={feaSettings}
-              onChangeFeaSettings={(patch) =>
-                setFeaSettings((prev) => ({ ...prev, ...patch }))
-              }
-              feaResult={feaResult}
-              feaComparison={feaComparison}
-              onToggleHeatmap={() => {
-                if (display.mode === 'stress-heatmap') {
-                  setDisplay((d) => ({ ...d, mode: 'component-pbr' }));
-                } else {
-                  handleRunFea(undefined, true);
+          <div className="flex-1 min-w-0 h-full flex relative overflow-hidden">
+            {/* Left Edge-Retractable Menu (overlay on mobile/tablet, docked collapsible on desktop) */}
+            <div
+              className={`${
+                sidebarCollapsed
+                  ? 'hidden'
+                  : 'fixed md:relative inset-y-0 left-0 z-30 md:z-auto flex h-full shadow-2xl md:shadow-none'
+              }`}
+            >
+              <ParametricSidebar
+                collapsed={false}
+                onToggleCollapse={() => setSidebarCollapsed(true)}
+                params={designParams}
+                onChangeParams={(patch) =>
+                  setDesignParams((prev) => ({ ...prev, ...patch }))
                 }
-              }}
-              onOptimizeGeometry={(obj) => handleGenerateOptimizedGeometry(obj)}
-              featureOps={featureOps}
-              onRemoveFeatureOp={handleRemoveFeatureOp}
-              scoobiiiProof={scoobiiiProof}
-              onOpenScoobiiiModal={() => setScoobiiiModalOpen(true)}
-              curvatureOptReport={curvatureOptReport}
-              onApplyCurvatureOptimization={handleApplyCurvatureOptimization}
-              layerToleranceSpecs={layerToleranceSpecs}
-              onUpdateLayerTolerance={handleUpdateLayerTolerance}
-              layerComplianceReport={layerComplianceReport}
-              onRefineNurbsForTolerances={handleRefineNurbsForTolerances}
-            />
-            <div className="flex-1 min-w-0 h-full">
+                surface={surface}
+                bimElements={meshData.bimElements}
+                components={components}
+                partProfile={partProfile}
+                activeSegment={activeSegment}
+                onChangeSegment={handleSetSegment}
+                onApplyProfileCriteriaToFea={handleApplyProfileCriteriaToFea}
+                display={display}
+                onUpdateDisplay={(patch) => setDisplay((d) => ({ ...d, ...patch }))}
+                selectedControlPoint={selectedControlPoint}
+                onSelectControlPoint={setSelectedControlPoint}
+                onUpdateControlPoint={(u, v, patch) =>
+                  setCpOverrides((prev) => ({
+                    ...prev,
+                    [`${u}-${v}`]: { ...(prev[`${u}-${v}`] ?? {}), ...patch },
+                  }))
+                }
+                onResetControlPointOverrides={() => setCpOverrides({})}
+                hasOverrides={Object.keys(cpOverrides).length > 0}
+                hasImportedModel={Boolean(importedModel)}
+                feaSettings={feaSettings}
+                onChangeFeaSettings={(patch) =>
+                  setFeaSettings((prev) => ({ ...prev, ...patch }))
+                }
+                feaResult={feaResult}
+                feaComparison={feaComparison}
+                onToggleHeatmap={() => {
+                  if (display.mode === 'stress-heatmap') {
+                    setDisplay((d) => ({ ...d, mode: 'component-pbr' }));
+                  } else {
+                    handleRunFea(undefined, true);
+                  }
+                }}
+                onOptimizeGeometry={(obj) => handleGenerateOptimizedGeometry(obj)}
+                featureOps={featureOps}
+                onRemoveFeatureOp={handleRemoveFeatureOp}
+                scoobiiiProof={scoobiiiProof}
+                onOpenScoobiiiModal={() => setScoobiiiModalOpen(true)}
+                curvatureOptReport={curvatureOptReport}
+                onApplyCurvatureOptimization={handleApplyCurvatureOptimization}
+                layerToleranceSpecs={layerToleranceSpecs}
+                onUpdateLayerTolerance={handleUpdateLayerTolerance}
+                layerComplianceReport={layerComplianceReport}
+                onRefineNurbsForTolerances={handleRefineNurbsForTolerances}
+              />
+            </div>
+
+            {/* Centered 3D Visual Field */}
+            <div className="flex-1 min-w-0 h-full relative">
               <Viewport3D
                 surface={surface}
                 meshData={meshData}
@@ -1316,6 +1848,7 @@ export default function App() {
                 simPlaying={simPlaying}
                 simProgress={simProgress}
                 onSimProgressChange={setSimProgress}
+                camVisualState={camVisualState}
                 selectedControlPoint={selectedControlPoint}
                 onSelectControlPoint={setSelectedControlPoint}
                 importedModel={importedModel}
@@ -1334,8 +1867,116 @@ export default function App() {
                 }
                 onOpenHelp={() => setActiveTab('onboarding')}
               />
+
+              {/* Left Screen-Edge Touch Handle (appears when menu is tucked away) */}
+              {sidebarCollapsed && (
+                <button
+                  type="button"
+                  onClick={() => setSidebarCollapsed(false)}
+                  aria-label="Abrir Menu Paramétrico na borda esquerda"
+                  className="absolute left-0 top-1/2 -translate-y-1/2 z-20 px-1.5 py-4 bg-[#111620] border border-l-0 border-white/20 rounded-r-lg text-sky-300 hover:text-white hover:bg-[#1a2232] flex flex-col items-center gap-1 cursor-pointer shadow-lg"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  <span className="text-[10px] font-mono-tabular [writing-mode:vertical-rl]">
+                    CAD / FEA
+                  </span>
+                </button>
+              )}
+
+              {/* Right Screen-Edge Touch Handle for Retractable CAM/VUC Drawer */}
+              {!rightEdgeDrawerOpen && (
+                <button
+                  type="button"
+                  onClick={() => setRightEdgeDrawerOpen(true)}
+                  aria-label="Abrir Menu CAM e Processo na borda direita"
+                  className="absolute right-0 top-1/2 -translate-y-1/2 z-20 px-1.5 py-4 bg-[#111620] border border-r-0 border-white/20 rounded-l-lg text-amber-300 hover:text-white hover:bg-[#1a2232] flex flex-col items-center gap-1 cursor-pointer shadow-lg"
+                >
+                  <Cpu className="w-3.5 h-3.5" />
+                  <span className="text-[10px] font-mono-tabular [writing-mode:vertical-rl]">
+                    CAM / VUC
+                  </span>
+                </button>
+              )}
+
+              {/* Retractable Right Edge Quick CAM & Process Drawer */}
+              {rightEdgeDrawerOpen && (
+                <div className="absolute right-0 top-0 bottom-0 z-30 w-72 bg-[#111620] border-l border-white/15 flex flex-col shadow-2xl">
+                  <div className="px-3 py-2.5 border-b border-white/10 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-amber-200 font-mono-tabular">
+                      CAM Rápido · {camVisualState.activeToolEvent.toolNumber}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRightEdgeDrawerOpen(false)}
+                      className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => handleRestartCamProcess()}
+                      className="w-full min-h-[38px] px-3 py-1.5 font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Reiniciar CAM do Zero (#{camRestartCount})
+                    </button>
+
+                    <div className="space-y-1">
+                      <div className="text-[11px] text-slate-400">Trocar Processo Ativo:</div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {(
+                          [
+                            ['powder-metal', 'Pó Metálico'],
+                            ['resin-sla', 'Resina UV'],
+                            ['robot-weld', 'Robô Solda'],
+                            ['laser-cut', 'Laser 4kW'],
+                            ['cnc-5axis', 'CNC 5-Eixos'],
+                            ['robot-6axis', 'Robô KUKA'],
+                          ] as [MachineType, string][]
+                        ).map(([mt, label]) => (
+                          <button
+                            key={mt}
+                            type="button"
+                            onClick={() => handleRestartCamProcess(mt)}
+                            className={`px-2 py-1.5 rounded border text-left text-[11px] cursor-pointer ${
+                              camSettings.machineType === mt
+                                ? 'border-amber-400 bg-amber-500/15 text-amber-200'
+                                : 'border-white/10 bg-[#0c1017] text-slate-300'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#0c1017] border border-white/10 rounded space-y-1 font-mono-tabular text-[11px]">
+                      <div className="text-slate-400">Ferramenta / Feixe Ativo:</div>
+                      <div className="text-slate-100 font-semibold">
+                        {camVisualState.activeToolEvent.toolName}
+                      </div>
+                      <div className="text-emerald-400">
+                        VUC: {camVisualState.vucProof.vucHash.slice(0, 18)}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRightEdgeDrawerOpen(false);
+                        setActiveTab('cam');
+                      }}
+                      className="w-full py-2 border border-sky-400/40 bg-sky-500/10 text-sky-200 rounded-lg font-medium cursor-pointer"
+                    >
+                      Abrir Painel CAM Completo
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          </>
+          </div>
         )}
 
         {activeTab === 'grasshopper' && (
@@ -1401,6 +2042,7 @@ export default function App() {
                   simPlaying={simPlaying}
                   simProgress={simProgress}
                   onSimProgressChange={setSimProgress}
+                  camVisualState={camVisualState}
                   selectedControlPoint={selectedControlPoint}
                   onSelectControlPoint={setSelectedControlPoint}
                   importedModel={importedModel}
@@ -1447,7 +2089,7 @@ export default function App() {
                     : 'bg-[#141a24] text-slate-300'
                 }`}
               >
-                Parâmetros CNC / KUKA
+                Processos & ATC
               </button>
             </div>
             <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
@@ -1472,6 +2114,7 @@ export default function App() {
                     setSimPlaying(false);
                     setSimProgress(val);
                   }}
+                  onRestartProcess={() => handleRestartCamProcess()}
                   showToolpath={display.showToolpath}
                   showMachine={display.showMachine}
                   onToggleToolpath={() =>
@@ -1480,6 +2123,9 @@ export default function App() {
                   onToggleMachine={() =>
                     setDisplay((d) => ({ ...d, showMachine: !d.showMachine }))
                   }
+                  camVisualState={camVisualState}
+                  remoteMachines={remoteMachines}
+                  onDispatchRemoteMachine={handleDispatchRemoteMachine}
                 />
               </div>
               <div
@@ -1497,6 +2143,7 @@ export default function App() {
                   simPlaying={simPlaying}
                   simProgress={simProgress}
                   onSimProgressChange={setSimProgress}
+                  camVisualState={camVisualState}
                   selectedControlPoint={selectedControlPoint}
                   onSelectControlPoint={setSelectedControlPoint}
                   importedModel={importedModel}
@@ -1518,6 +2165,39 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'frostbite' && (
+          <FrostbiteRackDashboard
+            onLoadPresetById={(presetId) => {
+              const found = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === presetId);
+              if (found) handleApplyFullPreset(found, true);
+            }}
+            onStartProcessCam={(machineType) => {
+              handleRestartCamProcess(machineType);
+              handleTabSwitch('cam');
+            }}
+            onVerifyVucOnServer={handleVerifyVucOnServer}
+            lastServerVucHex={lastServerVucHex}
+          />
+        )}
+
+        {activeTab === 'ecosystem' && (
+          <EcosystemHubPanel
+            profile={sqliteProfile}
+            onUpdateProfile={handleUpdateSqliteProfile}
+            onOpenAuthModal={() => setOfflineAuthOpen(true)}
+            chatMessages={chatMessages}
+            onSendChat={handleSendEcosystemChat}
+            logisticsNodes={logisticsNodes}
+            onPingGpsLocation={handlePingGpsLocation}
+            computeNodes={computeNodes}
+            erpRecords={erpRecords}
+            onAddErpRecord={handleAddErpRecord}
+            remoteMachines={remoteMachines}
+            onDispatchRemoteMachine={handleDispatchRemoteMachine}
+            onRunAutonomousProjectWorkflow={handleRunAutonomousProjectWorkflow}
+          />
         )}
 
         {activeTab === 'sustainability' && (
@@ -1614,9 +2294,9 @@ export default function App() {
         {(
           [
             { id: 'onboarding', label: 'Início', icon: Home },
-            { id: 'viewport', label: '3D IX', icon: Box },
+            { id: 'viewport', label: '3D IX', icon: Boxes },
             { id: 'cam', label: 'CAM', icon: Cpu },
-            { id: 'sustainability', label: 'CO₂', icon: Leaf },
+            { id: 'frostbite', label: '1MW', icon: Flame },
           ] as const
         ).map((item) => {
           const Icon = item.icon;
@@ -1640,6 +2320,8 @@ export default function App() {
           onClick={() => setMobileMoreOpen((v) => !v)}
           className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
             mobileMoreOpen ||
+            activeTab === 'ecosystem' ||
+            activeTab === 'sustainability' ||
             activeTab === 'grasshopper' ||
             activeTab === 'mcp' ||
             activeTab === 'plugins' ||
@@ -1678,6 +2360,8 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
+                  { id: 'ecosystem', label: 'Ecossistema & ERP', icon: Globe },
+                  { id: 'sustainability', label: 'Pegada CO₂', icon: Leaf },
                   { id: 'grasshopper', label: 'Grasshopper Nodal', icon: Network },
                   { id: 'mcp', label: 'Agente RAG + MCP', icon: Terminal },
                   { id: 'plugins', label: 'Plugins SDK', icon: Puzzle },
@@ -1742,13 +2426,13 @@ export default function App() {
         />
       )}
 
-      {/* Quick Export Modal triggered by Top Bar CTA */}
+      {/* Quick Export + Remote Machine Dispatch Modal */}
       {exportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md bg-[#111620] border border-white/12 rounded-2xl shadow-2xl overflow-hidden">
+          <div className="w-full max-w-md bg-[#111620] border border-white/12 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
             <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <h3 className="font-display text-base font-semibold text-slate-100">
-                Exportar Projeto & Fabricação
+                Exportar Projeto & Executar em Máquina
               </h3>
               <button
                 type="button"
@@ -1866,7 +2550,7 @@ export default function App() {
               >
                 <div>
                   <div className="text-xs font-semibold text-slate-100">
-                    Programa CNC / Robô / Folha Manual
+                    Programa CNC / Robô / Pó / Resina
                   </div>
                   <div className="text-[11px] text-slate-400">
                     {toolpath.spindleRpm} RPM · {toolpath.feedRateMmMin} mm/min
@@ -1876,10 +2560,83 @@ export default function App() {
                   .{camSettings.postFormat === 'kuka-krl' ? 'src' : 'nc'}
                 </span>
               </button>
+
+              {remoteMachines.length > 0 && (
+                <div className="pt-2 border-t border-white/10 space-y-2">
+                  <div className="text-[11px] font-semibold text-slate-300">
+                    Logar & Executar Diretamente em Máquina Remota:
+                  </div>
+                  {remoteMachines.map((rm) => (
+                    <button
+                      key={rm.id}
+                      type="button"
+                      onClick={() => {
+                        void handleDispatchRemoteMachine(rm.id);
+                        setExportModalOpen(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 bg-[#090c11] border border-white/10 hover:border-amber-400/60 rounded-xl text-left text-xs cursor-pointer"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-100 truncate">{rm.name}</div>
+                        <div className="text-[10px] font-mono-tabular text-slate-400 truncate">
+                          {rm.protocol} · {rm.endpointUrl}
+                        </div>
+                      </div>
+                      <Send className="w-3.5 h-3.5 text-amber-400 shrink-0 ml-2" />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
+
+      {/* Offline Proprietary SQLite Auth Modal */}
+      <OfflineAuthModal
+        open={offlineAuthOpen}
+        onClose={() => setOfflineAuthOpen(false)}
+        onLogin={handleSqliteOfflineLogin}
+      />
+
+      {/* Interactive Real-Time New Project From Scratch Wizard */}
+      <ProjectWizardModal
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCreateProject={(cfg) => {
+          if (cfg.presetIdToLoad) {
+            const preset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === cfg.presetIdToLoad);
+            if (preset) {
+              handleApplyFullPreset(preset, true);
+            }
+          } else {
+            setImportedModel(null);
+            setDesignParams((prev) => ({ ...prev, ...cfg.designParamsPatch }));
+            setActiveSegment(cfg.segment);
+            setDisplay((d) => ({
+              ...d,
+              materialFinish: cfg.materialFinish,
+              fitViewTrigger: d.fitViewTrigger + 1,
+            }));
+            setActiveTab('viewport');
+          }
+          setPartProfileOverride({ partName: cfg.name });
+          if (cfg.startCamImmediately) {
+            handleRestartCamProcess(cfg.machineType);
+          } else {
+            setCamSettings((prev) => ({
+              ...prev,
+              machineType: cfg.machineType,
+              postFormat: defaultPostForMachine(cfg.machineType),
+            }));
+          }
+          recordDeliverable({
+            filename: `${cfg.name.toLowerCase().replace(/\s+/g, '_')}.vuc`,
+            kind: 'REPORT',
+            summary: `Novo projeto criado do zero · CAM: ${cfg.machineType} · Material: ${cfg.materialFinish}`,
+          });
+        }}
+      />
 
       {/* Account & Isolated User Workspace Modal */}
       {accountModalOpen && user && (

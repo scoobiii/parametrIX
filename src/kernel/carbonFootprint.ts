@@ -92,6 +92,34 @@ export const MACHINE_ENERGY_SPECS: Record<MachineType, MachineEnergySpec> = {
     kineticEfficiencyPct: 92,
     cycleSpeedMultiplier: 1.0,
   },
+  'powder-metal': {
+    label: 'Impressão 3D Pó Metálico (LPBF Laser)',
+    baseSpindleKw: 1.8,
+    servoAuxiliaryKw: 2.4,
+    kineticEfficiencyPct: 79,
+    cycleSpeedMultiplier: 1.4,
+  },
+  'resin-sla': {
+    label: 'Impressão 3D Resina UV (SLA / DLP)',
+    baseSpindleKw: 0.45,
+    servoAuxiliaryKw: 0.35,
+    kineticEfficiencyPct: 88,
+    cycleSpeedMultiplier: 1.25,
+  },
+  'robot-weld': {
+    label: 'Robô Solda MIG/TIG (Arco + Fio)',
+    baseSpindleKw: 5.2,
+    servoAuxiliaryKw: 1.1,
+    kineticEfficiencyPct: 84,
+    cycleSpeedMultiplier: 0.9,
+  },
+  'laser-cut': {
+    label: 'Cabeçote Laser Fibra 4 kW',
+    baseSpindleKw: 4.0,
+    servoAuxiliaryKw: 1.25,
+    kineticEfficiencyPct: 86,
+    cycleSpeedMultiplier: 0.72,
+  },
 };
 
 export function calculateCarbonFootprint(params: {
@@ -196,7 +224,16 @@ export function calculateCarbonFootprint(params: {
   };
 
   const machineBenchmarks: MachineCarbonBenchmark[] = (
-    ['robot-6axis', 'cnc-5axis', 'cnc-3axis', 'manual'] as MachineType[]
+    [
+      'robot-6axis',
+      'cnc-5axis',
+      'cnc-3axis',
+      'manual',
+      'powder-metal',
+      'resin-sla',
+      'robot-weld',
+      'laser-cut',
+    ] as MachineType[]
   ).map(computeMachineMetrics);
 
   const activeBench =

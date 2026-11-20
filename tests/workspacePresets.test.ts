@@ -7,9 +7,9 @@ import {
 } from '../src/kernel/workspacePresets';
 
 describe('workspacePresets kernel', () => {
-  it('validates all 5 workspace presets and their optional imported models', () => {
+  it('validates all 9 workspace presets and their optional imported models', () => {
     expect(ACCEPTED_CAD_EXTENSIONS).toContain('.ipt');
-    expect(WORKSPACE_PROJECT_PRESETS).toHaveLength(5);
+    expect(WORKSPACE_PROJECT_PRESETS).toHaveLength(9);
     for (const p of WORKSPACE_PROJECT_PRESETS) {
       if (p.buildImportedModel) {
         const model = p.buildImportedModel();
