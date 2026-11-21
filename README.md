@@ -175,6 +175,12 @@ e o que mais o pipeline pode produzir.
 Capítulos: `00:18` peça no viewer · `01:08` API do kernel · `02:03` STEP e validação · `02:58` CAM ·
 `03:49` pessoa no Parametrix · `04:30` agente via API · `05:35` o que mais produzir · `06:14` encerramento.
 
+## Documentação da entrega
+
+O detalhamento técnico completo — escopo, arquitetura do kernel, APIs, processo CAM, verificação,
+artefatos, limitações e histórico de commits — está em
+[`docs/entrega_engrenagem_m2_z24.md`](docs/entrega_engrenagem_m2_z24.md).
+
 ## Stack & Arquitetura
 
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS v4, Three.js (`OrbitControls`, `TransformControls`, `RoomEnvironment`), Lucide Icons.
