@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-11-21T04:45:48.547Z",
+  "generatedAt": "2026-11-21T04:46:30.798Z",
   "partName": "Engrenagem Cilíndrica de Dentes Retos M2 Z24",
   "modelCode": "PX-GEAR-M2-Z24-20PA",
   "status": "PASS",
-  "vucId": "VUC-ED25519-29FEB5EB45C78289",
+  "vucId": "VUC-ED25519-395A4FE74C953B3D",
   "files": [
     {
       "file": "profile.json",
@@ -53,12 +53,12 @@
     {
       "file": "relatorio_tecnico.md",
       "bytes": 7280,
-      "sha256": "65E414F37C704FEF15FE276E14FF37EA34B9AF279D9F7C276C2B03D5DB1E9CE0"
+      "sha256": "E98E9EE8F02D8CB192F66F07C2C1BDD2D4203AF9294880386F020B246648BA71"
     },
     {
       "file": "vuc_proof.json",
       "bytes": 5798,
-      "sha256": "C054C8EF161F44A3066C689A08B1ED5E81141DA4DDDA7417C877798F06B5C3E3"
+      "sha256": "5B04BAA2933E35B6E1C394AA4C24D09F33982D91D968C1C05D53018E86F0FEA2"
     }
   ]
 }

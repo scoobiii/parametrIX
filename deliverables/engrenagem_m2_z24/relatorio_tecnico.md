@@ -2,10 +2,10 @@
 
 **Peça:** Engrenagem Cilíndrica de Dentes Retos M2 Z24  
 **Código:** PX-GEAR-M2-Z24-20PA  
-**Data:** 2026-11-21T04:45:48.543Z  
+**Data:** 2026-11-21T04:46:30.794Z  
 **Repositório:** `scoobiii/parametrIX`  
 **Status da validação:** **PASS**  
-**Certificado VUC:** `VUC-ED25519-29FEB5EB45C78289`
+**Certificado VUC:** `VUC-ED25519-395A4FE74C953B3D`
 
 ---
 
@@ -93,13 +93,13 @@ O `manifest.json` inclui também o hash deste relatório e do certificado VUC.
 
 ## 5. Prova VUC (Ed25519 + SHA-256)
 
-- `vuc_id`: **VUC-ED25519-29FEB5EB45C78289**
+- `vuc_id`: **VUC-ED25519-395A4FE74C953B3D**
 - `hash_input`: `46D618BADFCD07F9BFD7EC2276F554B871C4A3892C30DC41C3C66D6DA0C8B27C`
 - `hash_output`: `2EA966B6E935B2EF94D600AB38C20DF2C17BBBD9710097B575A445729A95F1AD`
-- `hash_processo`: `29FEB5EB45C7828946B54CBC6DE21DFA74EFA0BCACFE44FE3C06A0FF1770C825`
-- `commit`: `e254f91`
+- `hash_processo`: `395A4FE74C953B3D0F25F5C395EADC24DE8C3D7C83D7747B02D41BBE2DC673E7`
+- `commit`: `23b6097`
 - `runner`: `local-sandbox-cad-pipeline`
-- `duracao_ms`: 39
+- `duracao_ms`: 42
 - Verificação da assinatura: **VÁLIDA** — Assinatura Ed25519 e hashes SHA-256 verificados.
 
 A chave privada Ed25519 é efêmera (gerada no processo) e a chave pública acompanha o certificado em

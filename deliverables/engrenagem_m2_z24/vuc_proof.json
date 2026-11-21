@@ -1,18 +1,18 @@
 {
   "certificate": {
-    "vuc_id": "VUC-ED25519-29FEB5EB45C78289",
+    "vuc_id": "VUC-ED25519-395A4FE74C953B3D",
     "domain": "CAD_PART_DELIVERY_VUC",
     "status": "PASS",
     "hash_input": "46D618BADFCD07F9BFD7EC2276F554B871C4A3892C30DC41C3C66D6DA0C8B27C",
     "hash_output": "2EA966B6E935B2EF94D600AB38C20DF2C17BBBD9710097B575A445729A95F1AD",
-    "hash_processo": "29FEB5EB45C7828946B54CBC6DE21DFA74EFA0BCACFE44FE3C06A0FF1770C825",
-    "commit": "e254f91",
+    "hash_processo": "395A4FE74C953B3D0F25F5C395EADC24DE8C3D7C83D7747B02D41BBE2DC673E7",
+    "commit": "23b6097",
     "runner": "local-sandbox-cad-pipeline",
     "node_version": "v24.22.3",
-    "duracao_ms": 39,
-    "timestamp": "2026-11-21T04:45:48.491Z",
-    "assinatura_ed25519": "e_regaV22bY4vUTCQKg9gbE92H3TZzXx-3Lu50nVm6dc8hHsOVYHtQmgTh8EQynoIGE4QEv47rbhA891D8HkAA",
-    "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA0F7ceJHcconjXtLtiIno0ppO4OLr/lfExijijWBOB2o=\n-----END PUBLIC KEY-----\n"
+    "duracao_ms": 42,
+    "timestamp": "2026-11-21T04:46:30.742Z",
+    "assinatura_ed25519": "rw3sFNObngimMlX1lyfcGH39D_2fSk41U2ZMr0CgzfQ94goTd0j0OKHH2fj81wWu20y7TQ4Bp_1ZN9Qv0A2FBg",
+    "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEACo4jkFf1zuSUA8VkonZPz9T1MyUsleeSOSdswPVWvx0=\n-----END PUBLIC KEY-----\n"
   },
   "verify": {
     "valid": true,
