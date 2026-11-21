@@ -168,6 +168,8 @@ if (!verification.valid) {
 const proofPayload = {
   certificate,
   verify: verification,
+  inputPayload,
+  outputPayload,
   inputHashSummary: {
     kernelSourceSha256: inputPayload.kernelSourceSha256,
     profileJsonSha256: inputPayload.profileJsonSha256,
