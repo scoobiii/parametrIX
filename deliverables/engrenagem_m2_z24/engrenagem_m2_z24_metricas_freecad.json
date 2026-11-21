@@ -1,0 +1,47 @@
+{
+  "source": "FreeCAD 0.20.2 (OpenCASCADE B-Rep)",
+  "partName": "Engrenagem Cilíndrica de Dentes Retos M2 Z24",
+  "modelCode": "PX-GEAR-M2-Z24-20PA",
+  "solidCount": 1,
+  "shellCount": 1,
+  "faceCount": 1122,
+  "edgeCount": 3360,
+  "isValid": true,
+  "volumeMm3": 17555.964727378385,
+  "surfaceAreaMm2": 8363.807586815417,
+  "massKg7075T6": 0.04933226088393327,
+  "boundingBox": {
+    "min": [
+      -25.999606145284442,
+      -25.999606145284442,
+      0.0
+    ],
+    "max": [
+      25.999606145284442,
+      25.999606145284442,
+      12.0
+    ],
+    "size": [
+      51.999212290568884,
+      51.999212290568884,
+      12.0
+    ]
+  },
+  "centerOfMassMm": [
+    0.0,
+    0.0,
+    6.0
+  ],
+  "artifacts": {
+    "step": {
+      "file": "engrenagem_m2_z24.step",
+      "bytes": 4479017,
+      "sha256": "5F34A8989B01BA691666C8C46557292103F9F4E0F7028FC779E69831985EC9DC"
+    },
+    "stl": {
+      "file": "engrenagem_m2_z24.stl",
+      "bytes": 224884,
+      "sha256": "B91CEA216E6A2E48D323700EFBC8743FB9E898F7A24F049EB8A918CCBB31A5C6"
+    }
+  }
+}

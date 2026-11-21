@@ -13,7 +13,7 @@ import type {
   ToolpathPoint,
 } from '../types/cad';
 
-function computeBounds(positions: Float32Array): ImportedCadModel['boundingBox'] {
+export function computeBounds(positions: Float32Array): ImportedCadModel['boundingBox'] {
   if (positions.length === 0) {
     return { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] };
   }
@@ -37,7 +37,7 @@ function computeBounds(positions: Float32Array): ImportedCadModel['boundingBox']
   };
 }
 
-function computeTriangleNormals(positions: Float32Array): Float32Array {
+export function computeTriangleNormals(positions: Float32Array): Float32Array {
   const normals = new Float32Array(positions.length);
   for (let i = 0; i < positions.length; i += 9) {
     const ax = positions[i], ay = positions[i + 1], az = positions[i + 2];

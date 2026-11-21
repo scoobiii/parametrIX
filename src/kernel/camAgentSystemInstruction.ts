@@ -104,7 +104,7 @@ export function buildDeterministicCamAgentReply(params: {
   if (/(vuc|prova|ed25519|hash|audit|cobertura|test)/.test(q)) {
     return (
       `[${params.agentId.toUpperCase()} · Prova Formal VUC] Hash desta operação: ${params.vucHash}. ` +
-      `Use POST /api/vuc/formal-proof para emitir certificado SHA-256 (input/output/processo) + assinatura Ed25519 verificável e rode "npm run ci" para validar 26/26 audit:cad e 100% de cobertura V8.`
+      `Use POST /api/vuc/formal-proof para emitir certificado SHA-256 (input/output/processo) + assinatura Ed25519 verificável e rode "npm run ci" para validar 27/27 audit:cad e 100% de cobertura V8.`
     );
   }
 

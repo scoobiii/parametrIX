@@ -106,6 +106,8 @@ import type {
   CadPlugin,
   CamServiceJob,
   CamSettings,
+  CameraPreset,
+  DisplayMode,
   ComputeShareNode,
   ControlPoint4D,
   EcosystemChatMessage,
@@ -137,6 +139,36 @@ import type {
   VoiceActionIntent,
   WorkspaceTab,
 } from './types/cad';
+
+const DISPLAY_MODES: DisplayMode[] = [
+  'solid',
+  'component-pbr',
+  'object-mask',
+  'wireframe',
+  'zebra',
+  'curvature',
+  'stress-heatmap',
+  'xray',
+];
+const MATERIAL_FINISHES: MaterialFinish[] = [
+  'aluminum',
+  'titanium',
+  'clay',
+  'oak',
+  'glass',
+  'carbon-fiber',
+  'matte-plastic',
+];
+const CAMERA_PRESETS: CameraPreset[] = [
+  'perspective',
+  'isometric',
+  'top',
+  'bottom',
+  'front',
+  'back',
+  'left',
+  'right',
+];
 
 export default function App() {
   const { user, authReady, authBusy, signInWithGoogle, logout } = useAuth();
@@ -575,6 +607,8 @@ export default function App() {
       mode: preset.displayMode,
       materialFinish: preset.materialFinish,
       showImportedOverlay: Boolean(model),
+      showMachine: preset.showMachine ?? true,
+      showToolpath: preset.showToolpath ?? true,
       isolationTarget: 'all',
       selectedComponentId: null,
       hiddenComponentIds: [],
@@ -590,6 +624,35 @@ export default function App() {
       setActiveTab('viewport');
     }
   };
+
+  // Deep link: /?preset=preset-gear-m2-z24&mode=solid&finish=clay&view=isometric
+  // abre a peça direto no Editor 3D com o modo de render e o enquadramento pedidos.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedPreset = params.get('preset');
+    if (!requestedPreset) return;
+    const preset = WORKSPACE_PROJECT_PRESETS.find((item) => item.id === requestedPreset);
+    if (preset) {
+      handleApplyFullPreset(preset, true);
+    }
+    const requestedMode = params.get('mode');
+    const requestedFinish = params.get('finish');
+    const requestedView = params.get('view');
+    setDisplay((current) => ({
+      ...current,
+      ...(requestedMode && DISPLAY_MODES.includes(requestedMode as DisplayMode)
+        ? { mode: requestedMode as DisplayMode }
+        : {}),
+      ...(requestedFinish && MATERIAL_FINISHES.includes(requestedFinish as MaterialFinish)
+        ? { materialFinish: requestedFinish as MaterialFinish }
+        : {}),
+      ...(requestedView && CAMERA_PRESETS.includes(requestedView as CameraPreset)
+        ? { cameraPreset: requestedView as CameraPreset, cameraTrigger: current.cameraTrigger + 1 }
+        : {}),
+    }));
+    // Executa apenas na montagem inicial; o preset é um estado inicial, não uma dependência.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleAddFeatureOp = (
     op: Omit<CadFeatureOperation, 'id' | 'createdAt'>

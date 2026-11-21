@@ -21,6 +21,7 @@ export default defineConfig({
         'src/kernel/imageToCad.ts',
         'src/kernel/ragEngine.ts',
         'src/kernel/workspacePresets.ts',
+        'src/kernel/spurGear.ts',
         'src/kernel/graphEngine.ts',
         'src/kernel/nurbs.ts',
         'src/kernel/curvatureOptimizer.ts',

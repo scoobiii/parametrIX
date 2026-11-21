@@ -8,6 +8,7 @@ import {
   parseSVGToCad,
 } from './cadFormats';
 import { convertImageToCadModel, isRasterImageFilename } from './imageToCad';
+import { buildSpurGearModel } from './spurGear';
 import type {
   ApplicationSegment,
   CadFeatureOperation,
@@ -77,6 +78,10 @@ export interface FullWorkspacePreset {
   partProfileOverride?: Partial<PartEngineeringProfile>;
   buildImportedModel?: () => ImportedCadModel;
   initialFeatures?: CadFeatureOperation[];
+  /** Exibe a máquina CNC na cena ao carregar o preset (padrão: true). */
+  showMachine?: boolean;
+  /** Exibe o toolpath CAM na cena ao carregar o preset (padrão: true). */
+  showToolpath?: boolean;
 }
 
 const ROCKSHOX_FORK_ASSEMBLY_OBJ = [
@@ -289,6 +294,57 @@ export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
         createdAt: 'Preset',
       },
     ],
+  },
+  {
+    id: 'preset-gear-m2-z24',
+    title: 'Engrenagem Cilíndrica M2 Z24 (ISO 53 · 7075-T6)',
+    badge: 'ISO 53 · 24 dentes',
+    subtitle:
+      'Corpo único Ø52 mm, furo Ø12 H7 e 4 alívios Ø8 gerados por kernel de evolvente — CAM 3-eixos, FEA e exportação STEP/STL.',
+    segment: 'industrial-cnc',
+    graphTemplateId: 'tpl-bim-shell',
+    designParams: {
+      preset: 'cavity',
+      spanX: 52,
+      spanY: 52,
+      archHeight: 20,
+      waveAmplitude: 2,
+      twistDeg: 0,
+      thicknessMm: 12,
+      uDivisions: 26,
+      vDivisions: 26,
+      ribCountU: 3,
+      ribCountV: 3,
+      ribHeightMm: 8,
+      attractorStrength: 0,
+    },
+    camSettings: {
+      machineType: 'cnc-3axis',
+      strategy: 'contour',
+      toolId: 'tool-ball-4',
+      stepoverPct: 30,
+      stepdownMm: 1.5,
+      stockMarginMm: 0.2,
+      safeZMm: 20,
+      cutSpeedMultiplier: 1.0,
+      postFormat: 'fanuc-nc',
+    },
+    feaSettings: {
+      loadNewtons: 1200,
+      supportMode: 'edge-clamped',
+      loadPattern: 'center-point',
+      targetSafetyFactor: 2.0,
+    },
+    materialFinish: 'aluminum',
+    displayMode: 'component-pbr',
+    partProfileOverride: {
+      partName: 'Engrenagem Cilíndrica de Dentes Retos M2 Z24',
+      manufacturer: 'Scoobiii / Parametrix',
+      modelCode: 'PX-GEAR-M2-Z24-20PA',
+    },
+    showMachine: false,
+    showToolpath: false,
+    buildImportedModel: () => buildSpurGearModel(),
   },
   {
     id: 'preset-bim-dome',
