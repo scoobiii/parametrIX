@@ -1,0 +1,64 @@
+{
+  "generatedAt": "2026-11-21T04:45:48.547Z",
+  "partName": "Engrenagem Cilíndrica de Dentes Retos M2 Z24",
+  "modelCode": "PX-GEAR-M2-Z24-20PA",
+  "status": "PASS",
+  "vucId": "VUC-ED25519-29FEB5EB45C78289",
+  "files": [
+    {
+      "file": "profile.json",
+      "bytes": 76214,
+      "sha256": "7018451F9614923D3789FED703E255CF14A31491595C54C11FA30ADFB49CCEC4"
+    },
+    {
+      "file": "engrenagem_m2_z24.step",
+      "bytes": 4479017,
+      "sha256": "5F34A8989B01BA691666C8C46557292103F9F4E0F7028FC779E69831985EC9DC"
+    },
+    {
+      "file": "engrenagem_m2_z24.stl",
+      "bytes": 224884,
+      "sha256": "B91CEA216E6A2E48D323700EFBC8743FB9E898F7A24F049EB8A918CCBB31A5C6"
+    },
+    {
+      "file": "engrenagem_m2_z24.dxf",
+      "bytes": 21944,
+      "sha256": "5D93A62EF451A055E5428956DCEFD22B7513FCF2D4F268CBA5C0B9D2D70144E4"
+    },
+    {
+      "file": "engrenagem_m2_z24_4vistas.png",
+      "bytes": 382949,
+      "sha256": "50D9BC641DFF69C04E538BA5EB7A9E696A08BE42193F91E1595E9F464E3DF29A"
+    },
+    {
+      "file": "engrenagem_m2_z24_iso.png",
+      "bytes": 62115,
+      "sha256": "984186A7BE11A89A80B6247C19C3FDAF5B8FD79183249C83E3CED4328E5E2783"
+    },
+    {
+      "file": "engrenagem_m2_z24_metricas_kernel.json",
+      "bytes": 1421,
+      "sha256": "13F0E20B3D0F31E0A0DEDE24B294E9752C5FE5EF1DE956CD7695EE8168521968"
+    },
+    {
+      "file": "engrenagem_m2_z24_metricas_freecad.json",
+      "bytes": 1047,
+      "sha256": "91DC162CC64611EC9A5D09CD7432C178BFE62B8A1DBD14CE60BCCAADF12BB6D6"
+    },
+    {
+      "file": "engrenagem_m2_z24_validacao.json",
+      "bytes": 3567,
+      "sha256": "149193491F7C2993D3C5740E09659123602C7DEAD44C6F336ADA8A92B94E6A2B"
+    },
+    {
+      "file": "relatorio_tecnico.md",
+      "bytes": 7280,
+      "sha256": "65E414F37C704FEF15FE276E14FF37EA34B9AF279D9F7C276C2B03D5DB1E9CE0"
+    },
+    {
+      "file": "vuc_proof.json",
+      "bytes": 5798,
+      "sha256": "C054C8EF161F44A3066C689A08B1ED5E81141DA4DDDA7417C877798F06B5C3E3"
+    }
+  ]
+}

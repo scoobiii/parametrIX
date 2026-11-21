@@ -1,0 +1,61 @@
+{
+  "source": "src/kernel/spurGear.ts",
+  "spec": {
+    "moduleMm": 2,
+    "teeth": 24,
+    "pressureAngleDeg": 20,
+    "faceWidthMm": 12,
+    "boreDiameterMm": 12,
+    "lighteningHoleCount": 4,
+    "lighteningHoleDiameterMm": 8,
+    "lighteningHolePitchRadiusMm": 14,
+    "flankSamples": 14,
+    "densityKgM3": 2810
+  },
+  "metrics": {
+    "moduleMm": 2,
+    "teeth": 24,
+    "pressureAngleDeg": 20,
+    "pitchDiameterMm": 48,
+    "baseDiameterMm": 45.105245797723605,
+    "tipDiameterMm": 52,
+    "rootDiameterMm": 43,
+    "addendumMm": 2,
+    "dedendumMm": 2.5,
+    "circularPitchMm": 6.283185307179586,
+    "toothThicknessAtPitchMm": 3.141592653589793,
+    "tipToothThicknessMm": 1.4311008670339345,
+    "faceWidthMm": 12,
+    "boreDiameterMm": 12,
+    "lighteningHoleCount": 4,
+    "lighteningHoleDiameterMm": 8,
+    "lighteningHolePitchRadiusMm": 14,
+    "faceAreaMm2": 1462.9970606148554,
+    "volumeMm3": 17555.964727378265,
+    "massKg": 0.04933226088393292,
+    "surfaceAreaMm2": 8363.807586815397,
+    "densityKgM3": 2810
+  },
+  "mesh": {
+    "triangleCount": 4496,
+    "volumeMm3": 17555.964785663782,
+    "surfaceAreaMm2": 8363.80759848805
+  },
+  "boundingBox": {
+    "min": [
+      -25.99960708618164,
+      0,
+      -25.99960708618164
+    ],
+    "max": [
+      25.99960708618164,
+      12,
+      25.99960708618164
+    ],
+    "size": [
+      51.99921417236328,
+      12,
+      51.99921417236328
+    ]
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "status": "PASS",
+  "partName": "Engrenagem Cilíndrica de Dentes Retos M2 Z24",
+  "modelCode": "PX-GEAR-M2-Z24-20PA",
+  "standardReferences": [
+    "ISO 53:1998",
+    "ISO 21771:2007",
+    "ISO 2768-mK"
+  ],
+  "measurements": {
+    "kernelVolumeMm3": 17555.964727378265,
+    "kernelSurfaceAreaMm2": 8363.807586815397,
+    "stepVolumeMm3": 17555.964727378203,
+    "stepSurfaceAreaMm2": 8363.807586815332,
+    "stlVolumeMm3": 17555.964785663764,
+    "stepThicknessMm": 12.0,
+    "stepMaxRadiusMm": 26.000000000000494,
+    "stepTopRadiusMm": 26.000000000000494,
+    "stepSolidCount": 1,
+    "stepFaceCount": 1122,
+    "stepEdgeCount": 3360,
+    "stlTriangleCount": 4496
+  },
+  "checks": [
+    {
+      "name": "STEP é um único sólido",
+      "measured": 1,
+      "expected": 1,
+      "tolerance": 0,
+      "toleranceKind": "abs",
+      "deviation": 0,
+      "pass": true
+    },
+    {
+      "name": "STEP válido (OpenCASCADE)",
+      "measured": 1,
+      "expected": 1,
+      "tolerance": 0,
+      "toleranceKind": "abs",
+      "deviation": 0,
+      "pass": true
+    },
+    {
+      "name": "Volume STEP vs kernel",
+      "measured": 17555.964727378203,
+      "expected": 17555.964727378265,
+      "tolerance": 1e-06,
+      "toleranceKind": "rel",
+      "deviation": 3.5227707893552424e-15,
+      "pass": true
+    },
+    {
+      "name": "Área STEP vs kernel",
+      "measured": 8363.807586815332,
+      "expected": 8363.807586815397,
+      "tolerance": 1e-06,
+      "toleranceKind": "rel",
+      "deviation": 7.829402798658162e-15,
+      "pass": true
+    },
+    {
+      "name": "Volume STL vs kernel",
+      "measured": 17555.964785663764,
+      "expected": 17555.964727378265,
+      "tolerance": 1e-06,
+      "toleranceKind": "rel",
+      "deviation": 3.3199826960878187e-09,
+      "pass": true
+    },
+    {
+      "name": "Espessura STEP (b)",
+      "measured": 12.0,
+      "expected": 12,
+      "tolerance": 1e-06,
+      "toleranceKind": "abs",
+      "deviation": 0.0,
+      "pass": true
+    },
+    {
+      "name": "Raio externo máximo STEP (da/2)",
+      "measured": 26.000000000000494,
+      "expected": 26.0,
+      "tolerance": 0.0001,
+      "toleranceKind": "abs",
+      "deviation": 4.938272013532696e-13,
+      "pass": true
+    },
+    {
+      "name": "Raio externo no topo STEP",
+      "measured": 26.000000000000494,
+      "expected": 26.0,
+      "tolerance": 0.0001,
+      "toleranceKind": "abs",
+      "deviation": 4.938272013532696e-13,
+      "pass": true
+    },
+    {
+      "name": "Triângulos STL",
+      "measured": 4496,
+      "expected": 4496,
+      "tolerance": 0,
+      "toleranceKind": "abs",
+      "deviation": 0,
+      "pass": true
+    }
+  ],
+  "artifacts": {
+    "profile": {
+      "file": "profile.json",
+      "bytes": 76214,
+      "sha256": "7018451F9614923D3789FED703E255CF14A31491595C54C11FA30ADFB49CCEC4"
+    },
+    "kernelMetrics": {
+      "file": "engrenagem_m2_z24_metricas_kernel.json",
+      "bytes": 1421,
+      "sha256": "13F0E20B3D0F31E0A0DEDE24B294E9752C5FE5EF1DE956CD7695EE8168521968"
+    },
+    "freecadMetrics": {
+      "file": "engrenagem_m2_z24_metricas_freecad.json",
+      "bytes": 1047,
+      "sha256": "91DC162CC64611EC9A5D09CD7432C178BFE62B8A1DBD14CE60BCCAADF12BB6D6"
+    },
+    "step": {
+      "file": "engrenagem_m2_z24.step",
+      "bytes": 4479017,
+      "sha256": "5F34A8989B01BA691666C8C46557292103F9F4E0F7028FC779E69831985EC9DC"
+    },
+    "stl": {
+      "file": "engrenagem_m2_z24.stl",
+      "bytes": 224884,
+      "sha256": "B91CEA216E6A2E48D323700EFBC8743FB9E898F7A24F049EB8A918CCBB31A5C6"
+    }
+  }
+}
