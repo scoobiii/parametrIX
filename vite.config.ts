@@ -37,16 +37,20 @@ export default defineConfig(() => {
       chunkSizeWarningLimit: 500,
       rolldownOptions: {
         output: {
-          manualChunks: {
-            'vendor-react': ['react', 'react-dom'],
-            'vendor-firebase': ['firebase/app', 'firebase/auth', 'firebase/firestore'],
-            'panel-frostbite': ['./src/components/FrostbiteRackDashboard'],
-            'panel-ecosystem': ['./src/components/EcosystemHubPanel'],
-            'panel-cam': ['./src/components/CamRoboticsPanel', './src/components/AdditiveCamConfigPanel'],
-            'panel-grasshopper': ['./src/components/GrasshopperCanvas'],
-            'panel-sustainability': ['./src/components/SustainabilityDashboard'],
-            'kernel-cad': ['./src/kernel/nurbs', './src/kernel/cadFormats', './src/kernel/componentClassifier'],
-            'kernel-cam': ['./src/kernel/camProcessEngine', './src/kernel/camRobotics'],
+          manualChunks: (id: string) => {
+            if (id.includes('/node_modules/')) {
+              if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react';
+              if (id.includes('/node_modules/firebase') || id.includes('/node_modules/@firebase')) return 'vendor-firebase';
+              return undefined;
+            }
+            if (id.includes('/src/components/FrostbiteRackDashboard')) return 'panel-frostbite';
+            if (id.includes('/src/components/EcosystemHubPanel')) return 'panel-ecosystem';
+            if (id.includes('/src/components/CamRoboticsPanel') || id.includes('/src/components/AdditiveCamConfigPanel')) return 'panel-cam';
+            if (id.includes('/src/components/GrasshopperCanvas')) return 'panel-grasshopper';
+            if (id.includes('/src/components/SustainabilityDashboard')) return 'panel-sustainability';
+            if (/\/src\/kernel\/(nurbs|cadFormats|componentClassifier)/.test(id)) return 'kernel-cad';
+            if (/\/src\/kernel\/(camProcessEngine|camRobotics)/.test(id)) return 'kernel-cam';
+            return undefined;
           },
         },
       },
