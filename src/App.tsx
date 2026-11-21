@@ -23,9 +23,9 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { AdditiveCamConfigPanel } from './components/AdditiveCamConfigPanel';
 import { AgentVoiceCommandBar } from './components/AgentVoiceCommandBar';
 import { CadFilesPanel } from './components/CadFilesPanel';
+const AdditiveCamConfigPanel = lazy(() => import('./components/AdditiveCamConfigPanel').then(m => ({ default: m.AdditiveCamConfigPanel })));
 const CamRoboticsPanel = lazy(() => import('./components/CamRoboticsPanel').then(m => ({ default: m.CamRoboticsPanel })));
 import type { CamServiceSubmissionInput } from './components/CamRoboticsPanel';
 const EcosystemHubPanel = lazy(() => import('./components/EcosystemHubPanel').then(m => ({ default: m.EcosystemHubPanel })));
@@ -39,8 +39,8 @@ import { ParametricSidebar } from './components/ParametricSidebar';
 const PluginsSdkPanel = lazy(() => import('./components/PluginsSdkPanel').then(m => ({ default: m.PluginsSdkPanel })));
 import { ProjectWizardModal } from './components/ProjectWizardModal';
 import { ScoobiiiVucModal } from './components/ScoobiiiVucModal';
+const Viewport3D = lazy(() => import('./components/Viewport3D').then(m => ({ default: m.Viewport3D })));
 const SustainabilityDashboard = lazy(() => import('./components/SustainabilityDashboard').then(m => ({ default: m.SustainabilityDashboard })));
-import { Viewport3D } from './components/Viewport3D';
 import { useAuth } from './contexts/AuthContext';
 import {
   buildIsolatedEvaluatedMesh,
