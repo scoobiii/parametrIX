@@ -130,6 +130,34 @@ Arquivos `.IPT` modernos usam contêineres compostos Microsoft **OLE2 / CFB** co
 - **Backend (`server.ts`, porta `3000`)**: Express + WebSocket (`/ws`) + Vite middleware, `node:sqlite` (`ParametrixSqliteStore`), `occt-import-js` (OpenCASCADE WASM), `cfb` + `zlib` (OLE2 `.ipt`), `@google/genai` + hub multi-agente (`/api/agent/multi-chat`), telemetria OS (`/api/system/resources`), despacho remoto (`/api/remote-machine/dispatch`), ledger VUC (`/api/vuc/verify`), Onboarding & MCP JSON-RPC (`/llms.txt`, `/api/agent/onboarding`, `/api/cad/llm-briefing`, `/api/mcp`), rotas estáticas `/gitpage` e `/docs`.
 - **Banco & Autenticação**: Modo proprietário local SQLite + login offline (`Google`, `Microsoft`, `Oracle`, `Zoho`, `Apple`, e-mail genérico) e integração opcional Firebase Authentication / Cloud Firestore com isolamento por `uid`.
 
+## Perfil MOBILE_LITE — Android/Termux/Proot de baixa infraestrutura
+
+O perfil Lite validado para o Parametrix usa uma única instância sem `--watch`, Node 24 Linux ARM64 e heap limitado a 384 MB. O diagnóstico somente leitura está em [`scripts/onboard_anticagada.sh`](scripts/onboard_anticagada.sh); ele não instala dependências, não troca o Node e não encerra processos.
+
+```bash
+# No Termux, antes de entrar no Debian
+termux-wake-lock
+proot-distro login debian
+
+# Dentro do Debian, em ~/parametrIX
+cd ~/parametrIX
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+NODE_OPTIONS="--max-old-space-size=384" \
+  ./node_modules/.bin/tsx server.ts \
+  2>&1 | tee /tmp/parametrix-server-lite.log
+
+# Em outra sessão Debian, sem abrir um Proot dentro de outro
+curl -I http://127.0.0.1:3000/
+```
+
+O aceite mínimo é `HTTP/1.1 200 OK`. Não rode `npm install` durante o boot, não use `tsx --watch` nesse perfil e não inicie uma segunda instância na porta 3000. O build de produção (`npm run build`) é uma etapa separada.
+
+### LLM local offline: estado verificável
+
+O projeto possui o bootstrap/seletor local em `src/kernel/llmBootstrap.ts`, que recomenda um tier/modelo com base em CPU, RAM, GPU, carga e usuários. Também possui uma ponte de inferência para Ollama/llama.cpp via `http://localhost:11434/api/generate` quando o agente `local-llm` é selecionado.
+
+Isso não baixa nem inicia um modelo automaticamente. A inferência offline só está comprovada quando um runtime local responde a `http://127.0.0.1:11434/api/tags` e há um modelo instalado. Sem essa resposta, o seletor está disponível, mas a rota recua para a resposta determinística do MCP Eye; não se deve declarar que o LLM local está executando.
+
 ## Como Publicar a GitPage no GitHub Pages
 
 1. Faça push do repositório para o GitHub mantendo a pasta `docs/index.html`.
@@ -146,8 +174,6 @@ npm run test:coverage  # Suíte Vitest com 100% statements/branches/functions/li
 npm run audit:cad      # Suíte de auditoria determinística do motor CAD/IPT/CAE/CAM (26 testes)
 npm run build          # Build de produção Vite (dist/)
 npm run ci             # Gate obrigatório: lint + 100% coverage + audit:cad + build
-npm run start          # Servidor em produção (node server.ts)
+npm run onboard        # Diagnóstico somente leitura do ambiente e do perfil MOBILE_LITE
+npm run start          # Servidor em produção (tsx server.ts)
 ```
-
-
-
