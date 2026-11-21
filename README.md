@@ -149,6 +149,17 @@ assinada; a raiz é modelada sem filete trocoidal e o desenho é de referência 
 
 Reprodução completa: `npm run cad:gear`.
 
+**Abrir direto no viewer:** [`/?preset=preset-gear-m2-z24&mode=solid&finish=clay&view=isometric`](http://127.0.0.1:3000/?preset=preset-gear-m2-z24&mode=solid&finish=clay&view=isometric)
+(exige `npm run dev`). O deep link aceita `preset`, `mode` (`solid`, `component-pbr`, `object-mask`, `zebra`, `curvature`,
+`stress-heatmap`, `xray`), `finish` (`aluminum`, `titanium`, `clay`, `oak`, `glass`, `carbon-fiber`, `matte-plastic`)
+e `view` (`perspective`, `isometric`, `top`, `front`, `right`...).
+
+| Evidência de execução | Conteúdo |
+| :--- | :--- |
+| [`viewer_engrenagem_m2_z24.png`](deliverables/viewer/viewer_engrenagem_m2_z24.png) | Engrenagem carregada no Editor 3D IX (captura real do app) |
+| [`parametrix_presets_viewer.png`](deliverables/viewer/parametrix_presets_viewer.png) | Os 10 presets carregados no viewer |
+
+
 ## Stack & Arquitetura
 
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS v4, Three.js (`OrbitControls`, `TransformControls`, `RoomEnvironment`), Lucide Icons.

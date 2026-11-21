@@ -78,6 +78,10 @@ export interface FullWorkspacePreset {
   partProfileOverride?: Partial<PartEngineeringProfile>;
   buildImportedModel?: () => ImportedCadModel;
   initialFeatures?: CadFeatureOperation[];
+  /** Exibe a máquina CNC na cena ao carregar o preset (padrão: true). */
+  showMachine?: boolean;
+  /** Exibe o toolpath CAM na cena ao carregar o preset (padrão: true). */
+  showToolpath?: boolean;
 }
 
 const ROCKSHOX_FORK_ASSEMBLY_OBJ = [
@@ -338,6 +342,8 @@ export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
       manufacturer: 'Scoobiii / Parametrix',
       modelCode: 'PX-GEAR-M2-Z24-20PA',
     },
+    showMachine: false,
+    showToolpath: false,
     buildImportedModel: () => buildSpurGearModel(),
   },
   {
