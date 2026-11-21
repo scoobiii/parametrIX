@@ -47,7 +47,7 @@ Plataforma paramétrica full-stack para modelagem NURBS, análise estrutural FEA
   - Critério de Von Mises, elástica de Euler-Bernoulli e Fator de Segurança normativo com exportação em Markdown (`.md`) e JSON (`.json`).
 
 ### 8. Guia Guiado por Voz, Presets Completos e Firebase Isolado
-- Tela inicial com upload imediato, **5 Presets Completos 1-Clique** (Garfo Downhill multi-peça, Pá Helicoidal Titânio AS9100, Flange CNC + M8, Abóbada BIM, Efetuador KUKA 6-Eixos) e explicação por voz (`SpeechSynthesis pt-BR`) de cada módulo.
+- Tela inicial com upload imediato, **10 Presets Completos 1-Clique** (Garfo Downhill multi-peça, Pá Helicoidal Titânio AS9100, Flange CNC + M8, **Engrenagem M2 Z24 em STEP/STL**, Abóbada BIM, Efetuador KUKA 6-Eixos, Rack Frostbite, SoC Híbrido, Pó Metálico LPBF e Resina SLA) e explicação por voz (`SpeechSynthesis pt-BR`) de cada módulo.
 - Persistência isolada por usuário autenticado via Firebase Auth + Firestore (`users/{uid}/projects` e `users/{uid}/deliverables`).
 
 ### 9. Interface Mobile-First (`360px` a `1440px`)
@@ -98,7 +98,7 @@ Plataforma paramétrica full-stack para modelagem NURBS, análise estrutural FEA
 
 ## Auditoria Experimental do Motor CAD / Inventor `.IPT` / CAE / CAM
 
-Todos os submódulos críticos são verificados pela suíte determinística [`scripts/cad_engine_audit.ts`](scripts/cad_engine_audit.ts) (`npm run audit:cad`, **26/26 testes aprovados**) e pela suíte unitária/integração **Vitest com cobertura V8 de 100%** em todo o kernel e no store SQLite (`npm run ci`). Durante a auditoria técnica, bugs reais foram isolados e corrigidos:
+Todos os submódulos críticos são verificados pela suíte determinística [`scripts/cad_engine_audit.ts`](scripts/cad_engine_audit.ts) (`npm run audit:cad`, **27/27 testes aprovados**) e pela suíte unitária/integração **Vitest com cobertura V8 de 100%** em todo o kernel e no store SQLite (`npm run ci`). Durante a auditoria técnica, bugs reais foram isolados e corrigidos:
 
 ### Arquitetura do Decoder Autodesk Inventor (`.IPT`)
 Arquivos `.IPT` modernos usam contêineres compostos Microsoft **OLE2 / CFB** com múltiplos fluxos comprimidos proprietários (*ShapeManager ASM* binário, *B-Rep/ACIS*, e eventualmente *Graphics Display Mesh* pré-tesselado):
@@ -123,6 +123,31 @@ Arquivos `.IPT` modernos usam contêineres compostos Microsoft **OLE2 / CFB** co
 | **UI Mobile (`Viewport3D.tsx`)** | HUD superior esquerdo (`max-w-[calc(100%-92px)]`) encostava no cubo D-Pad vermelho em telas estreitas. | Margem ampliada para `max-w-[calc(100%-128px)] sm:max-w-[440px]` com truncamento responsivo. |
 
 ---
+
+## Peça CAD de Referência — Engrenagem Cilíndrica M2 Z24
+
+Peça mecânica real gerada pelo kernel paramétrico (`src/kernel/spurGear.ts`), disponível no preset
+**“Engrenagem Cilíndrica M2 Z24 (ISO 53 · 7075-T6)”**. Todas as dimensões são derivadas de
+módulo, número de dentes e ângulo de pressão (ISO 53 / ISO 21771); nenhum valor foi estimado.
+
+| Artefato | Conteúdo |
+| :--- | :--- |
+| [`engrenagem_m2_z24.step`](deliverables/engrenagem_m2_z24/engrenagem_m2_z24.step) | B-Rep AP214 (FreeCAD/OpenCASCADE): 1 sólido, 1.122 faces, volume 17.555,965 mm³ |
+| [`engrenagem_m2_z24.stl`](deliverables/engrenagem_m2_z24/engrenagem_m2_z24.stl) | Malha binária estanque (4.496 triângulos) |
+| [`engrenagem_m2_z24.dxf`](deliverables/engrenagem_m2_z24/engrenagem_m2_z24.dxf) | Perfil 2D com camadas `CONTORNO`, `FURO_CENTRAL` e `ALIVIO` |
+| [`engrenagem_m2_z24_4vistas.png`](deliverables/engrenagem_m2_z24/engrenagem_m2_z24_4vistas.png) | Vistas frontal, superior, lateral e isométrica cotadas |
+| [`engrenagem_m2_z24_iso.png`](deliverables/engrenagem_m2_z24/engrenagem_m2_z24_iso.png) | Perspectiva isométrica de apresentação |
+| [`relatorio_tecnico.md`](deliverables/engrenagem_m2_z24/relatorio_tecnico.md) | Memória de cálculo, verificação tridimensional, limitações e hashes |
+| [`vuc_proof.json`](deliverables/engrenagem_m2_z24/vuc_proof.json) | Certificado VUC Ed25519 + SHA-256 dos artefatos |
+
+**Especificação:** m = 2,000 mm · z = 24 · α = 20° · d = 48,000 mm · da = 52,000 mm · df = 43,000 mm ·
+b = 12,000 mm · furo Ø12 H7 · 4 × Ø8 em PCD 28,000 mm · alumínio 7075-T6 · massa 49,33 g.
+
+**Verificação:** STEP × kernel × STL com desvio de volume relativo de 3,3 × 10⁻⁹ e 9/9 checagens aprovadas
+(volume, área, espessura, raio externo, sólido único e validade OpenCASCADE). A entrega inclui prova VUC
+assinada; a raiz é modelada sem filete trocoidal e o desenho é de referência — limitações declaradas no relatório.
+
+Reprodução completa: `npm run cad:gear`.
 
 ## Stack & Arquitetura
 
@@ -171,7 +196,7 @@ Isso não baixa nem inicia um modelo automaticamente. A inferência offline só 
 npm run dev            # Inicia server.ts + WebSocket + Vite em http://localhost:3000 (e /gitpage)
 npm run lint           # Verificação de tipos TypeScript (tsc --noEmit)
 npm run test:coverage  # Suíte Vitest com 100% statements/branches/functions/lines (V8)
-npm run audit:cad      # Suíte de auditoria determinística do motor CAD/IPT/CAE/CAM (26 testes)
+npm run audit:cad      # Suíte de auditoria determinística do motor CAD/IPT/CAE/CAM (27 testes)
 npm run build          # Build de produção Vite (dist/)
 npm run ci             # Gate obrigatório: lint + 100% coverage + audit:cad + build
 npm run onboard        # Diagnóstico somente leitura do ambiente e do perfil MOBILE_LITE

@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "audit:cad": "tsx scripts/cad_engine_audit.ts",
+    "cad:gear": "tsx scripts/cad/export_spur_gear_geometry.ts && QT_QPA_PLATFORM=offscreen freecadcmd scripts/cad/build_spur_gear_step.py && MPLCONFIGDIR=.cache/matplotlib python3 scripts/cad/render_spur_gear_views.py && QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=.cache/matplotlib freecadcmd scripts/cad/verify_spur_gear_delivery.py && tsx scripts/cad/finalize_spur_gear_delivery.ts",
     "ci": "npm run lint && npm run test:coverage && npm run audit:cad && npm run build && npm run vuc:proof",
     "dev:vite": "vite --host 0.0.0.0 --port 5173",
     "dev:all": "tsx --watch server.ts",

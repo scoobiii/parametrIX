@@ -13,3 +13,6 @@ data/*.db
 *.pre-split
 *.pre-ab
 bun.lock
+
+# Local matplotlib/tool caches
+.cache/
