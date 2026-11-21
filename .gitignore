@@ -9,3 +9,6 @@ coverage/
 data/*.sqlite*
 data/parametrix.db
 data/*.db
+*.bak
+*.pre-split
+*.pre-ab

@@ -39,15 +39,11 @@ export default defineConfig(() => {
         output: {
           manualChunks: (id: string) => {
             if (id.includes('/node_modules/')) {
+              if (/\/node_modules\/(three|@react-three)/.test(id)) return 'vendor-three';
               if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react';
               if (id.includes('/node_modules/firebase') || id.includes('/node_modules/@firebase')) return 'vendor-firebase';
               return undefined;
             }
-            if (id.includes('/src/components/FrostbiteRackDashboard')) return 'panel-frostbite';
-            if (id.includes('/src/components/EcosystemHubPanel')) return 'panel-ecosystem';
-            if (id.includes('/src/components/CamRoboticsPanel') || id.includes('/src/components/AdditiveCamConfigPanel')) return 'panel-cam';
-            if (id.includes('/src/components/GrasshopperCanvas')) return 'panel-grasshopper';
-            if (id.includes('/src/components/SustainabilityDashboard')) return 'panel-sustainability';
             if (/\/src\/kernel\/(nurbs|cadFormats|componentClassifier)/.test(id)) return 'kernel-cad';
             if (/\/src\/kernel\/(camProcessEngine|camRobotics)/.test(id)) return 'kernel-cam';
             return undefined;
