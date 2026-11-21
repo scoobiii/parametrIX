@@ -311,8 +311,8 @@ export function tessellateNurbsSurface(
   ribCountV = 4,
   ribHeightMm = 14
 ): EvaluatedMesh {
-  const uSegs = Math.max(8, Math.min(96, surface.uDivisions));
-  const vSegs = Math.max(8, Math.min(96, surface.vDivisions));
+  const uSegs = Math.max(8, Math.min(128, surface.uDivisions));
+  const vSegs = Math.max(8, Math.min(128, surface.vDivisions));
   const cols = uSegs + 1;
   const rows = vSegs + 1;
   const layerVerts = cols * rows;

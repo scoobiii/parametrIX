@@ -574,6 +574,22 @@ describe('ecosystemErpLogistics & ParametrixSqliteStore', () => {
     });
     expect(uReloginNoPass.id).toBe(uProp.id);
 
+    // Email provider password check + timingSafeEqual length mismatch / empty hash fallback
+    const uEmailPass = store.loginOrRegister({
+      email: 'mailpass@parametrix.local',
+      provider: 'email',
+      password: 'secret-email',
+      offlineMode: true,
+    });
+    expect(uEmailPass.provider).toBe('email');
+    expect(() =>
+      store.loginOrRegister({ email: 'mailpass@parametrix.local', provider: 'email', password: 'wrong' })
+    ).toThrow('Senha incorreta');
+    store.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run('', uEmailPass.id);
+    expect(() =>
+      store.loginOrRegister({ email: 'mailpass@parametrix.local', provider: 'email', password: 'secret-email' })
+    ).toThrow('Senha incorreta');
+
     // Empty localpart / defaults + offline providers
     const providers: AuthProviderKind[] = ['google', 'microsoft', 'oracle', 'zoho', 'apple', 'email'];
     for (const prov of providers) {

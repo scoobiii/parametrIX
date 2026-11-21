@@ -9,6 +9,7 @@ import {
 } from './cadFormats';
 import { convertImageToCadModel, isRasterImageFilename } from './imageToCad';
 import { buildSpurGearModel } from './spurGear';
+import { buildRhinoFrostbiteRackObj, buildRhinoRockShoxForkObj } from './rhinoGeometryEngine';
 import type {
   ApplicationSegment,
   CadFeatureOperation,
@@ -84,36 +85,7 @@ export interface FullWorkspacePreset {
   showToolpath?: boolean;
 }
 
-const ROCKSHOX_FORK_ASSEMBLY_OBJ = [
-  'o Canela_Esquerda_Lower_Leg_L',
-  'v -68 0 -18', 'v -38 0 -18', 'v -38 0 18', 'v -68 0 18',
-  'v -68 125 -18', 'v -38 125 -18', 'v -38 125 18', 'v -68 125 18',
-  'f 1 2 3 4', 'f 5 8 7 6', 'f 1 5 6 2', 'f 2 6 7 3', 'f 3 7 8 4', 'f 4 8 5 1',
-  'o Canela_Direita_Lower_Leg_R',
-  'v 38 0 -18', 'v 68 0 -18', 'v 68 0 18', 'v 38 0 18',
-  'v 38 125 -18', 'v 68 125 -18', 'v 68 125 18', 'v 38 125 18',
-  'f 9 10 11 12', 'f 13 16 15 14', 'f 9 13 14 10', 'f 10 14 15 11', 'f 11 15 16 12', 'f 12 16 13 9',
-  'o Coroa_Inferior_CNC',
-  'v -72 126 -24', 'v 72 126 -24', 'v 72 126 16', 'v -72 126 16',
-  'v -72 142 -24', 'v 72 142 -24', 'v 72 142 16', 'v -72 142 16',
-  'f 17 18 19 20', 'f 21 24 23 22', 'f 17 21 22 18', 'f 18 22 23 19', 'f 19 23 24 20', 'f 20 24 21 17',
-  'o Bengala_Superior_L',
-  'v -64 115 -14', 'v -42 115 -14', 'v -42 115 14', 'v -64 115 14',
-  'v -64 235 -14', 'v -42 235 -14', 'v -42 235 14', 'v -64 235 14',
-  'f 25 26 27 28', 'f 29 32 31 30', 'f 25 29 30 26', 'f 26 30 31 27', 'f 27 31 32 28', 'f 28 32 29 25',
-  'o Bengala_Superior_R',
-  'v 42 115 -14', 'v 64 115 -14', 'v 64 115 14', 'v 42 115 14',
-  'v 42 235 -14', 'v 64 235 -14', 'v 64 235 14', 'v 42 235 14',
-  'f 33 34 35 36', 'f 37 40 39 38', 'f 33 37 38 34', 'f 34 38 39 35', 'f 35 39 40 36', 'f 36 40 37 33',
-  'o Coroa_Superior_Forged',
-  'v -72 214 -24', 'v 72 214 -24', 'v 72 214 16', 'v -72 214 16',
-  'v -72 228 -24', 'v 72 228 -24', 'v 72 228 16', 'v -72 228 16',
-  'f 41 42 43 44', 'f 45 48 47 46', 'f 41 45 46 42', 'f 42 46 47 43', 'f 43 47 48 44', 'f 44 48 45 41',
-  'o Eixo_Passante_Maxle_20x110',
-  'v -74 8 -8', 'v 74 8 -8', 'v 74 8 8', 'v -74 8 8',
-  'v -74 22 -8', 'v 74 22 -8', 'v 74 22 8', 'v -74 22 8',
-  'f 49 50 51 52', 'f 53 56 55 54', 'f 49 53 54 50', 'f 50 54 55 51', 'f 51 55 56 52', 'f 52 56 53 49',
-].join('\n');
+const ROCKSHOX_FORK_ASSEMBLY_OBJ = buildRhinoRockShoxForkObj();
 
 const FLANGE_CNC_DXF = [
   '0', 'SECTION', '2', 'ENTITIES',
@@ -478,27 +450,7 @@ export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
       modelCode: 'FB-7NM-1MW-800VDC',
     },
     buildImportedModel: () =>
-      parseOBJ(
-        [
-          'o Barramento_Principal_800VDC_Busbar',
-          'v -88 0 -55', 'v 88 0 -55', 'v 88 0 55', 'v -88 0 55',
-          'v -88 14 -55', 'v 88 14 -55', 'v 88 14 55', 'v -88 14 55',
-          'f 1 2 3 4', 'f 5 8 7 6', 'f 1 5 6 2', 'f 2 6 7 3', 'f 3 7 8 4', 'f 4 8 5 1',
-          'o Rack_Nvidia_1MW_Baseline',
-          'v -82 14 -48', 'v -12 14 -48', 'v -12 14 48', 'v -82 14 48',
-          'v -82 152 -48', 'v -12 152 -48', 'v -12 152 48', 'v -82 152 48',
-          'f 9 10 11 12', 'f 13 16 15 14', 'f 9 13 14 10', 'f 10 14 15 11', 'f 11 15 16 12', 'f 12 16 13 9',
-          'o Rack_FrostbiteEngine_7nm_CMOS_Tiles',
-          'v 12 14 -48', 'v 82 14 -48', 'v 82 14 48', 'v 12 14 48',
-          'v 12 152 -48', 'v 82 152 -48', 'v 82 152 48', 'v 12 152 48',
-          'f 17 18 19 20', 'f 21 24 23 22', 'f 17 21 22 18', 'f 18 22 23 19', 'f 19 23 24 20', 'f 20 24 21 17',
-          'o Trocador_Calor_HVAC_800VDC_Coolant',
-          'v -68 152 -40', 'v 68 152 -40', 'v 68 152 40', 'v -68 152 40',
-          'v -68 178 -40', 'v 68 178 -40', 'v 68 178 40', 'v -68 178 40',
-          'f 25 26 27 28', 'f 29 32 31 30', 'f 25 29 30 26', 'f 26 30 31 27', 'f 27 31 32 28', 'f 28 32 29 25',
-        ].join('\n'),
-        'Rack_Frostbite_vs_Nvidia_1MW_800VDC.obj'
-      ),
+      parseOBJ(buildRhinoFrostbiteRackObj(), 'Rack_Frostbite_vs_Nvidia_1MW_800VDC.obj'),
   },
   {
     id: 'preset-soc-hybrid',

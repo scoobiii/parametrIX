@@ -1,12 +1,206 @@
 import type {
   ApplicationSegment,
   CadComponentPart,
+  ComponentProcessPlan,
   EvaluatedMesh,
   MaterialFinish,
   NurbsSurfaceData,
   ParametricDesignParams,
   PartEngineeringProfile,
 } from '../types/cad';
+
+export function resolveComponentManufacturingProcess(
+  name: string,
+  subFamily: string,
+  material: MaterialFinish,
+  segment: ApplicationSegment = 'industrial-cnc'
+): ComponentProcessPlan {
+  const txt = `${name} ${subFamily}`.toLowerCase();
+
+  if (material === 'matte-plastic' || material === 'glass' || material === 'clay') {
+    const isSeal = /seal|retentor|wiper/.test(txt);
+    return {
+      processCategory: isSeal ? 'moldagem-polimero' : 'aditiva-sla',
+      processLabel: isSeal
+        ? 'Moldagem Polimérica + Acabamento CNC'
+        : 'Estereolitografia Resina UV (SLA · .STL)',
+      machineType: 'resin-sla',
+      routingSteps: [
+        '1. Fatiamento SLA 50 µm (.STL)',
+        isSeal ? '2. Vulcanização / Moldagem de Lábio Elastômero' : '2. Fotopolimerização UV 405 nm',
+        '3. Lavagem IPA + Pós-cura Térmica 60 °C',
+        '4. Inspeção Dimensional ISO 2768-m',
+      ],
+      toleranceSpec: 'ISO 2768-m (±0.10 mm)',
+      fixtureNotes: 'Suporte em árvore leve; evitar sobre-cura em paredes finas.',
+      isAdditive: true,
+      materialLabel: material,
+    };
+  }
+
+  if (material === 'oak') {
+    return {
+      processCategory: 'usinagem-cnc',
+      processLabel: 'Router CNC 5-Eixos Madeira Laminada',
+      machineType: 'cnc-5axis',
+      routingSteps: [
+        '1. Esquadrejamento da Chapa LVL',
+        '2. Desbaste Contorno 3-Eixos',
+        '3. Acabamento Tangencial 5-Eixos + Seladora',
+      ],
+      toleranceSpec: 'ABNT NBR 7190 (±0.30 mm)',
+      fixtureNotes: 'Mesa a vácuo com mártir fenólico.',
+      isAdditive: false,
+      materialLabel: material,
+    };
+  }
+
+  if (material === 'carbon-fiber') {
+    return {
+      processCategory: 'usinagem-cnc',
+      processLabel: 'Laminação Prepreg Autoclave + Recorte CNC',
+      machineType: 'cnc-5axis',
+      routingSteps: [
+        '1. Molde Mestre & Layup CFRP Quase-Isotrópico',
+        '2. Cura em Autoclave 6 bar / 180 °C',
+        '3. Trimming Fresa Diamantada CNC 5-Eixos',
+      ],
+      toleranceSpec: 'ASME Y14.5 (±0.08 mm)',
+      fixtureNotes: 'Extração de pó abrasivo + avanço reduzido sem delaminação.',
+      isAdditive: false,
+      materialLabel: material,
+    };
+  }
+
+  if (
+    material === 'titanium' &&
+    (/suporte_trelica|lpbf|slm|lattice|manifold/.test(txt) || segment === 'medico')
+  ) {
+    return {
+      processCategory: 'aditiva-lpbf',
+      processLabel: 'Sinterização Pó Metálico LPBF Ti-6Al-4V',
+      machineType: 'powder-metal',
+      routingSteps: [
+        '1. Leito de Pó Ti-6Al-4V 30 µm sob Argônio',
+        '2. Fusão Seletiva Laser 400 W',
+        '3. Alívio de Tensões 720 °C + Remoção de Suportes',
+        '4. Acabamento CNC nas Faces de Assento',
+      ],
+      toleranceSpec: 'AMS 4911 / ISO 2768-m (±0.06 mm)',
+      fixtureNotes: 'Placa base titânio pré-aquecida 180 °C.',
+      isAdditive: true,
+      materialLabel: material,
+    };
+  }
+
+  if (/stanchion|bengala|telescop|damper|cartridge|espiga|steerer/.test(txt)) {
+    return {
+      processCategory: 'estiramento-anodizacao',
+      processLabel: 'Estiramento + Retífica Centerless + Anodização Dura',
+      machineType: 'cnc-5axis',
+      routingSteps: [
+        '1. Tubo Extrudado & Estirado a Frio (Al 7075)',
+        '2. Retífica Cilíndrica Centerless (Ra ≤ 0.2 µm)',
+        '3. Rosqueamento CNC de Topo para Dial/Cartucho',
+        '4. Anodização Dura Fast Black Tipo III (50 µm)',
+      ],
+      toleranceSpec: 'ISO 4210-6 / H7 (±0.015 mm)',
+      fixtureNotes: 'Luneta fixa de bronze + contraponto rotativo.',
+      isAdditive: false,
+      materialLabel: material,
+    };
+  }
+
+  if (/lower|canela|ponte|arch|brace|slider|rack_/.test(txt)) {
+    return {
+      processCategory: 'fundicao-cnc',
+      processLabel: 'Fundição Sob Pressão Mg + Mandrilamento CNC',
+      machineType: 'cnc-5axis',
+      routingSteps: [
+        '1. Fundição Injetada em Liga Leve / Chassi',
+        '2. Mandrilamento Duplo Coaxial dos Alojamentos de Buchas',
+        '3. Usinagem CNC 5-Eixos dos Dropouts e Montagem Freio',
+        '4. Ensaio Não-Destrutivo + Pintura Eletrostática',
+      ],
+      toleranceSpec: 'ISO 2768-fH / H7 Coaxial (±0.025 mm)',
+      fixtureNotes: 'Dispositivo hidráulico de referência dupla nas garras.',
+      isAdditive: false,
+      materialLabel: material,
+    };
+  }
+
+  if (/axle|eixo|shaft|spindle|bolt|screw|pin|parafuso/.test(txt)) {
+    return {
+      processCategory: 'torneamento-cnc',
+      processLabel: 'Torneamento CNC Multi-Eixo + Rosca ISO',
+      machineType: 'cnc-3axis',
+      routingSteps: [
+        '1. Torneamento Externo & Furação Profunda (Gun-Drill)',
+        '2. Fresamento de Sextavado Interno / Allen via Eixo C',
+        '3. Rosca Laminada / Pastilha ISO M6-M20',
+      ],
+      toleranceSpec: 'ISO 965-1 6g / h6 (±0.012 mm)',
+      fixtureNotes: 'Pinça hidráulica concêntrica ER-32.',
+      isAdditive: false,
+      materialLabel: material,
+    };
+  }
+
+  if (/coroa|crown|clamp|mesa|yoke|forged/.test(txt)) {
+    return {
+      processCategory: 'forjamento-cnc',
+      processLabel: 'Forjamento em Matriz Fechada + CNC 5-Eixos',
+      machineType: 'cnc-5axis',
+      routingSteps: [
+        '1. Forjamento a Quente em Liga 6061-T6 / Ti',
+        '2. Desbaste CNC Bolsões de Alívio Estrutural',
+        '3. Mandrilamento CNC dos Furos das Bengalas & Espiga',
+        '4. Fresamento de Rasgos de Aperto + Furação M6',
+      ],
+      toleranceSpec: 'ASME Y14.5 / Posição ≤ 0.02 mm',
+      fixtureNotes: 'Morsa autocentrante de 5 eixos com batente zero-point.',
+      isAdditive: false,
+      materialLabel: material,
+    };
+  }
+
+  return {
+    processCategory: 'usinagem-cnc',
+    processLabel: 'Centro de Usinagem CNC 5-Eixos Simultâneo',
+    machineType: 'cnc-5axis',
+    routingSteps: [
+      '1. Faceamento de Referência & Z-Zero',
+      '2. Desbaste Adaptativo Alta Remoção',
+      '3. Acabamento Contínuo Iso-Paramétrico',
+    ],
+    toleranceSpec: 'ISO 2768-f (±0.03 mm)',
+    fixtureNotes: 'Fixação em placa padrão com 2 pinos guia H7.',
+    isAdditive: false,
+    materialLabel: material,
+  };
+}
+
+export function applyMaterialProcessesToComponents(
+  components: CadComponentPart[],
+  componentMaterials: Record<string, MaterialFinish>,
+  globalMaterial: MaterialFinish,
+  segment: ApplicationSegment
+): CadComponentPart[] {
+  return components.map((comp) => {
+    const activeMat = componentMaterials[comp.id] ?? comp.inferredMaterial ?? globalMaterial;
+    const plan = resolveComponentManufacturingProcess(
+      comp.name,
+      comp.subFamily,
+      activeMat,
+      segment
+    );
+    return {
+      ...comp,
+      inferredMaterial: activeMat,
+      manufacturingProcess: plan,
+    };
+  });
+}
 
 export interface SegmentDefinition {
   id: ApplicationSegment;
@@ -384,14 +578,21 @@ export function buildParametricComponentParts(
   meshData: EvaluatedMesh,
   profile: PartEngineeringProfile
 ): CadComponentPart[] {
+  const shellName = `${surface.name} (Casca NURBS)`;
   const parts: CadComponentPart[] = [
     {
       id: 'shell',
-      name: `${surface.name} (Casca NURBS)`,
+      name: shellName,
       family: FAMILY_SPECS.casca.family,
       subFamily: 'Casca Primária Racional',
       maskColorHex: FAMILY_SPECS.casca.subPaletteHex[0],
       inferredMaterial: profile.primaryMaterial,
+      manufacturingProcess: resolveComponentManufacturingProcess(
+        shellName,
+        'Casca Primária Racional',
+        profile.primaryMaterial,
+        profile.segment
+      ),
       center: [
         (meshData.boundingBox.min[0] + meshData.boundingBox.max[0]) / 2,
         (meshData.boundingBox.min[1] + meshData.boundingBox.max[1]) / 2,
@@ -405,13 +606,21 @@ export function buildParametricComponentParts(
 
   meshData.bimElements.forEach((el, idx) => {
     const cls = classifyComponentFamily(`${el.id} ${el.label} ${el.ifcClass}`, idx);
+    const mat: MaterialFinish = el.ifcClass === 'IfcBeam' ? 'aluminum' : 'titanium';
+    const partName = `${el.id} · ${el.label}`;
     parts.push({
       id: el.id,
-      name: `${el.id} · ${el.label}`,
+      name: partName,
       family: cls.family,
       subFamily: cls.subFamily,
       maskColorHex: cls.maskColorHex,
-      inferredMaterial: el.ifcClass === 'IfcBeam' ? 'aluminum' : 'titanium',
+      inferredMaterial: mat,
+      manufacturingProcess: resolveComponentManufacturingProcess(
+        partName,
+        cls.subFamily,
+        mat,
+        profile.segment
+      ),
       center: el.center,
       size: el.size,
       triangleCount: 12,

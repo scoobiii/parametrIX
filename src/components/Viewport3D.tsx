@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
+  Activity,
   ArrowLeftRight,
   Box,
   Check,
@@ -20,8 +21,11 @@ import {
   Loader2,
   Minus,
   Plus,
+  RotateCcw,
   Ruler,
   Send,
+  ShieldAlert,
+  ShieldCheck,
   Sigma,
   SplitSquareHorizontal,
   Trash2,
@@ -29,6 +33,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { solveRobot6AxisIK } from '../kernel/camRobotics';
+import { RHINO_COMMAND_CATALOG } from '../kernel/rhinoGeometryEngine';
 import { ISO_METRIC_THREADS } from '../kernel/scoobiiiVuc';
 import { stressRatioToRgb } from '../kernel/structuralFea';
 import { ACCEPTED_CAD_EXTENSIONS } from '../kernel/workspacePresets';
@@ -54,7 +59,7 @@ import type {
 import { ScoobiiiVucModal } from './ScoobiiiVucModal';
 
 type IxMenuTab = 'none' | 'models' | 'section' | 'explode' | 'measure';
-type MagicPenMenuTab = 'slot' | 'hole' | 'bolt' | 'rib' | 'part';
+type MagicPenMenuTab = 'slot' | 'hole' | 'bolt' | 'rib' | 'rhino' | 'part';
 type MeasureToolMode =
   | 'edge-length'
   | 'edge-radius'
@@ -198,6 +203,8 @@ interface Viewport3DProps {
   onExportCertificate?: (filename: string, kind: 'REPORT' | 'MCP', summary: string) => void;
   compact?: boolean;
   onOpenHelp?: () => void;
+  onRunQuickFea?: () => FeaResult | void;
+  onResetPart?: () => void;
   camVisualState?: CamProcessVisualState | null;
 }
 
@@ -881,6 +888,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   onExportCertificate,
   compact = false,
   onOpenHelp,
+  onRunQuickFea,
   camVisualState = null,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -890,6 +898,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   );
   const [webglLost, setWebglLost] = useState(false);
   const [liveReadout, setLiveReadout] = useState<{ x: number; y: number; z: number } | null>(null);
+  const [feaSimPulsed, setFeaSimPulsed] = useState(false);
 
   // IX Navigation Menus, Upload & Measurement state
   const [activeIxMenu, setActiveIxMenu] = useState<IxMenuTab>('none');
@@ -916,6 +925,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [penHoleD, setPenHoleD] = useState(10);
   const [penThreadSpec, setPenThreadSpec] = useState<IsoThreadSpec>('M6');
   const [penHeadStyle, setPenHeadStyle] = useState<'allen' | 'hex'>('allen');
+  const [penRhinoKind, setPenRhinoKind] = useState<MagicPenOperationKind>('rhino-extrude-crv');
+  const [penRhinoRadius, setPenRhinoRadius] = useState(4);
+  const [penRhinoWall, setPenRhinoWall] = useState(2.5);
+  const [penRhinoAngle, setPenRhinoAngle] = useState(45);
+  const [penRhinoCount, setPenRhinoCount] = useState(6);
+  const [penRhinoAxis, setPenRhinoAxis] = useState<'X' | 'Y' | 'Z'>('Y');
   const [penMcpPrompt, setPenMcpPrompt] = useState('');
   const [penMcpBusy, setPenMcpBusy] = useState(false);
   const [penMcpFeedback, setPenMcpFeedback] = useState<string | null>(null);
@@ -2465,9 +2480,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         );
       }
 
-      if (display.mode === 'wireframe') {
-        mMat.wireframe = true;
-      }
+      mMat.wireframe = display.mode === 'wireframe';
 
       if (display.selectedComponentId === componentId) {
         mMat.emissive.setHex(0x38bdf8);
@@ -2818,14 +2831,123 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         rib.position.y = h * 0.5;
         rib.castShadow = true;
         container.add(rib);
-      } else {
-        const c = Math.max(2, op.widthMm);
-        const cone = new THREE.Mesh(
-          new THREE.CylinderGeometry(c * 0.7, c, 2.5, 24),
+      } else if (op.kind === 'rhino-extrude-crv' || op.kind === 'rhino-loft') {
+        const w = Math.max(4, op.widthMm) * 0.5;
+        const l = Math.max(6, op.lengthMm) * 0.5;
+        const h = Math.max(4, op.depthMm);
+        const shape = new THREE.Shape();
+        shape.moveTo(-w, -l);
+        shape.lineTo(w, -l * (op.kind === 'rhino-loft' ? 0.65 : 1));
+        shape.lineTo(w * (op.kind === 'rhino-loft' ? 0.65 : 1), l);
+        shape.lineTo(-w, l);
+        shape.closePath();
+        const extGeo = new THREE.ExtrudeGeometry(shape, {
+          depth: h,
+          bevelEnabled: true,
+          bevelThickness: Math.max(0.8, op.radiusMm ?? 1.4),
+          bevelSize: Math.max(0.8, op.radiusMm ?? 1.4),
+          bevelSegments: 4,
+          curveSegments: 16,
+        });
+        extGeo.rotateX(-Math.PI / 2);
+        const mesh = new THREE.Mesh(extGeo, gussetMat);
+        mesh.castShadow = true;
+        container.add(mesh);
+      } else if (op.kind === 'rhino-revolve') {
+        const rMax = Math.max(4, op.radiusMm ?? op.diameterMm * 0.5 ?? 10);
+        const h = Math.max(6, op.depthMm);
+        const profile = [
+          new THREE.Vector2(rMax * 0.35, 0),
+          new THREE.Vector2(rMax, h * 0.25),
+          new THREE.Vector2(rMax * 0.72, h * 0.75),
+          new THREE.Vector2(rMax * 0.9, h),
+          new THREE.Vector2(rMax * 0.35, h),
+        ];
+        const latheGeo = new THREE.LatheGeometry(profile, 28);
+        const mesh = new THREE.Mesh(latheGeo, steelMat);
+        mesh.castShadow = true;
+        container.add(mesh);
+      } else if (op.kind === 'rhino-sweep1' || op.kind === 'rhino-sweep2' || op.kind === 'rhino-pipe') {
+        const span = Math.max(10, op.lengthMm);
+        const tubeR = Math.max(1.5, op.radiusMm ?? (op.kind === 'rhino-pipe' ? 3.5 : 4.5));
+        const curve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(0, 0, -span * 0.5),
+          new THREE.Vector3(op.kind === 'rhino-sweep2' ? 4 : 0, Math.max(4, op.depthMm * 0.6), 0),
+          new THREE.Vector3(0, 0, span * 0.5),
+        ]);
+        const tubeGeo = new THREE.TubeGeometry(curve, 24, tubeR, 18, false);
+        const mesh = new THREE.Mesh(tubeGeo, steelMat);
+        mesh.castShadow = true;
+        container.add(mesh);
+      } else if (op.kind === 'rhino-fillet-edge' || op.kind === 'rhino-chamfer-edge' || op.kind === 'chamfer-fillet') {
+        const r = Math.max(2, op.radiusMm ?? op.widthMm * 0.5);
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(r + 2.5, Math.max(0.8, r * 0.35), 14, 28),
           rimMat
         );
-        cone.position.y = 1.2;
-        container.add(cone);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = 0.8;
+        container.add(ring);
+      } else if (
+        op.kind === 'rhino-boolean-union' ||
+        op.kind === 'rhino-boolean-difference' ||
+        op.kind === 'rhino-boolean-intersection'
+      ) {
+        const r = Math.max(3, op.diameterMm * 0.5);
+        const d = Math.max(4, op.depthMm);
+        const mat = op.kind === 'rhino-boolean-difference' ? pocketMat : rimMat;
+        const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d, 24), mat);
+        cyl.position.y = op.kind === 'rhino-boolean-difference' ? -d * 0.35 : d * 0.45;
+        container.add(cyl);
+      } else if (op.kind === 'rhino-shell' || op.kind === 'rhino-offset-srf') {
+        const w = Math.max(8, op.widthMm);
+        const l = Math.max(8, op.lengthMm);
+        const h = Math.max(4, op.depthMm);
+        const wall = Math.max(1, op.wallThicknessMm ?? 2.2);
+        const outer = new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, l));
+        container.add(new THREE.LineSegments(outer, new THREE.LineBasicMaterial({ color: 0x38bdf8 })));
+        const inner = new THREE.Mesh(
+          new THREE.BoxGeometry(Math.max(2, w - wall * 2), Math.max(2, h - wall), Math.max(2, l - wall * 2)),
+          gussetMat
+        );
+        inner.position.y = h * 0.5;
+        container.add(inner);
+      } else if (op.kind === 'rhino-array-polar' || op.kind === 'rhino-array-linear' || op.kind === 'rhino-mirror') {
+        const cnt = Math.min(12, Math.max(2, Math.round(op.count ?? (op.kind === 'rhino-mirror' ? 2 : 6))));
+        const radius = Math.max(8, op.radiusMm ?? op.widthMm);
+        const rBoss = Math.max(1.8, op.diameterMm * 0.25);
+        for (let i = 0; i < cnt; i++) {
+          const boss = new THREE.Mesh(
+            new THREE.CylinderGeometry(rBoss, rBoss, Math.max(3, op.depthMm * 0.6), 16),
+            steelMat
+          );
+          if (op.kind === 'rhino-array-polar') {
+            const ang = (i / cnt) * Math.PI * 2;
+            boss.position.set(Math.cos(ang) * radius, 2, Math.sin(ang) * radius);
+          } else if (op.kind === 'rhino-mirror') {
+            boss.position.set(i === 0 ? radius * 0.5 : -radius * 0.5, 2, 0);
+          } else {
+            boss.position.set((i - (cnt - 1) / 2) * (radius * 0.65), 2, 0);
+          }
+          container.add(boss);
+        }
+      } else {
+        // rhino-bend / rhino-twist / rhino-taper / rhino-flow-along-srf
+        const w = Math.max(6, op.widthMm);
+        const h = Math.max(6, op.depthMm);
+        const l = Math.max(10, op.lengthMm);
+        const twistGeo = new THREE.CylinderGeometry(
+          op.kind === 'rhino-taper' ? w * 0.25 : w * 0.45,
+          w * 0.55,
+          h,
+          20,
+          6
+        );
+        const mesh = new THREE.Mesh(twistGeo, rimMat);
+        mesh.position.y = h * 0.5;
+        if (op.kind === 'rhino-bend') mesh.rotation.z = ((op.angleDeg ?? 35) * Math.PI) / 180;
+        if (op.kind === 'rhino-flow-along-srf') mesh.scale.set(1, 0.7, l / Math.max(8, w));
+        container.add(mesh);
       }
 
       refs.featureOpsGroup.add(container);
@@ -2922,20 +3044,69 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const activeFea =
     display.stressComparisonView === 'before' && beforeFeaResult ? beforeFeaResult : feaResult;
 
+  const handleQuickFeaRun = useCallback(() => {
+    if (onRunQuickFea) {
+      onRunQuickFea();
+    } else {
+      onUpdateDisplay({
+        mode: 'stress-heatmap',
+        stressComparisonView: 'current',
+      });
+    }
+    setFeaSimPulsed(true);
+  }, [onRunQuickFea, onUpdateDisplay]);
+
+  useEffect(() => {
+    if (!feaSimPulsed) return;
+    const timer = window.setTimeout(() => setFeaSimPulsed(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [feaSimPulsed]);
+
+  useEffect(() => {
+    if (compact) return;
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (!ev.shiftKey || ev.key.toLowerCase() !== 'f') return;
+      const target = ev.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
+        return;
+      }
+      ev.preventDefault();
+      handleQuickFeaRun();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [compact, handleQuickFeaRun]);
+
   const selectedComponent = useMemo(
     () => components.find((c) => c.id === display.selectedComponentId) ?? null,
     [components, display.selectedComponentId]
   );
 
-  // Deduplicated family legend for Object Mask mode
+  // Deduplicated family + manufacturing process legend for Object Mask mode
   const familyLegend = useMemo(() => {
-    const map = new Map<string, { family: string; color: string; count: number }>();
+    const map = new Map<string, { family: string; color: string; count: number; processLabels: Set<string> }>();
     for (const c of components) {
       const prev = map.get(c.family);
-      if (prev) prev.count += 1;
-      else map.set(c.family, { family: c.family, color: c.maskColorHex, count: 1 });
+      const procLabel = c.manufacturingProcess?.processLabel;
+      if (prev) {
+        prev.count += 1;
+        if (procLabel) prev.processLabels.add(procLabel);
+      } else {
+        map.set(c.family, {
+          family: c.family,
+          color: c.maskColorHex,
+          count: 1,
+          processLabels: new Set(procLabel ? [procLabel] : []),
+        });
+      }
     }
-    return Array.from(map.values());
+    return Array.from(map.values()).map((v) => ({
+      family: v.family,
+      color: v.color,
+      count: v.count,
+      processSummary: Array.from(v.processLabels).slice(0, 2).join(' · '),
+    }));
   }, [components]);
 
   const totalTriangles = importedModel
@@ -3044,6 +3215,27 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         depthMm: Math.max(4, penDepth),
       });
       setPenMcpFeedback(`Nervura/Ressalto de reforço aplicado!`);
+    } else if (kind.startsWith('rhino-')) {
+      const catalogItem = RHINO_COMMAND_CATALOG.find((r) => r.kind === kind);
+      const rhinoCommand = catalogItem?.command ?? kind.replace('rhino-', '');
+      onAddFeatureOp({
+        kind,
+        label: `Rhino ${rhinoCommand} (${penSlotW}×${penDepth}mm)`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: Math.max(4, penSlotW),
+        lengthMm: Math.max(6, penSlotL),
+        diameterMm: Math.max(4, penHoleD),
+        depthMm: Math.max(3, penDepth),
+        radiusMm: penRhinoRadius,
+        wallThicknessMm: penRhinoWall,
+        angleDeg: penRhinoAngle,
+        count: penRhinoCount,
+        axis: penRhinoAxis,
+        rhinoCommand,
+      });
+      setPenMcpFeedback(`Comando Rhino ${rhinoCommand} aplicado em ${magicPenPick.componentName}!`);
     } else {
       onAddFeatureOp({
         kind: 'chamfer-fillet',
@@ -3232,6 +3424,18 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               <span className="hidden sm:inline">Caneta Mágica</span>
             </button>
 
+            {onResetPart && (
+              <button
+                type="button"
+                title="Resetar peça e limpar base de produção (features, malha NURBS e jobs CAM)"
+                onClick={onResetPart}
+                className="h-8 px-2.5 rounded-lg flex items-center gap-1 text-[11px] font-semibold border border-rose-400/40 bg-rose-500/12 text-rose-200 hover:bg-rose-500/25 transition-colors shrink-0 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Resetar Peça</span>
+              </button>
+            )}
+
             {scoobiiiProof && (
               <button
                 type="button"
@@ -3382,14 +3586,21 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                         </button>
                       </div>
                       {isExpanded && (
-                        <div className="pl-8 pr-2 pb-2 text-[10px] text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span>Família: {comp.family}</span>
-                          <span>·</span>
-                          <span>Sub: {comp.subFamily}</span>
-                          <span>·</span>
-                          <span className="font-mono-tabular">
-                            {comp.triangleCount.toLocaleString('pt-BR')} tri
-                          </span>
+                        <div className="pl-8 pr-2 pb-2 text-[10px] text-slate-400 space-y-1">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span>Família: {comp.family}</span>
+                            <span>·</span>
+                            <span>Sub: {comp.subFamily}</span>
+                            <span>·</span>
+                            <span className="font-mono-tabular">
+                              {comp.triangleCount.toLocaleString('pt-BR')} tri
+                            </span>
+                          </div>
+                          {comp.manufacturingProcess && (
+                            <div className="text-emerald-300 font-mono-tabular">
+                              Processo: {comp.manufacturingProcess.processLabel} ({comp.manufacturingProcess.toleranceSpec})
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3843,6 +4054,66 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           </span>
         </div>
 
+        {/* Quick Structural FEA Simulation Shortcut & Floating Safety Factor Badge */}
+        {(activeFea || onRunQuickFea) && (
+          <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 w-fit">
+            <button
+              type="button"
+              onClick={handleQuickFeaRun}
+              title="Atalho rápido (Shift+F): simular análise estrutural básica com os parâmetros atuais"
+              aria-label="Simular análise estrutural rápida (Shift+F)"
+              className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 shadow-lg transition-colors cursor-pointer ${
+                display.mode === 'stress-heatmap'
+                  ? 'bg-sky-500 text-slate-950 border-sky-300 hover:bg-sky-400'
+                  : 'bg-[#0e131c]/95 border-sky-400/40 text-sky-200 hover:bg-sky-500/20 hover:border-sky-300'
+              } ${feaSimPulsed ? 'ring-2 ring-sky-300/70' : ''}`}
+            >
+              <Activity className="w-3.5 h-3.5 shrink-0" />
+              <span>Simular FEA</span>
+              {!compact && (
+                <span className="hidden sm:inline font-mono-tabular text-[9px] opacity-75">
+                  ⇧F
+                </span>
+              )}
+            </button>
+
+            {activeFea && (
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateDisplay({
+                    mode: display.mode === 'stress-heatmap' ? 'component-pbr' : 'stress-heatmap',
+                    stressComparisonView: 'current',
+                  })
+                }
+                title={`Tensão máx: ${activeFea.maxStressMpa} MPa · Escoamento: ${activeFea.yieldStrengthMpa} MPa · Clique para alternar mapa de calor`}
+                aria-label={`Fator de Segurança ${activeFea.safetyFactor.toFixed(2)}x (${activeFea.status})`}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-mono-tabular font-semibold flex items-center gap-1.5 shadow-lg transition-colors cursor-pointer ${
+                  activeFea.status === 'seguro'
+                    ? 'bg-emerald-950/90 border-emerald-400/50 text-emerald-200 hover:bg-emerald-900/90'
+                    : activeFea.status === 'alerta'
+                      ? 'bg-amber-950/90 border-amber-400/50 text-amber-200 hover:bg-amber-900/90'
+                      : 'bg-rose-950/90 border-rose-400/50 text-rose-200 hover:bg-rose-900/90'
+                }`}
+              >
+                {activeFea.status === 'seguro' ? (
+                  <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                ) : (
+                  <ShieldAlert
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      activeFea.status === 'alerta' ? 'text-amber-400' : 'text-rose-400'
+                    }`}
+                  />
+                )}
+                <span>FS {activeFea.safetyFactor.toFixed(2)}×</span>
+                <span className="text-[10px] opacity-80 hidden sm:inline">
+                  · {activeFea.maxStressMpa} MPa
+                </span>
+              </button>
+            )}
+          </div>
+        )}
+
         {display.isolationTarget !== 'all' && (
           <div className="flex items-center gap-2 text-[11px] bg-amber-500/15 border border-amber-400/40 text-amber-200 rounded-lg px-3 py-1 w-fit">
             <span>
@@ -4026,22 +4297,26 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           <div className="text-[11px] font-semibold text-slate-100">
             Object Mask · Famílias ({familyLegend.length})
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {familyLegend.map((fam) => (
-              <div
-                key={fam.family}
-                className="flex items-center justify-between gap-2 text-[11px] text-slate-300"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className="w-3 h-3 rounded-sm shrink-0"
-                    style={{ backgroundColor: fam.color }}
-                  />
-                  <span className="truncate">{fam.family}</span>
+              <div key={fam.family} className="space-y-0.5">
+                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-3 h-3 rounded-sm shrink-0"
+                      style={{ backgroundColor: fam.color }}
+                    />
+                    <span className="truncate">{fam.family}</span>
+                  </div>
+                  <span className="font-mono-tabular text-[10px] text-slate-500 shrink-0">
+                    {fam.count}×
+                  </span>
                 </div>
-                <span className="font-mono-tabular text-[10px] text-slate-500 shrink-0">
-                  {fam.count}×
-                </span>
+                {fam.processSummary && (
+                  <div className="pl-5 text-[10px] text-emerald-300/90 font-mono-tabular truncate">
+                    {fam.processSummary}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -4233,13 +4508,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           </div>
 
           {/* Operation Tabs */}
-          <div className="grid grid-cols-5 gap-1 p-0.5 bg-[#07090d] border border-white/8 rounded-lg text-[10px] font-semibold">
+          <div className="grid grid-cols-6 gap-1 p-0.5 bg-[#07090d] border border-white/8 rounded-lg text-[10px] font-semibold">
             {(
               [
                 { id: 'slot', label: 'Rasgo' },
                 { id: 'hole', label: 'Furo' },
                 { id: 'bolt', label: 'Rosca' },
                 { id: 'rib', label: 'Nervura' },
+                { id: 'rhino', label: 'Rhino' },
                 { id: 'part', label: 'Peça' },
               ] as { id: MagicPenMenuTab; label: string }[]
             ).map((t) => (
@@ -4455,6 +4731,96 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                   className="py-1.5 rounded-lg bg-[#161c28] border border-white/15 hover:border-sky-400 text-slate-200 font-semibold text-[11px] cursor-pointer"
                 >
                   + Chanfro Local
+                </button>
+              </div>
+            </div>
+          )}
+
+          {magicPenTab === 'rhino' && (
+            <div className="space-y-2 text-[10px]">
+              <label className="space-y-0.5 block">
+                <span className="text-slate-400 block">Comando Rhinoceros 3D (20 comandos)</span>
+                <select
+                  aria-label="Comando Rhinoceros 3D"
+                  value={penRhinoKind}
+                  onChange={(e) => setPenRhinoKind(e.target.value as MagicPenOperationKind)}
+                  className="w-full px-2 py-1.5 bg-[#141923] border border-white/12 rounded text-slate-100"
+                >
+                  {RHINO_COMMAND_CATALOG.map((cmd) => (
+                    <option key={cmd.kind} value={cmd.kind}>
+                      {cmd.command} · {cmd.category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="text-[10px] text-slate-400 leading-snug">
+                {RHINO_COMMAND_CATALOG.find((c) => c.kind === penRhinoKind)?.description}
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Raio</span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={80}
+                    step={0.5}
+                    value={penRhinoRadius}
+                    onChange={(e) => setPenRhinoRadius(Math.max(0.5, Number(e.target.value) || 2))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Parede</span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={30}
+                    step={0.5}
+                    value={penRhinoWall}
+                    onChange={(e) => setPenRhinoWall(Math.max(0.5, Number(e.target.value) || 2))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Ângulo°</span>
+                  <input
+                    type="number"
+                    min={-360}
+                    max={360}
+                    value={penRhinoAngle}
+                    onChange={(e) => setPenRhinoAngle(Number(e.target.value) || 0)}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Qtd</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={penRhinoCount}
+                    onChange={(e) => setPenRhinoCount(Math.max(1, Math.min(24, Number(e.target.value) || 1)))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <select
+                  aria-label="Eixo Rhino"
+                  value={penRhinoAxis}
+                  onChange={(e) => setPenRhinoAxis(e.target.value as 'X' | 'Y' | 'Z')}
+                  className="px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100"
+                >
+                  <option value="X">Eixo X</option>
+                  <option value="Y">Eixo Y</option>
+                  <option value="Z">Eixo Z</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => handleApplyMagicPenFeature(penRhinoKind)}
+                  className="flex-1 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-[11px] cursor-pointer"
+                >
+                  Executar {RHINO_COMMAND_CATALOG.find((c) => c.kind === penRhinoKind)?.command ?? 'Rhino'}
                 </button>
               </div>
             </div>

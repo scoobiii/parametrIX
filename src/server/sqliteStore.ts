@@ -612,10 +612,12 @@ export class ParametrixSqliteStore {
     const token = crypto.randomBytes(24).toString('hex');
 
     if (existing) {
-      if (input.provider === 'proprietary' && input.password) {
+      if ((input.provider === 'proprietary' || input.provider === 'email') && input.password) {
         const expectedHash = hashPassword(input.password);
-        if (existing.password_hash !== expectedHash) {
-          throw new Error('Senha incorreta para a conta proprietária SQLite.');
+        const a = Buffer.from(String(existing.password_hash || ''), 'utf8');
+        const b = Buffer.from(expectedHash, 'utf8');
+        if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+          throw new Error('Senha incorreta para a conta SQLite.');
         }
       }
       this.db
@@ -1344,5 +1346,19 @@ export class ParametrixSqliteStore {
       vucHash,
       updatedAt: now,
     };
+  }
+
+  public resetCamServiceJobs(): { clearedCount: number; jobs: CamServiceJob[]; vucHash: string } {
+    const countRow = this.db
+      .prepare('SELECT COUNT(*) as total FROM cam_service_jobs')
+      .get() as { total: number };
+    const clearedCount = Number(countRow?.total ?? 0);
+    this.db.prepare('DELETE FROM cam_service_jobs').run();
+    const proof = this.recordVucProof(
+      'CAM_BASELINE_RESET',
+      `Base de produção CAM limpa (${clearedCount} job(s) removidos)`,
+      { clearedCount }
+    );
+    return { clearedCount, jobs: [], vucHash: proof.vucHash };
   }
 }

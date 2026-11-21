@@ -1,10 +1,11 @@
 import type { VoiceActionIntent } from '../types/cad';
+import { parseRhinoCommandPrompt } from './rhinoGeometryEngine';
 
 /**
- * Deterministic voice & text CAM command interpreter (Portuguese & English)
- * enabling full hands-free control over CAM restart, all 8 manufacturing modes,
- * Datacenter/Humanoid programs, remote G-code/MQTT dispatch, formal VUC proof,
- * presets, FEA, curvature optimization, agent Q&A routing, and exports.
+ * Deterministic voice & text CAM/CAD command interpreter (Portuguese & English)
+ * enabling hands-free control over CAM restart, Rhino CAD commands, part baseline reset,
+ * all 8 manufacturing modes, Datacenter/Humanoid programs, remote G-code/MQTT dispatch,
+ * formal VUC proof, presets, FEA, curvature optimization, agent Q&A routing, and exports.
  */
 export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
   const transcript = rawTranscript.trim();
@@ -29,6 +30,26 @@ export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
       action: 'agent-query',
       param: transcript,
       feedbackText: 'Consultando agente CAM com Olho MCP e prova VUC.',
+    };
+  }
+
+  if (/(resetar peca|limpar base|reset part|clear production baseline|zerar peca)/.test(q)) {
+    return {
+      transcript,
+      matched: true,
+      action: 'reset-part',
+      feedbackText: 'Resetando peça e limpando base de produção e baseline FEA.',
+    };
+  }
+
+  const rhinoParsed = parseRhinoCommandPrompt(transcript);
+  if (rhinoParsed.matched) {
+    return {
+      transcript,
+      matched: true,
+      action: 'rhino-command',
+      param: transcript,
+      feedbackText: `Executando comando Rhino ${rhinoParsed.rhinoCommand}: ${rhinoParsed.label}.`,
     };
   }
 

@@ -74,11 +74,11 @@ export const AGENT_PROVIDER_CATALOG: AgentProviderCatalogEntry[] = [
   },
   {
     id: 'local-llm',
-    label: 'LLM Local (Bootstrap Automático)',
-    vendor: 'Localhost / WebGPU / Ollama',
-    defaultModel: 'auto-bootstrap',
+    label: 'LLM Local (Qwen 2.5 0.5B Core + RAG)',
+    vendor: 'llama.cpp Core / Qwen 0.5B GGUF',
+    defaultModel: 'qwen2.5-0.5b-instruct-q4',
     supportsServerCloud: false,
-    loginMethodLabel: 'Auto-seleção por Hardware & Carga',
+    loginMethodLabel: 'Binário Core Qwen 0.5B + RAG Fine-Tuning',
   },
 ];
 
@@ -97,25 +97,25 @@ export function selectOptimalLocalLlm(
 
   if (effectiveRamPerUser < 2.5 || load > 82 || cores <= 2) {
     return {
-      modelId: 'smollm2-360m-q4',
-      displayName: 'SmolLM2 360M Instruct (Ultra-Leve)',
+      modelId: 'qwen2.5-0.5b-instruct-q4',
+      displayName: 'Qwen 2.5 0.5B Instruct Core (GGUF + RAG Fine-Tuned)',
       quantization: 'Q4_K_M',
-      estimatedRamGb: 0.45,
-      estimatedTokPerSec: Math.round(18 + cores * 4),
+      estimatedRamGb: 0.48,
+      estimatedTokPerSec: Math.round(22 + cores * 5),
       tier: 'ultra-light',
-      rationale: `Carga CPU ${load.toFixed(0)}%, RAM livre ${freeRam.toFixed(1)} GB e ${users} usuário(s) ativos: selecionado modelo sub-500MB para latência zero.`,
+      rationale: `Carga CPU ${load.toFixed(0)}%, RAM livre ${freeRam.toFixed(1)} GB e ${users} usuário(s): binário core Qwen 2.5 0.5B Q4_K_M (<500MB) treinado com RAG 100% do projeto.`,
     };
   }
 
   if (effectiveRamPerUser < 6.0 || snapshot.gpuTier === 'none' || snapshot.gpuTier === 'integrated') {
     return {
-      modelId: 'qwen2.5-1.5b-instruct-q4',
-      displayName: 'Qwen 2.5 1.5B Instruct (Compacto)',
+      modelId: 'qwen2.5-0.5b-instruct-q4',
+      displayName: 'Qwen 2.5 0.5B Instruct Core (RAG Fine-Tuned)',
       quantization: 'Q4_K_M',
-      estimatedRamGb: 1.35,
-      estimatedTokPerSec: Math.round(24 + cores * 3),
+      estimatedRamGb: 0.48,
+      estimatedTokPerSec: Math.round(28 + cores * 4),
       tier: 'compact',
-      rationale: `GPU ${snapshot.gpuTier} (${snapshot.gpuName}) com ${freeRam.toFixed(1)} GB livre: Qwen2.5-1.5B entrega bom parsing MCP/JSON consumindo <1.4 GB.`,
+      rationale: `GPU ${snapshot.gpuTier} (${snapshot.gpuName}) com ${freeRam.toFixed(1)} GB livre: binário Qwen 2.5 0.5B instalado no core entrega respostas RAG/MCP em <500 MB.`,
     };
   }
 

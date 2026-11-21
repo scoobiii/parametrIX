@@ -56,9 +56,11 @@ import {
 import { generateCamToolpath, getDefaultAdditiveSettings } from './kernel/camRobotics';
 import {
   SEGMENT_CATALOG,
+  applyMaterialProcessesToComponents,
   buildParametricComponentParts,
   resolvePartEngineeringProfile,
 } from './kernel/componentClassifier';
+import { parseRhinoCommandPrompt } from './kernel/rhinoGeometryEngine';
 import { analyzeCurvatureAndOptimizeWeight } from './kernel/curvatureOptimizer';
 import { buildUserProfileWithRole } from './kernel/ecosystemErpLogistics';
 import { GRAPH_TEMPLATES, evaluateGraphPipeline } from './kernel/graphEngine';
@@ -171,7 +173,17 @@ const CAMERA_PRESETS: CameraPreset[] = [
 ];
 
 export default function App() {
-  const { user, authReady, authBusy, signInWithGoogle, logout } = useAuth();
+  const {
+    user,
+    backendProfile,
+    sessionToken,
+    googleAccessToken,
+    authReady,
+    authBusy,
+    signInWithGoogle,
+    connectGoogleDrive,
+    logout,
+  } = useAuth();
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('onboarding');
   // Edge-retractable menus: tucked by default on narrow viewports so the 3D scene stays centered
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
@@ -208,6 +220,12 @@ export default function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<AgentProviderId>('gemini');
   const [systemResources, setSystemResources] = useState<SystemResourceSnapshot | null>(null);
   const [localLlmRec, setLocalLlmRec] = useState<LocalLlmRecommendation | null>(null);
+  const [localQwenStatus, setLocalQwenStatus] = useState<{
+    installed: boolean;
+    ragExamplesCount: number;
+    ready: boolean;
+    modelSizeBytes?: number;
+  } | null>(null);
   const [mcpEyeEvents, setMcpEyeEvents] = useState<McpEyeEvent[]>([]);
   const [camRestartCount, setCamRestartCount] = useState(0);
   const [lastVoiceStatus, setLastVoiceStatus] = useState<string | null>(null);
@@ -396,11 +414,25 @@ export default function App() {
   }, [importedModel, activeSegment, effectiveDesignParams.preset, surface.name, partProfileOverride]);
 
   const components = useMemo<CadComponentPart[]>(() => {
-    if (importedModel?.components && importedModel.components.length > 0) {
-      return importedModel.components;
-    }
-    return buildParametricComponentParts(surface, meshData, partProfile);
-  }, [importedModel, surface, meshData, partProfile]);
+    const raw =
+      importedModel?.components && importedModel.components.length > 0
+        ? importedModel.components
+        : buildParametricComponentParts(surface, meshData, partProfile);
+    return applyMaterialProcessesToComponents(
+      raw,
+      display.componentMaterials,
+      display.materialFinish,
+      activeSegment
+    );
+  }, [
+    importedModel,
+    surface,
+    meshData,
+    partProfile,
+    display.componentMaterials,
+    display.materialFinish,
+    activeSegment,
+  ]);
 
   // 5. Generate CAM Toolpath & Tool-Change Visual FX State
   const toolpath = useMemo(
@@ -816,9 +848,18 @@ export default function App() {
         const data = (await resp.json()) as {
           snapshot: SystemResourceSnapshot;
           recommendation: LocalLlmRecommendation;
+          localQwenStatus?: {
+            installed: boolean;
+            ragExamplesCount: number;
+            ready: boolean;
+            modelSizeBytes?: number;
+          };
         };
         setSystemResources(data.snapshot);
         setLocalLlmRec(data.recommendation);
+        if (data.localQwenStatus) {
+          setLocalQwenStatus(data.localQwenStatus);
+        }
       } catch {
         // Offline tolerance
       }
@@ -1154,6 +1195,46 @@ export default function App() {
     return name;
   };
 
+  const handleResetPartAndProduction = () => {
+    setFeatureOps([]);
+    setCpOverrides({});
+    setSelectedControlPoint(null);
+    setFeaBaseline(null);
+    setFeaComparison(null);
+    setPartProfileOverride({});
+    setSimPlaying(false);
+    setSimProgress(0);
+    setDisplay((d) => ({
+      ...d,
+      componentMaterials: {},
+      componentRotations: {},
+      isolationTarget: 'all',
+      selectedComponentId: null,
+      hiddenComponentIds: [],
+      fitViewTrigger: d.fitViewTrigger + 1,
+    }));
+    setCamServiceJobs([]);
+    setLastVoiceStatus('Peça resetada e base de produção CAM limpa.');
+    pushMcpEyeEvent(
+      'cam-output',
+      'CAD.BaselineReset',
+      `Peça "${partProfile.partName}" resetada e base de produção limpa do começo ao fim.`,
+      { partName: partProfile.partName }
+    );
+    void fetch('/api/sqlite/cam-jobs/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partName: partProfile.partName }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((resData: { vucHash?: string } | null) => {
+        if (resData?.vucHash) {
+          setLastServerVucHex(resData.vucHash);
+        }
+      })
+      .catch(() => {});
+  };
+
   const mcpContext: McpRuntimeContext = {
     designParams,
     surface,
@@ -1182,6 +1263,7 @@ export default function App() {
     onAddFeatureOp: handleAddFeatureOp,
     onRunFea: handleRunFea,
     onGenerateOptimizedGeometry: handleGenerateOptimizedGeometry,
+    onResetPartBaseline: handleResetPartAndProduction,
     onExportFormat: handleExportFormat,
     onRegisterAndRunPlugin: (name, code) => {
       const newPlug: CadPlugin = {
@@ -1223,9 +1305,38 @@ export default function App() {
       threadMatch ? `M${threadMatch[1]}` : 'M6'
     ) as IsoThreadSpec;
 
+    const rhinoParsed = parseRhinoCommandPrompt(prompt);
+    if (rhinoParsed) {
+      const log = executeMcpToolCall(
+        'cad_magic_pen_feature',
+        {
+          kind: rhinoParsed.kind,
+          targetComponentId: pick.componentId,
+          point: pick.point,
+          normal: pick.normal,
+          widthMm: Math.max(4, Math.round(pick.widthMm)),
+          lengthMm: Math.max(6, Math.round(pick.lengthMm)),
+          depthMm: rhinoParsed.depthMm ?? 12,
+          radiusMm: rhinoParsed.radiusMm,
+          wallThicknessMm: rhinoParsed.wallThicknessMm,
+          angleDeg: rhinoParsed.angleDeg,
+          count: rhinoParsed.count,
+          axis: rhinoParsed.axis,
+          rhinoCommand: rhinoParsed.rhinoCommand,
+          label: `Rhino ${rhinoParsed.rhinoCommand} (${pick.componentName})`,
+        },
+        mcpContextRef.current
+      );
+      if (log.status === 'ok') {
+        return {
+          summary: `Comando Rhino ${rhinoParsed.rhinoCommand} executado em ${pick.componentName} e auditado no VUC.`,
+        };
+      }
+    }
+
     if (/parafuso|rosca|bolt|screw|fixa/i.test(lower)) {
       const log = executeMcpToolCall(
-        'cad_magic_pen_operation',
+        'cad_magic_pen_feature',
         {
           kind: 'threaded-bolt',
           targetComponentId: pick.componentId,
@@ -1246,7 +1357,7 @@ export default function App() {
 
     if (/rasgo|slot|recorte|corte|chaveta/i.test(lower)) {
       const log = executeMcpToolCall(
-        'cad_magic_pen_operation',
+        'cad_magic_pen_feature',
         {
           kind: 'slot-cutout',
           targetComponentId: pick.componentId,
@@ -1268,7 +1379,7 @@ export default function App() {
 
     if (/furo|hole|broca|perfur/i.test(lower)) {
       const log = executeMcpToolCall(
-        'cad_magic_pen_operation',
+        'cad_magic_pen_feature',
         {
           kind: 'through-hole',
           targetComponentId: pick.componentId,
@@ -1339,7 +1450,7 @@ export default function App() {
     }
 
     const fallbackLog = executeMcpToolCall(
-      'cad_magic_pen_operation',
+      'cad_magic_pen_feature',
       {
         kind: 'rib-boss',
         targetComponentId: pick.componentId,
@@ -1508,8 +1619,41 @@ export default function App() {
     address?: string;
     offlineMode: boolean;
   }) => {
+    if (!payload.offlineMode && backendProfile && backendProfile.email.toLowerCase() === payload.email.trim().toLowerCase()) {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionToken) headers.Authorization = `Bearer ${sessionToken}`;
+      const profResp = await fetch('/api/auth/profile', {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: JSON.stringify({
+          userId: backendProfile.id,
+          role: payload.role,
+          handleAt: payload.handleAt ?? backendProfile.handleAt,
+          phone: payload.phone ?? backendProfile.phone,
+          address: payload.address ?? backendProfile.address,
+          computeSharePct: backendProfile.computeSharePct,
+          agentConfig: backendProfile.agentConfig,
+        }),
+      });
+      if (profResp.ok) {
+        const profData = (await profResp.json()) as { profile?: AuthUserProfile };
+        if (profData.profile) {
+          setSqliteProfile(profData.profile);
+          pushMcpEyeEvent(
+            'agent-feedback',
+            `Auth.${payload.provider}`,
+            `Sessão verificada ativa: ${profData.profile.displayName} (${profData.profile.role})`,
+            { role: profData.profile.role, offlineMode: false }
+          );
+          return;
+        }
+      }
+    }
+
     const resp = await fetch('/api/auth/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -1537,9 +1681,12 @@ export default function App() {
     };
     setSqliteProfile(merged);
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionToken) headers.Authorization = `Bearer ${sessionToken}`;
       const resp = await fetch('/api/auth/profile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers,
         body: JSON.stringify({
           userId: merged.id,
           role: merged.role,
@@ -1575,6 +1722,46 @@ export default function App() {
     vucHash: camVisualState.vucProof.vucHash,
   });
 
+  const handleSyncQwenRag = async (): Promise<string> => {
+    try {
+      const resp = await fetch('/api/local-llm/finetune-rag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ragDocs: ragDocs.slice(0, 12),
+          cadSummary: buildLiveCamSummary(),
+        }),
+      });
+      const data = (await resp.json()) as {
+        ok?: boolean;
+        examplesCount?: number;
+        datasetSha256?: string;
+        status?: {
+          installed: boolean;
+          ragExamplesCount: number;
+          ready: boolean;
+          modelSizeBytes?: number;
+        };
+        error?: string;
+      };
+      if (data.status) {
+        setLocalQwenStatus(data.status);
+      }
+      const msg = data.ok
+        ? `Qwen 0.5B RAG sincronizado (${data.examplesCount} exemplos ChatML · SHA ${String(data.datasetSha256 || '').slice(0, 12)}).`
+        : data.error || 'Falha ao sincronizar RAG local Qwen 0.5B.';
+      pushMcpEyeEvent('agent-feedback', 'Qwen.0.5B.RAG', msg, data);
+      return msg;
+    } catch {
+      return 'Servidor local indisponível para sincronização RAG Qwen 0.5B.';
+    }
+  };
+
+  useEffect(() => {
+    if (!backendProfile) return;
+    setSqliteProfile(backendProfile);
+  }, [backendProfile]);
+
   const handleSendMultiAgentPrompt = async (
     prompt: string,
     externalEndpoint: string,
@@ -1591,6 +1778,7 @@ export default function App() {
           roleLabel: `${sqliteProfile.role} (${sqliteProfile.handleAt})`,
           eyeEvents: mcpEyeEvents.slice(0, 8),
           cadSummary: buildLiveCamSummary(),
+          ragDocs: ragDocs.slice(0, 12),
           externalEndpoint,
           localModelId: modelId,
         }),
@@ -1669,6 +1857,17 @@ export default function App() {
     } else if (intent.action === 'load-preset' && intent.param) {
       const preset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === intent.param);
       if (preset) handleApplyFullPreset(preset, true);
+    } else if (intent.action === 'reset-part') {
+      handleResetPartAndProduction();
+    } else if (intent.action === 'rhino-command' && intent.param) {
+      executeMcpToolCall(
+        'cad_rhino_command',
+        {
+          command: transcript,
+          targetComponentId: display.selectedComponentId ?? undefined,
+        },
+        mcpContextRef.current
+      );
     }
     return intent;
   };
@@ -1954,22 +2153,24 @@ export default function App() {
             type="button"
             onClick={() => setOfflineAuthOpen(true)}
             className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#141a24] border border-emerald-400/35 text-emerald-200 hover:border-emerald-400 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer font-mono-tabular"
-            title={`Auth SQLite Localhost (${sqliteProfile.provider}) · ${sqliteProfile.role}`}
+            title={`Login Real Multi-Provedor + Sessão SQLite (${sqliteProfile.provider}) · ${sqliteProfile.role}`}
           >
             <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden lg:inline">{sqliteProfile.handleAt}</span>
-            <span className="lg:hidden hidden sm:inline">Offline Auth</span>
+            <span className="hidden lg:inline">
+              {user || backendProfile || !sqliteProfile.offlineMode ? sqliteProfile.handleAt : 'Login / Auth'}
+            </span>
+            <span className="lg:hidden hidden sm:inline">Login</span>
           </button>
 
           {authReady &&
-            (user ? (
+            (user || (backendProfile && !backendProfile.offlineMode) ? (
               <button
                 type="button"
                 onClick={() => setAccountModalOpen(true)}
                 className="min-h-[38px] flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                title={`Conta isolada: ${user.email || ''}`}
+                title={`Conta autenticada: ${user?.email || backendProfile?.email || ''} (${backendProfile?.provider || 'firebase'})`}
               >
-                {user.photoURL ? (
+                {user?.photoURL ? (
                   <img
                     src={user.photoURL}
                     alt={user.displayName || 'Usuário'}
@@ -1980,7 +2181,7 @@ export default function App() {
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                 )}
                 <span className="max-w-[70px] sm:max-w-[110px] truncate hidden sm:inline">
-                  {user.displayName?.split(' ')[0] || 'Conta'}
+                  {(user?.displayName || backendProfile?.displayName)?.split(' ')[0] || 'Conta'}
                 </span>
               </button>
             ) : (
@@ -2010,6 +2211,8 @@ export default function App() {
         onSelectAgent={setSelectedAgentId}
         systemResources={systemResources}
         localLlmRec={localLlmRec}
+        localQwenStatus={localQwenStatus}
+        onSyncQwenRag={handleSyncQwenRag}
         mcpEyeEvents={mcpEyeEvents}
         onSendAgentPrompt={handleSendMultiAgentPrompt}
         onVoiceTranscript={handleVoiceTranscript}
@@ -2102,6 +2305,7 @@ export default function App() {
                 onUpdateLayerTolerance={handleUpdateLayerTolerance}
                 layerComplianceReport={layerComplianceReport}
                 onRefineNurbsForTolerances={handleRefineNurbsForTolerances}
+                onResetPartAndProduction={handleResetPartAndProduction}
               />
             </div>
 
@@ -2135,6 +2339,8 @@ export default function App() {
                   recordDeliverable({ filename, kind, summary })
                 }
                 onOpenHelp={() => setActiveTab('onboarding')}
+                onRunQuickFea={() => handleRunFea(undefined, true)}
+                onResetPart={handleResetPartAndProduction}
               />
 
               {/* Left Screen-Edge Touch Handle (appears when menu is tucked away) */}
@@ -2337,6 +2543,7 @@ export default function App() {
                     recordDeliverable({ filename, kind, summary })
                   }
                   compact
+                  onRunQuickFea={() => handleRunFea(undefined, true)}
                 />
               </div>
             </div>
@@ -2442,6 +2649,8 @@ export default function App() {
                     recordDeliverable({ filename, kind, summary })
                   }
                   onOpenHelp={() => setActiveTab('onboarding')}
+                  onRunQuickFea={() => handleRunFea(undefined, true)}
+                  onResetPart={handleResetPartAndProduction}
                 />
               </div>
             </div>
@@ -2567,6 +2776,12 @@ export default function App() {
               setDisplay((d) => ({ ...d, fitViewTrigger: d.fitViewTrigger + 1 }));
               setActiveTab('viewport');
             }}
+            userSlug={user?.email?.split('@')[0] || sqliteProfile.email.split('@')[0] || 'local-operator'}
+            googleAccessToken={googleAccessToken}
+            onConnectGoogleDrive={connectGoogleDrive}
+            designParams={designParams}
+            camSettings={effectiveCamSettings}
+            sessionToken={sessionToken}
           />
         )}
       </main>
@@ -2923,15 +3138,15 @@ export default function App() {
         }}
       />
 
-      {/* Account & Isolated User Workspace Modal */}
-      {accountModalOpen && user && (
+      {/* Account & Isolated User Workspace Modal (Firebase & OAuth2 Backend Sessions) */}
+      {accountModalOpen && (user || backendProfile) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-md bg-[#111620] border border-white/12 rounded-2xl shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
                 <h3 className="font-display text-base font-semibold text-slate-100">
-                  Conta do Usuário (Espaço Isolado)
+                  Conta Autenticada (Sessão Backend Real)
                 </h3>
               </div>
               <button
@@ -2945,7 +3160,7 @@ export default function App() {
 
             <div className="p-5 space-y-4">
               <div className="flex items-center gap-3 p-3 bg-[#0c1017] border border-white/8 rounded-xl">
-                {user.photoURL && (
+                {user?.photoURL && (
                   <img
                     src={user.photoURL}
                     alt={user.displayName || 'Avatar'}
@@ -2955,32 +3170,37 @@ export default function App() {
                 )}
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-slate-100 truncate">
-                    {user.displayName || 'Usuário Final'}
+                    {user?.displayName || backendProfile?.displayName || 'Usuário Autenticado'}
                   </div>
-                  <div className="text-[11px] text-slate-400 truncate">{user.email}</div>
+                  <div className="text-[11px] text-slate-400 truncate">
+                    {user?.email || backendProfile?.email}
+                  </div>
                   <div className="text-[10px] font-mono-tabular text-slate-500 truncate mt-0.5">
-                    UID isolado: {user.uid}
+                    Provedor: {(backendProfile?.provider || 'firebase').toUpperCase()} · ID:{' '}
+                    {user?.uid || backendProfile?.id}
                   </div>
                 </div>
               </div>
 
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Autenticação Firebase independente do ambiente Google AI Studio do desenvolvedor/PO, sem acesso a Drive ou Calendar.
+                Sessão verificada criptograficamente no servidor ({sessionToken ? 'HMAC-SHA256 + Cookie HttpOnly' : 'Firebase ID Token'}) com isolamento por usuário e prova VUC no SQLite local.
               </p>
 
               <div className="flex items-center justify-between gap-2 pt-1">
-                <button
-                  type="button"
-                  disabled={cloudBusy}
-                  onClick={async () => {
-                    await handleSaveCloudProject(surface.name);
-                    setAccountModalOpen(false);
-                  }}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-50 transition-colors cursor-pointer"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  Salvar Modelo Atual
-                </button>
+                {user && (
+                  <button
+                    type="button"
+                    disabled={cloudBusy}
+                    onClick={async () => {
+                      await handleSaveCloudProject(surface.name);
+                      setAccountModalOpen(false);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-50 transition-colors cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    Salvar Modelo Atual
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={authBusy}
@@ -2988,7 +3208,7 @@ export default function App() {
                     await logout();
                     setAccountModalOpen(false);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   Sair

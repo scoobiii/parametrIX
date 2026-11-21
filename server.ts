@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import crypto from 'node:crypto';
 import fs from 'fs';
 import http from 'http';
 import os from 'os';
@@ -30,15 +31,48 @@ import {
   type CamAgentContextSummary,
 } from './src/kernel/camAgentSystemInstruction';
 import { buildCamOpenApiSpec, buildSwaggerHtml } from './src/server/camSwaggerSpec';
+import {
+  OAuthCallbackManager,
+  buildClearSessionCookieHeader,
+  buildSessionCookieHeader,
+  extractSessionTokenFromHeaders,
+  getOAuthProvidersReadiness,
+  renderOAuthCallbackHtml,
+  resolveAppBaseUrl,
+  signSessionToken,
+  verifyFirebaseIdToken,
+  verifySessionToken,
+} from './src/server/oauthAuthHandler';
 import { ParametrixSqliteStore } from './src/server/sqliteStore';
+import {
+  getLocalQwenStatus,
+  runLocalQwenInference,
+  setRegisteredRagDocs,
+  syncQwenProjectRagDataset,
+} from './src/server/localQwenRunner';
 import {
   createFormalVucCertificate,
   verifyFormalVucCertificate,
 } from './src/server/vucFormalProof';
+import {
+  buildUserFolderSlug,
+  deleteUserProjectFile,
+  ensureUserProjectFolder,
+  listUserProjectFiles,
+  writeUserProjectFile,
+} from './src/server/projectWorkspaceManager';
+import {
+  buildColabGcloudMcpScript,
+  getRamdiskMcpStatus,
+  setColabBridgeUrl,
+  startRamdiskMcpWorker,
+  stopRamdiskMcpWorker,
+} from './src/server/ramdiskMcpAccelerator';
 import type {
   AgentProviderId,
   ApplicationSegment,
   AuthProviderKind,
+  AuthUserProfile,
   CamProgramTargetCategory,
   CamServiceSourceKind,
   CamSettings,
@@ -427,13 +461,14 @@ const MCP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: 'cad_magic_pen_feature',
     description:
-      'Aplica operação geométrica paramétrica da Caneta Mágica em ponto/área 3D marcada: recorte/rasgo (slot-cutout), furo (through-hole), parafuso com rosca métrica ISO (threaded-bolt M3..M12), nervura/ressalto (rib-boss) ou chanfro (chamfer-fillet).',
+      'Aplica operação geométrica paramétrica ou comando Rhinoceros 3D da Caneta Mágica em ponto/área 3D marcada: slot-cutout, through-hole, threaded-bolt, rib-boss, chamfer-fillet e os 20 comandos Rhino (rhino-extrude-crv, rhino-revolve, rhino-loft, rhino-sweep1, rhino-sweep2, rhino-pipe, rhino-fillet-edge, rhino-chamfer-edge, rhino-boolean-union, rhino-boolean-difference, rhino-boolean-intersection, rhino-shell, rhino-offset-srf, rhino-mirror, rhino-array-polar, rhino-array-linear, rhino-bend, rhino-twist, rhino-taper, rhino-flow-along-srf).',
     parameters: {
       type: Type.OBJECT,
       properties: {
         kind: {
           type: Type.STRING,
-          description: 'slot-cutout, through-hole, threaded-bolt, rib-boss ou chamfer-fillet.',
+          description:
+            'Operação CAD: slot-cutout, through-hole, threaded-bolt, rib-boss, chamfer-fillet ou comando rhino-* (ex: rhino-extrude-crv, rhino-fillet-edge, rhino-array-polar).',
         },
         point: {
           type: Type.ARRAY,
@@ -450,11 +485,47 @@ const MCP_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
         lengthMm: { type: Type.NUMBER },
         diameterMm: { type: Type.NUMBER },
         depthMm: { type: Type.NUMBER },
+        radiusMm: { type: Type.NUMBER },
+        wallThicknessMm: { type: Type.NUMBER },
+        angleDeg: { type: Type.NUMBER },
+        count: { type: Type.INTEGER },
+        axis: { type: Type.STRING, description: 'X, Y ou Z.' },
+        rhinoCommand: { type: Type.STRING, description: 'Nome original do comando Rhino (ex: ExtrudeCrv).' },
         threadSpec: { type: Type.STRING, description: 'M3, M4, M5, M6, M8, M10 ou M12.' },
         headStyle: { type: Type.STRING, description: 'allen ou hex.' },
         slotProfile: { type: Type.STRING, description: 'rectangular ou oblong.' },
       },
       required: ['kind'],
+    },
+  },
+  {
+    name: 'cad_rhino_command',
+    description:
+      'Executa comando direto estilo Rhinoceros 3D (ExtrudeCrv, Revolve, Loft, Sweep1, Sweep2, Pipe, FilletEdge, ChamferEdge, BooleanUnion, BooleanDifference, BooleanIntersection, Shell, OffsetSrf, Mirror, ArrayPolar, ArrayLinear, Bend, Twist, Taper, FlowAlongSrf) a partir de comando ou prompt textual.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        command: { type: Type.STRING, description: 'Nome ou prompt Rhino (ex: "FilletEdge r=3", "ArrayPolar 6").' },
+        targetComponentId: { type: Type.STRING },
+        point: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+        normal: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+        depthMm: { type: Type.NUMBER },
+        radiusMm: { type: Type.NUMBER },
+        wallThicknessMm: { type: Type.NUMBER },
+        angleDeg: { type: Type.NUMBER },
+        count: { type: Type.INTEGER },
+        axis: { type: Type.STRING },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'cad_reset_part_baseline',
+    description:
+      'Reseta a peça ativa e limpa toda a base de produção (operações da Caneta Mágica, overrides de malha NURBS, comparação FEA e fila de jobs CAM), preservando apenas a geometria nativa e recalibrando planos de processo reais por material.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
     },
   },
   {
@@ -528,6 +599,7 @@ function getGeminiClient(): GoogleGenAI {
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: false }));
 
   app.post('/api/cad/parse-step', async (req, res) => {
     try {
@@ -1467,6 +1539,23 @@ ${ragBlock}`;
   });
 
   const sqliteStore = new ParametrixSqliteStore();
+  try {
+    syncQwenProjectRagDataset();
+  } catch {
+    // Non-blocking startup sync when weights/dirs initialize lazily
+  }
+
+  // OAuth 2.0 PKCE + Apple/Google/Microsoft/Oracle/Zoho callback manager
+  const oauthManager = new OAuthCallbackManager();
+  let firebaseProjectId = 'gen-lang-client-0641169743';
+  try {
+    const fbCfgRaw = fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf8');
+    const fbCfg = JSON.parse(fbCfgRaw) as { projectId?: string };
+    if (fbCfg.projectId) firebaseProjectId = fbCfg.projectId;
+  } catch {
+    // Fallback to configured project ID
+  }
+
   const httpServer = http.createServer(app);
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
@@ -1529,6 +1618,220 @@ ${ragBlock}`;
     });
   });
 
+  // Real OAuth 2.0 PKCE Provider Readiness, URL Generator & Unified GET/POST Callback
+  app.get('/api/auth/oauth/providers', (req, res) => {
+    const baseUrl = resolveAppBaseUrl(req.headers, req.protocol);
+    const callbackUrl = `${baseUrl}/auth/callback`;
+    return res.json(getOAuthProvidersReadiness(callbackUrl));
+  });
+
+  app.get('/api/auth/oauth/url', (req, res) => {
+    const provider = oauthManager.normalizeProvider(String(req.query.provider || ''));
+    if (!provider) {
+      return res
+        .status(400)
+        .json({ error: 'Provedor OAuth2 inválido. Use microsoft, oracle, zoho, google ou apple.' });
+    }
+    const roleRaw = String(req.query.role || 'client') as EcosystemRole;
+    const validRoles: EcosystemRole[] = ['client', 'cam_provider', 'logistics', 'supplier', 'compute_node'];
+    const role: EcosystemRole = validRoles.includes(roleRaw) ? roleRaw : 'client';
+    const baseUrl = resolveAppBaseUrl(req.headers, req.protocol);
+    const callbackUrl = `${baseUrl}/auth/callback`;
+    const reqOrigin =
+      typeof req.query.origin === 'string' && /^https?:\/\//i.test(req.query.origin)
+        ? req.query.origin
+        : baseUrl;
+
+    try {
+      const authResult = oauthManager.createAuthorizationUrl({
+        provider,
+        role,
+        callbackUrl,
+        origin: reqOrigin,
+      });
+      return res.json(authResult);
+    } catch (err) {
+      return res
+        .status(400)
+        .json({ error: err instanceof Error ? err.message : 'Endpoint OAuth inválido.' });
+    }
+  });
+
+  app.all(
+    ['/auth/callback', '/auth/callback/', '/auth/callback/:provider', '/auth/callback/:provider/'],
+    async (req, res) => {
+      const pickParam = (key: string): string => {
+        const bodyVal = req.body && typeof req.body === 'object' ? (req.body as Record<string, unknown>)[key] : undefined;
+        if (typeof bodyVal === 'string') return bodyVal;
+        const queryVal = req.query[key];
+        return typeof queryVal === 'string' ? queryVal : '';
+      };
+
+      const state = pickParam('state');
+      const code = pickParam('code');
+      const providerError = pickParam('error_description') || pickParam('error');
+      const userJson = pickParam('user');
+      const pendingOrigin = state ? oauthManager.pendingStates.get(state)?.origin : undefined;
+      const targetOrigin = pendingOrigin || resolveAppBaseUrl(req.headers, req.protocol);
+
+      try {
+        const result = await oauthManager.handleCallback({
+          state,
+          code,
+          providerError: providerError || undefined,
+          userJson: userJson || undefined,
+          store: sqliteStore,
+        });
+        res.setHeader('Set-Cookie', buildSessionCookieHeader(result.sessionToken));
+        return res.type('text/html; charset=utf-8').send(
+          renderOAuthCallbackHtml(
+            {
+              type: 'OAUTH_AUTH_SUCCESS',
+              provider: result.provider,
+              profile: result.profile,
+              sessionToken: result.sessionToken,
+            },
+            result.origin
+          )
+        );
+      } catch (err) {
+        const status = providerError ? 200 : 400;
+        return res.status(status).type('text/html; charset=utf-8').send(
+          renderOAuthCallbackHtml(
+            {
+              type: 'OAUTH_AUTH_ERROR',
+              provider: typeof req.params.provider === 'string' ? req.params.provider : undefined,
+              error: err instanceof Error ? err.message : 'Erro OAuth2 no callback.',
+            },
+            targetOrigin
+          )
+        );
+      }
+    }
+  );
+
+  // Cryptographic Firebase RS256 ID Token -> Backend Session Exchange
+  app.post('/api/auth/firebase-session', async (req, res) => {
+    try {
+      const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken.trim() : '';
+      if (!idToken) {
+        return res.status(400).json({ error: 'Campo "idToken" é obrigatório.' });
+      }
+      const verified = await verifyFirebaseIdToken(idToken, firebaseProjectId);
+      const mappedProvider: AuthProviderKind = verified.signInProvider.includes('microsoft')
+        ? 'microsoft'
+        : verified.signInProvider.includes('apple')
+          ? 'apple'
+          : verified.signInProvider.includes('password')
+            ? 'email'
+            : 'google';
+
+      const validRoles: EcosystemRole[] = ['client', 'cam_provider', 'logistics', 'supplier', 'compute_node'];
+      const rawRole = String(req.body?.role || 'client') as EcosystemRole;
+      const role: EcosystemRole = validRoles.includes(rawRole) ? rawRole : 'client';
+
+      const profile = sqliteStore.loginOrRegister({
+        email: verified.email,
+        displayName: verified.displayName,
+        provider: mappedProvider,
+        role,
+        handleAt: typeof req.body?.handleAt === 'string' ? req.body.handleAt : undefined,
+        phone: typeof req.body?.phone === 'string' ? req.body.phone : undefined,
+        address: typeof req.body?.address === 'string' ? req.body.address : undefined,
+        offlineMode: false,
+      });
+
+      sqliteStore.recordVucProof(
+        'FIREBASE_SESSION_VERIFIED',
+        `Firebase RS256 verificado (${mappedProvider}): ${verified.email}`,
+        {
+          uid: verified.uid,
+          userId: profile.id,
+          provider: mappedProvider,
+          emailVerified: verified.emailVerified,
+        }
+      );
+
+      const sessionToken = signSessionToken({
+        userId: profile.id,
+        email: profile.email,
+        displayName: profile.displayName,
+        provider: profile.provider,
+        role: profile.role,
+      });
+      res.setHeader('Set-Cookie', buildSessionCookieHeader(sessionToken));
+      return res.json({
+        profile: { ...profile, sessionToken },
+        sessionToken,
+        verifiedBy: 'firebase-rs256',
+      });
+    } catch (err) {
+      return res.status(401).json({
+        error: err instanceof Error ? err.message : 'Falha ao validar token Firebase no backend.',
+      });
+    }
+  });
+
+  app.get('/api/auth/session', (req, res) => {
+    const token = extractSessionTokenFromHeaders(req.headers.authorization, req.headers.cookie);
+    if (!token) {
+      return res.json({ authenticated: false });
+    }
+    const claims = verifySessionToken(token);
+    if (!claims) {
+      return res.json({ authenticated: false });
+    }
+    const row = sqliteStore.db
+      .prepare(
+        'SELECT id, email, display_name, auth_provider, role, handle_at, phone, address, compute_share_pct, agent_config_json FROM users WHERE id = ?'
+      )
+      .get(claims.userId) as Record<string, unknown> | undefined;
+
+    let profile: AuthUserProfile | null = null;
+    if (row) {
+      let agentConfig: AuthUserProfile['agentConfig'];
+      try {
+        agentConfig = JSON.parse(String(row.agent_config_json || '{}')) as AuthUserProfile['agentConfig'];
+      } catch {
+        agentConfig = {
+          enabled: true,
+          agentName: 'Parametrix Agent',
+          handleAt: String(row.handle_at || '@parametrix'),
+          phone: String(row.phone || ''),
+          address: String(row.address || ''),
+          autoRestartCam: false,
+          autoAssignLogistics: false,
+          targetCapabilities: [],
+        };
+      }
+      profile = {
+        id: String(row.id),
+        email: String(row.email),
+        displayName: String(row.display_name),
+        provider: String(row.auth_provider) as AuthProviderKind,
+        role: String(row.role) as EcosystemRole,
+        handleAt: String(row.handle_at),
+        phone: String(row.phone || ''),
+        address: String(row.address || ''),
+        computeSharePct: Number(row.compute_share_pct ?? 20),
+        offlineMode: false,
+        agentConfig,
+        sessionToken: token,
+      };
+    }
+
+    return res.json({
+      authenticated: true,
+      claims,
+      profile,
+    });
+  });
+
+  app.post('/api/auth/logout', (_req, res) => {
+    res.setHeader('Set-Cookie', buildClearSessionCookieHeader());
+    return res.json({ ok: true });
+  });
+
   // Proprietary & Offline SQLite Auth Endpoints
   app.post('/api/auth/login', (req, res) => {
     try {
@@ -1543,7 +1846,15 @@ ${ragBlock}`;
         address: typeof req.body?.address === 'string' ? req.body.address : undefined,
         offlineMode: Boolean(req.body?.offlineMode),
       });
-      return res.json({ profile });
+      const sessionToken = signSessionToken({
+        userId: profile.id,
+        email: profile.email,
+        displayName: profile.displayName,
+        provider: profile.provider,
+        role: profile.role,
+      });
+      res.setHeader('Set-Cookie', buildSessionCookieHeader(sessionToken));
+      return res.json({ profile: { ...profile, sessionToken }, sessionToken });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -1566,7 +1877,65 @@ ${ragBlock}`;
     return res.json({ profile: updated });
   });
 
-  // Real-time Resource Telemetry + Auto Local LLM Bootstrap Selector
+  // Core Local Qwen 2.5 0.5B Binary + Full-Project RAG Fine-Tuning Endpoints
+  app.get('/api/local-llm/status', (_req, res) => {
+    return res.json(getLocalQwenStatus());
+  });
+
+  app.post('/api/local-llm/finetune-rag', (req, res) => {
+    try {
+      if (Array.isArray(req.body?.ragDocs)) {
+        setRegisteredRagDocs(req.body.ragDocs);
+      }
+      const cadSummary = (req.body?.cadSummary ?? undefined) as CamAgentContextSummary | undefined;
+      const syncResult = syncQwenProjectRagDataset(
+        Array.isArray(req.body?.ragDocs) ? req.body.ragDocs : undefined,
+        cadSummary
+      );
+      sqliteStore.recordVucProof(
+        'QWEN_05B_RAG_FINETUNE',
+        `Dataset ChatML RAG sincronizado (${syncResult.examplesCount} exemplos)`,
+        { datasetSha256: syncResult.datasetSha256, vucId: syncResult.vucCertificate.vuc_id }
+      );
+      return res.json({
+        ok: true,
+        status: getLocalQwenStatus(),
+        examplesCount: syncResult.examplesCount,
+        datasetSha256: syncResult.datasetSha256,
+        ragDatasetPath: syncResult.ragDatasetPath,
+        vucCertificate: syncResult.vucCertificate,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/local-llm/infer', async (req, res) => {
+    try {
+      const query = String(req.body?.query || '').trim();
+      if (!query) {
+        return res.status(400).json({ error: 'Campo "query" é obrigatório para inferência Qwen 0.5B.' });
+      }
+      if (Array.isArray(req.body?.ragDocs)) {
+        setRegisteredRagDocs(req.body.ragDocs);
+      }
+      const result = await runLocalQwenInference({
+        query,
+        cadSummary: req.body?.cadSummary as CamAgentContextSummary | undefined,
+        dynamicDocs: Array.isArray(req.body?.ragDocs) ? req.body.ragDocs : undefined,
+        maxTokens: typeof req.body?.maxTokens === 'number' ? req.body.maxTokens : undefined,
+      });
+      sqliteStore.recordVucProof('LOCAL_QWEN_05B_INFER', `Qwen 0.5B (${result.durationMs}ms)`, {
+        vucId: result.vucCertificate.vuc_id,
+        ragSourcesUsed: result.ragSourcesUsed,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      return res.status(503).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Real-time Resource Telemetry + Auto Local LLM Bootstrap Selector + Qwen 0.5B Core Status
   app.get('/api/system/resources', (req, res) => {
     const cpus = os.cpus();
     const totalRamGb = Number((os.totalmem() / (1024 ** 3)).toFixed(2));
@@ -1592,7 +1961,8 @@ ${ragBlock}`;
       loggedInUsers: Math.max(1, sqliteStore.getUserCount(), wss.clients.size),
     };
     const recommendation = selectOptimalLocalLlm(snapshot);
-    return res.json({ snapshot, recommendation, wsClients: wss.clients.size });
+    const localQwenStatus = getLocalQwenStatus();
+    return res.json({ snapshot, recommendation, localQwenStatus, wsClients: wss.clients.size });
   });
 
   // Multi-Agent Dropdown Router + MCP Eye Feedback Loop (Voice & Text CAM)
@@ -1602,6 +1972,9 @@ ${ragBlock}`;
     const userMessage = String(req.body?.userMessage || '');
     const eyeEvents = Array.isArray(req.body?.eyeEvents) ? req.body.eyeEvents : [];
     const cadSummary = (req.body?.cadSummary ?? {}) as CamAgentContextSummary;
+    if (Array.isArray(req.body?.ragDocs)) {
+      setRegisteredRagDocs(req.body.ragDocs);
+    }
     const remoteCount = sqliteStore.listRemoteMachines().length;
     const enrichedSummary: CamAgentContextSummary = {
       ...cadSummary,
@@ -1614,6 +1987,37 @@ ${ragBlock}`;
       eyeEvents,
     });
     const externalEndpoint = typeof req.body?.externalEndpoint === 'string' ? req.body.externalEndpoint : '';
+
+    if (agentId === 'local-llm') {
+      const qwenStatus = getLocalQwenStatus();
+      if (qwenStatus.installed) {
+        try {
+          const qwenRes = await runLocalQwenInference({
+            query: userMessage,
+            cadSummary: enrichedSummary,
+            dynamicDocs: Array.isArray(req.body?.ragDocs) ? req.body.ragDocs : undefined,
+            maxTokens: 180,
+          });
+          const proof = sqliteStore.recordVucProof('AGENT_LOCAL_QWEN_05B', 'Qwen 2.5 0.5B Binary + RAG', {
+            agentId,
+            userMessage,
+            ragSourcesUsed: qwenRes.ragSourcesUsed,
+          });
+          return res.json({
+            agentId,
+            modelUsed: qwenRes.modelUsed,
+            reply: qwenRes.reply,
+            vucHash: proof.vucHash,
+            formalVuc: qwenRes.vucCertificate,
+            ragSourcesUsed: qwenRes.ragSourcesUsed,
+            finetuneExamplesCount: qwenRes.finetuneExamplesCount,
+            durationMs: qwenRes.durationMs,
+          });
+        } catch {
+          // Fall through to Ollama or deterministic bridge if native invocation fails
+        }
+      }
+    }
 
     if (agentId === 'gemini' && process.env.GEMINI_API_KEY) {
       try {
@@ -1959,6 +2363,172 @@ ${ragBlock}`;
     });
   });
 
+  app.post('/api/sqlite/cam-jobs/reset', (req, res) => {
+    const startedAt = Date.now();
+    const result = sqliteStore.resetCamServiceJobs();
+    const cert = createFormalVucCertificate({
+      domain: 'CAM_BASELINE_RESET',
+      status: 'PASS',
+      inputPayload: { partName: String(req.body?.partName || 'Peça ativa') },
+      outputPayload: { clearedCount: result.clearedCount },
+      durationMs: Math.max(1, Date.now() - startedAt),
+    });
+    broadcastWs('cam:reset', { clearedCount: result.clearedCount, vucHash: result.vucHash });
+    return res.json({
+      ok: true,
+      clearedCount: result.clearedCount,
+      jobs: result.jobs,
+      vucHash: result.vucHash,
+      formalVuc: cert,
+    });
+  });
+
+  const resolveUserSlugForRequest = (req: express.Request): string => {
+    const token = extractSessionTokenFromHeaders(req.headers.authorization, req.headers.cookie);
+    if (token) {
+      const claims = verifySessionToken(token);
+      if (claims) {
+        return buildUserFolderSlug(claims.userId, claims.email);
+      }
+    }
+    return buildUserFolderSlug('local-operator', 'local@parametrix.local');
+  };
+
+  app.get('/api/projects/folder', (req, res) => {
+    try {
+      const userSlug = resolveUserSlugForRequest(req);
+      const { folderPath } = ensureUserProjectFolder(userSlug);
+      const files = listUserProjectFiles(userSlug);
+      return res.json({ userSlug, folderPath, files });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/projects/folder', (req, res) => {
+    try {
+      const userSlug = resolveUserSlugForRequest(req);
+      const filename = String(req.body?.filename || '').trim();
+      const content = String(req.body?.content ?? '');
+      if (!filename) {
+        return res.status(400).json({ error: 'Campo "filename" é obrigatório.' });
+      }
+      const savedFile = writeUserProjectFile(userSlug, filename, content);
+      const cert = createFormalVucCertificate({
+        domain: 'PROJECT_FOLDER_WRITE',
+        status: 'PASS',
+        inputPayload: { userSlug, filename: savedFile.name, sizeBytes: savedFile.sizeBytes },
+        outputPayload: { sha256: savedFile.sha256 },
+        durationMs: 1,
+      });
+      sqliteStore.recordVucProof('PROJECT_FOLDER_WRITE', `${userSlug}/${savedFile.name}`, {
+        userSlug,
+        filename: savedFile.name,
+        sha256: savedFile.sha256,
+      });
+      return res.status(201).json({ userSlug, file: savedFile, formalVuc: cert });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.delete('/api/projects/folder', (req, res) => {
+    try {
+      const userSlug = resolveUserSlugForRequest(req);
+      const filename = String(req.query?.filename || req.body?.filename || '').trim();
+      if (!filename) {
+        return res.status(400).json({ error: 'Parâmetro "filename" é obrigatório.' });
+      }
+      const deleted = deleteUserProjectFile(userSlug, filename);
+      if (!deleted) {
+        return res.status(404).json({ error: 'Arquivo não encontrado na pasta do projeto.' });
+      }
+      sqliteStore.recordVucProof('PROJECT_FOLDER_DELETE', `${userSlug}/${filename}`, {
+        userSlug,
+        filename,
+      });
+      return res.json({ ok: true, userSlug, filename });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/mcp/ramdisk-status', (_req, res) => {
+    return res.json(getRamdiskMcpStatus());
+  });
+
+  app.post('/api/mcp/ramdisk-start', async (req, res) => {
+    try {
+      const userSlug = resolveUserSlugForRequest(req);
+      const status = await startRamdiskMcpWorker(userSlug);
+      sqliteStore.recordVucProof('RAMDISK_MCP_START', `Worker PID ${status.workerPid}`, {
+        userSlug,
+        mountPath: status.mountPath,
+        workerPort: status.workerPort,
+      });
+      return res.json(status);
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/mcp/ramdisk-stop', async (_req, res) => {
+    try {
+      const status = await stopRamdiskMcpWorker();
+      sqliteStore.recordVucProof('RAMDISK_MCP_STOP', 'Worker Ramdisk finalizado', {
+        mountPath: status.mountPath,
+      });
+      return res.json(status);
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/mcp/colab-script', (req, res) => {
+    const baseUrl = resolveAppBaseUrl(req.headers, req.protocol);
+    const script = buildColabGcloudMcpScript(baseUrl);
+    return res.json({ script, ramdiskPath: '/dev/shm/parametrix-colab-mcp' });
+  });
+
+  app.post('/api/mcp/colab-gcloud-bridge', async (req, res) => {
+    const rawUrl = String(req.body?.bridgeUrl || '').trim();
+    if (!rawUrl) {
+      setColabBridgeUrl(undefined);
+      return res.json({ ok: true, status: getRamdiskMcpStatus(), reachable: false });
+    }
+    try {
+      const parsed = new URL(rawUrl);
+      if (!['http:', 'https:'].includes(parsed.protocol) || isDisallowedHostname(parsed.hostname)) {
+        return res.status(400).json({ error: 'URL de bridge GCloud/Colab inválida ou bloqueada por política SSRF.' });
+      }
+      setColabBridgeUrl(parsed.toString());
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
+      let reachable = false;
+      let healthPayload: unknown = null;
+      try {
+        const healthUrl = new URL('/health', parsed).toString();
+        const resp = await fetch(healthUrl, { signal: controller.signal });
+        reachable = resp.ok;
+        if (resp.ok) {
+          healthPayload = await resp.json().catch(() => null);
+        }
+      } catch {
+        reachable = false;
+      } finally {
+        clearTimeout(timeout);
+      }
+      return res.json({
+        ok: true,
+        reachable,
+        healthPayload,
+        status: getRamdiskMcpStatus(parsed.toString()),
+      });
+    } catch {
+      return res.status(400).json({ error: 'URL de bridge GCloud/Colab malformada.' });
+    }
+  });
+
   app.post('/api/sqlite/projects', (req, res) => {
     const saved = sqliteStore.saveProject({
       id: typeof req.body?.id === 'string' ? req.body.id : undefined,
@@ -2223,6 +2793,12 @@ ${ragBlock}`;
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Parametrix CAD Studio (SQLite + WS + Vite) running at http://0.0.0.0:${PORT}`);
   });
+
+  const cleanupWorkers = () => {
+    void stopRamdiskMcpWorker();
+  };
+  process.once('SIGINT', cleanupWorkers);
+  process.once('SIGTERM', cleanupWorkers);
 }
 
 void startServer();

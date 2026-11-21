@@ -1,0 +1,12 @@
+{
+  "modelId": "qwen2.5-0.5b-instruct-q4",
+  "hfRepo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+  "ggufFile": "models/qwen/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+  "ggufBytes": 491400032,
+  "ggufSha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+  "binaryPath": "models/llama-bin/llama-completion",
+  "binarySha256": "7119bef261611b26f326f7c4da4dc3fdeb7bb28e2faf1ec392bda7b21215ef52",
+  "llamaTag": "b12608",
+  "arch": "x86_64",
+  "installedAt": "2026-11-21T17:36:51Z"
+}

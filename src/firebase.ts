@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { GoogleAuthProvider, getAuth } from 'firebase/auth';
+import { GoogleAuthProvider, OAuthProvider, getAuth } from 'firebase/auth';
 import {
   doc,
   getDocFromServer,
@@ -29,11 +29,21 @@ function createFirestoreInstance(): Firestore {
 export const db = createFirestoreInstance();
 export const auth = getAuth(app);
 
-// End-user Google Sign-In only (NO Google Drive or Google Calendar Workspace scopes)
+// End-user Sign-In Providers + Authorized Google Drive app-created file scope
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
 googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
+
+export const microsoftProvider = new OAuthProvider('microsoft.com');
+microsoftProvider.setCustomParameters({
+  prompt: 'select_account',
+});
+
+export const appleProvider = new OAuthProvider('apple.com');
+appleProvider.addScope('email');
+appleProvider.addScope('name');
 
 export enum OperationType {
   CREATE = 'create',

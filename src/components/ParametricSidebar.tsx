@@ -82,6 +82,7 @@ interface ParametricSidebarProps {
   onUpdateLayerTolerance: (layerName: string, patch: Partial<LayerToleranceSpec>) => void;
   layerComplianceReport: LayerToleranceComplianceReport;
   onRefineNurbsForTolerances: () => void;
+  onResetPartAndProduction?: () => void;
 }
 
 const PRESET_OPTIONS: { id: PresetId; label: string; subtitle: string }[] = [
@@ -137,6 +138,7 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
   onUpdateLayerTolerance,
   layerComplianceReport,
   onRefineNurbsForTolerances,
+  onResetPartAndProduction,
 }) => {
   const [expandedLayerName, setExpandedLayerName] = useState<string | null>(null);
 
@@ -282,6 +284,17 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
           >
             Sincronizar Carga & Critérios com FEA
           </button>
+
+          {onResetPartAndProduction && (
+            <button
+              type="button"
+              onClick={onResetPartAndProduction}
+              className="w-full py-1.5 text-[11px] font-medium bg-rose-500/15 border border-rose-400/40 text-rose-200 hover:bg-rose-500/25 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Resetar Peça & Limpar Base de Produção
+            </button>
+          )}
         </section>
 
         {/* IX Assembly Tree, Explode, Rotate, Object Mask & Per-Component Materials */}
@@ -420,6 +433,14 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
                       {MATERIAL_OPTIONS.find((m) => m.id === activeMat)?.label.split(' ')[0]}
                     </span>
                   </div>
+                  {comp.manufacturingProcess && (
+                    <div className="mt-1 flex items-center justify-between gap-1 text-[9px] font-mono-tabular text-emerald-300/90">
+                      <span className="truncate">{comp.manufacturingProcess.processLabel}</span>
+                      <span className="px-1 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 shrink-0">
+                        {comp.manufacturingProcess.machineType}
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -483,6 +504,26 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
                   });
                 }}
               />
+              {selectedComp.manufacturingProcess && (
+                <div className="pt-2 border-t border-white/10 space-y-1 text-[10px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-emerald-300">
+                      {selectedComp.manufacturingProcess.processLabel}
+                    </span>
+                    <span className="font-mono-tabular text-slate-400">
+                      {selectedComp.manufacturingProcess.toleranceSpec}
+                    </span>
+                  </div>
+                  <div className="text-slate-400 leading-snug">
+                    {selectedComp.manufacturingProcess.rationale}
+                  </div>
+                  <ol className="list-decimal list-inside space-y-0.5 text-slate-300">
+                    {selectedComp.manufacturingProcess.routingSteps.map((step, idx) => (
+                      <li key={idx}>{step}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
           )}
         </section>

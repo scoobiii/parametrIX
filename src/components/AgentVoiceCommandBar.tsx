@@ -51,6 +51,13 @@ interface AgentVoiceCommandBarProps {
   onSelectAgent: (id: AgentProviderId) => void;
   systemResources: SystemResourceSnapshot | null;
   localLlmRec: LocalLlmRecommendation | null;
+  localQwenStatus?: {
+    installed: boolean;
+    ragExamplesCount: number;
+    ready: boolean;
+    modelSizeBytes?: number;
+  } | null;
+  onSyncQwenRag?: () => Promise<string>;
   mcpEyeEvents: McpEyeEvent[];
   onSendAgentPrompt: (prompt: string, externalEndpoint: string, modelId?: string) => Promise<string>;
   onVoiceTranscript: (transcript: string) => VoiceActionIntent;
@@ -65,6 +72,8 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
   onSelectAgent,
   systemResources,
   localLlmRec,
+  localQwenStatus,
+  onSyncQwenRag,
   mcpEyeEvents,
   onSendAgentPrompt,
   onVoiceTranscript,
@@ -81,6 +90,7 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
   const [promptDraft, setPromptDraft] = useState('');
   const [agentReply, setAgentReply] = useState<string | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
+  const [ragSyncBusy, setRagSyncBusy] = useState(false);
   const [agentCredentials, setAgentCredentials] = useState<
     Record<string, { loginEmail: string; endpointUrl: string }>
   >({});
@@ -236,6 +246,11 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
                 Local Auto: {localLlmRec.modelId} · RAM {systemResources.freeRamGb}GB ·{' '}
                 {systemResources.cpuCores}c · {systemResources.loggedInUsers}u
               </span>
+              {localQwenStatus && (
+                <span className={localQwenStatus.installed ? 'text-sky-300' : 'text-amber-300'}>
+                  · Qwen 0.5B {localQwenStatus.installed ? 'Core OK' : 'Pendente'} ({localQwenStatus.ragExamplesCount} RAG)
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -336,6 +351,10 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
               <div className="flex flex-wrap gap-1.5">
                 {[
                   { label: 'Reiniciar CAM', cmd: 'reiniciar cam' },
+                  { label: 'Resetar Peça', cmd: 'resetar peça e limpar base' },
+                  { label: 'Rhino ExtrudeCrv', cmd: 'ExtrudeCrv 16mm' },
+                  { label: 'Rhino FilletEdge', cmd: 'FilletEdge r=3' },
+                  { label: 'Rhino ArrayPolar', cmd: 'ArrayPolar 6' },
                   { label: 'Pó Metálico LPBF', cmd: 'modo po metalico' },
                   { label: 'Resina SLA', cmd: 'modo resina' },
                   { label: 'Cold-Plate DC', cmd: 'coldplate' },
@@ -420,10 +439,38 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
             />
           </div>
           {localLlmRec && (
-            <div className="text-[11px] text-emerald-300 font-mono-tabular">
-              Bootstrap Hardware Real-Time: {localLlmRec.displayName} ({localLlmRec.quantization} ·{' '}
-              ~{localLlmRec.estimatedRamGb} GB · {localLlmRec.estimatedTokPerSec} tok/s) —{' '}
-              {localLlmRec.rationale}
+            <div className="text-[11px] text-emerald-300 font-mono-tabular space-y-1.5">
+              <div>
+                Bootstrap Hardware Real-Time: {localLlmRec.displayName} ({localLlmRec.quantization} ·{' '}
+                ~{localLlmRec.estimatedRamGb} GB · {localLlmRec.estimatedTokPerSec} tok/s) —{' '}
+                {localLlmRec.rationale}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-white/10">
+                <span className="text-sky-300">
+                  Core Qwen 0.5B Binário:{' '}
+                  {localQwenStatus?.installed
+                    ? `Instalado (${Math.round((localQwenStatus.modelSizeBytes || 0) / (1024 * 1024))} MB GGUF) · ${localQwenStatus.ragExamplesCount} exemplos SFT/RAG`
+                    : 'Aguardando instalação em models/qwen'}
+                </span>
+                {onSyncQwenRag && (
+                  <button
+                    type="button"
+                    disabled={ragSyncBusy}
+                    onClick={() => {
+                      setRagSyncBusy(true);
+                      void onSyncQwenRag()
+                        .then((msg) => {
+                          setAgentReply(msg);
+                          speakFeedback(msg);
+                        })
+                        .finally(() => setRagSyncBusy(false));
+                    }}
+                    className="px-2.5 py-1 rounded bg-sky-500/20 border border-sky-400/50 text-sky-200 hover:bg-sky-500/30 disabled:opacity-50 cursor-pointer"
+                  >
+                    {ragSyncBusy ? 'Treinando RAG...' : 'Ensinar / Sync RAG 100% (Qwen 0.5B)'}
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

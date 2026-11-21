@@ -299,6 +299,27 @@ export interface CadPlugin {
   lastError?: string;
 }
 
+export interface ComponentProcessPlan {
+  processCategory:
+    | 'usinagem-cnc'
+    | 'forjamento-cnc'
+    | 'fundicao-cnc'
+    | 'estiramento-anodizacao'
+    | 'torneamento-cnc'
+    | 'estampagem-laser'
+    | 'soldagem-robotica'
+    | 'aditiva-lpbf'
+    | 'aditiva-sla'
+    | 'moldagem-polimero';
+  processLabel: string;
+  machineType: MachineType;
+  routingSteps: string[];
+  toleranceSpec: string;
+  fixtureNotes: string;
+  isAdditive: boolean;
+  materialLabel: string;
+}
+
 export interface CadComponentPart {
   id: string;
   name: string;
@@ -306,6 +327,7 @@ export interface CadComponentPart {
   subFamily: string;
   maskColorHex: string;
   inferredMaterial: MaterialFinish;
+  manufacturingProcess?: ComponentProcessPlan;
   center: [number, number, number];
   size: [number, number, number];
   positions?: Float32Array;
@@ -512,7 +534,27 @@ export type MagicPenOperationKind =
   | 'through-hole'
   | 'threaded-bolt'
   | 'rib-boss'
-  | 'chamfer-fillet';
+  | 'chamfer-fillet'
+  | 'rhino-extrude-crv'
+  | 'rhino-revolve'
+  | 'rhino-loft'
+  | 'rhino-sweep1'
+  | 'rhino-sweep2'
+  | 'rhino-pipe'
+  | 'rhino-fillet-edge'
+  | 'rhino-chamfer-edge'
+  | 'rhino-boolean-union'
+  | 'rhino-boolean-diff'
+  | 'rhino-boolean-intersect'
+  | 'rhino-shell'
+  | 'rhino-offset-srf'
+  | 'rhino-mirror'
+  | 'rhino-array-polar'
+  | 'rhino-array-linear'
+  | 'rhino-bend'
+  | 'rhino-twist'
+  | 'rhino-taper'
+  | 'rhino-flow-along-srf';
 
 export type IsoThreadSpec = 'M3' | 'M4' | 'M5' | 'M6' | 'M8' | 'M10' | 'M12';
 
@@ -533,6 +575,12 @@ export interface CadFeatureOperation {
   slotProfile?: 'rectangular' | 'oblong';
   materialFinish?: MaterialFinish;
   mcpCommand?: string;
+  rhinoCommand?: string;
+  count?: number;
+  angleDeg?: number;
+  axis?: 'x' | 'y' | 'z';
+  wallThicknessMm?: number;
+  radiusMm?: number;
   createdAt: string;
 }
 
@@ -961,6 +1009,8 @@ export interface VoiceActionIntent {
     | 'export-stl'
     | 'select-agent'
     | 'toggle-explode'
+    | 'rhino-command'
+    | 'reset-part'
     | 'unknown';
   param?: string;
   feedbackText: string;
@@ -1057,4 +1107,44 @@ export interface FrostbiteDatacenterState {
   liquidCooling: LiquidCoolingLoopTelemetry;
   humanoidCrew: HumanoidMaintenanceRobot[];
   vucProof: VucExecutionProof;
+}
+
+export interface LocalProjectFolderFile {
+  name: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  relativePath: string;
+}
+
+export interface GoogleDriveFolderFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+}
+
+export interface GoogleDriveFolderInfo {
+  folderId: string;
+  folderName: string;
+  webViewLink?: string;
+  files: GoogleDriveFolderFile[];
+}
+
+export interface RamdiskMcpStatus {
+  tmpfsAvailable: boolean;
+  shmPath: string;
+  workspaceDir: string;
+  shmTotalMb: number;
+  shmFreeMb: number;
+  workerRunning: boolean;
+  workerPid: number | null;
+  workerPort: number | null;
+  workerUrl: string | null;
+  startedAt: string | null;
+  lastError: string | null;
+  colabBridgeUrl: string | null;
+  colabBridgeHealthy: boolean;
+  colabBridgeDetails?: string | null;
 }

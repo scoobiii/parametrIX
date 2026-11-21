@@ -21,6 +21,7 @@ import type {
   ViewportDisplayState,
 } from '../types/cad';
 import { ISO_METRIC_THREADS } from './scoobiiiVuc';
+import { RHINO_COMMAND_CATALOG, parseRhinoCommandPrompt } from './rhinoGeometryEngine';
 import type { OptimizationObjective } from './structuralFea';
 
 const ALL_SEGMENTS: ApplicationSegment[] = [
@@ -368,33 +369,74 @@ export const MCP_TOOLS_CATALOG: McpToolDefinition[] = [
     category: 'Geometria',
     segments: ALL_SEGMENTS,
     description:
-      'Aplica operação geométrica paramétrica da Caneta Mágica em ponto/área 3D: recorte/rasgo (slot-cutout), furo (through-hole), parafuso com rosca métrica ISO (threaded-bolt M3..M12), nervura/ressalto (rib-boss) ou chanfro (chamfer-fillet).',
+      'Aplica operação geométrica paramétrica da Caneta Mágica ou comando Rhinoceros 3D em ponto/área: slot-cutout, through-hole, threaded-bolt, rib-boss, chamfer-fillet ou qualquer comando rhino-* (ExtrudeCrv, Revolve, Loft, Sweep1/2, Pipe, FilletEdge, ChamferEdge, BooleanUnion/Diff/Intersect, Shell, OffsetSrf, Mirror, ArrayPolar/Linear, Bend, Twist, Taper, FlowAlongSrf).',
     inputSchema: {
       type: 'object',
       required: ['kind'],
       properties: {
         kind: {
           type: 'string',
-          enum: ['slot-cutout', 'through-hole', 'threaded-bolt', 'rib-boss', 'chamfer-fillet'],
+          enum: [
+            'slot-cutout',
+            'through-hole',
+            'threaded-bolt',
+            'rib-boss',
+            'chamfer-fillet',
+            ...RHINO_COMMAND_CATALOG.map((c) => c.kind),
+          ],
         },
         point: { type: 'array', items: { type: 'number' }, description: 'Coordenada [x, y, z] em mm.' },
         normal: { type: 'array', items: { type: 'number' }, description: 'Vetor normal [nx, ny, nz].' },
         targetComponentId: { type: 'string' },
-        widthMm: { type: 'number', minimum: 2, maximum: 120 },
-        lengthMm: { type: 'number', minimum: 2, maximum: 180 },
-        diameterMm: { type: 'number', minimum: 2, maximum: 60 },
-        depthMm: { type: 'number', minimum: 1, maximum: 80 },
+        widthMm: { type: 'number', minimum: 2, maximum: 160 },
+        lengthMm: { type: 'number', minimum: 2, maximum: 220 },
+        diameterMm: { type: 'number', minimum: 2, maximum: 120 },
+        depthMm: { type: 'number', minimum: 1, maximum: 160 },
+        radiusMm: { type: 'number', minimum: 0.5, maximum: 80 },
+        wallThicknessMm: { type: 'number', minimum: 0.5, maximum: 30 },
+        angleDeg: { type: 'number', minimum: 1, maximum: 360 },
+        count: { type: 'number', minimum: 2, maximum: 24 },
+        axis: { type: 'string', enum: ['x', 'y', 'z'] },
+        rhinoCommand: { type: 'string' },
         threadSpec: { type: 'string', enum: ['M3', 'M4', 'M5', 'M6', 'M8', 'M10', 'M12'] },
         headStyle: { type: 'string', enum: ['allen', 'hex'] },
         slotProfile: { type: 'string', enum: ['rectangular', 'oblong'] },
       },
     },
     exampleArgs: {
-      kind: 'threaded-bolt',
-      threadSpec: 'M8',
-      depthMm: 20,
-      headStyle: 'allen',
+      kind: 'rhino-extrude-crv',
+      depthMm: 18,
+      widthMm: 22,
     },
+  },
+  {
+    name: 'cad_rhino_command',
+    category: 'Geometria',
+    segments: ALL_SEGMENTS,
+    description:
+      'Executa comando de modelagem Rhinoceros em linguagem natural ou sintaxe Rhino (ex: "ExtrudeCrv 18mm", "Revolve 360", "Loft", "Sweep1", "Pipe r=6", "FilletEdge 3mm", "BooleanDifference 14mm", "Shell t=2.5mm", "ArrayPolar 6", "Twist 45deg").',
+    inputSchema: {
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: { type: 'string' },
+        point: { type: 'array', items: { type: 'number' } },
+        normal: { type: 'array', items: { type: 'number' } },
+        targetComponentId: { type: 'string' },
+      },
+    },
+    exampleArgs: {
+      command: 'ExtrudeCrv 18mm',
+    },
+  },
+  {
+    name: 'cad_reset_part_baseline',
+    category: 'Sessão',
+    segments: ALL_SEGMENTS,
+    description:
+      'Reseta a peça ativa, limpa features da Caneta Mágica/Rhino, restaura materiais e baseline FEA/produção do zero.',
+    inputSchema: { type: 'object', properties: {} },
+    exampleArgs: {},
   },
   {
     name: 'cad_get_scoobiii_vuc_proof',
@@ -452,6 +494,7 @@ export interface McpRuntimeContext {
     scope?: 'assembly' | 'isolated'
   ) => string;
   onRegisterAndRunPlugin: (name: string, code: string) => void;
+  onResetPartBaseline?: () => void;
 }
 
 export function executeMcpToolCall(
@@ -766,7 +809,7 @@ export function executeMcpToolCall(
         registeredPlugin: name,
         executed: true,
       };
-    } else if (toolName === 'cad_magic_pen_feature') {
+    } else if (toolName === 'cad_magic_pen_feature' || toolName === 'cad_magic_pen_operation') {
       const kind = String(args.kind ?? 'slot-cutout') as MagicPenOperationKind;
       const rawPt = Array.isArray(args.point) ? args.point.map(Number) : null;
       const rawNorm = Array.isArray(args.normal) ? args.normal.map(Number) : null;
@@ -788,20 +831,41 @@ export function executeMcpToolCall(
         ? args.threadSpec.toUpperCase()
         : 'M6') as IsoThreadSpec;
       const threadDef = ISO_METRIC_THREADS[threadSpec] ?? ISO_METRIC_THREADS.M6;
-      const widthMm = Number(args.widthMm ?? (kind === 'slot-cutout' ? 12 : threadDef.headDiameterMm));
-      const lengthMm = Number(args.lengthMm ?? (kind === 'slot-cutout' ? 28 : widthMm));
-      const diameterMm = Number(args.diameterMm ?? (kind === 'threaded-bolt' ? threadDef.nominalDiameterMm : 12));
-      const depthMm = Number(args.depthMm ?? (kind === 'threaded-bolt' ? 16 : 8));
+      const rhinoEntry = RHINO_COMMAND_CATALOG.find((c) => c.kind === kind);
+      const widthMm = Number(
+        args.widthMm ??
+          rhinoEntry?.defaultParams.widthMm ??
+          (kind === 'slot-cutout' ? 12 : threadDef.headDiameterMm)
+      );
+      const lengthMm = Number(
+        args.lengthMm ??
+          rhinoEntry?.defaultParams.lengthMm ??
+          (kind === 'slot-cutout' ? 28 : widthMm)
+      );
+      const diameterMm = Number(
+        args.diameterMm ??
+          rhinoEntry?.defaultParams.diameterMm ??
+          (kind === 'threaded-bolt' ? threadDef.nominalDiameterMm : 12)
+      );
+      const depthMm = Number(
+        args.depthMm ??
+          rhinoEntry?.defaultParams.depthMm ??
+          (kind === 'threaded-bolt' ? 16 : 8)
+      );
       const label =
-        kind === 'threaded-bolt'
-          ? `Parafuso ${threadDef.spec}×${threadDef.pitchMm} (L=${depthMm}mm)`
-          : kind === 'slot-cutout'
-            ? `Rasgo Paramétrico ${widthMm}×${lengthMm}mm`
-            : kind === 'through-hole'
-              ? `Furo Ø${diameterMm}mm`
-              : kind === 'rib-boss'
-                ? `Nervura/Ressalto ${widthMm}×${lengthMm}mm`
-                : `Chanfro/Filete ${widthMm}mm`;
+        typeof args.label === 'string' && args.label.trim()
+          ? args.label.trim()
+          : rhinoEntry
+            ? `Rhino ${rhinoEntry.command} (${depthMm}mm)`
+            : kind === 'threaded-bolt'
+              ? `Parafuso ${threadDef.spec}×${threadDef.pitchMm} (L=${depthMm}mm)`
+              : kind === 'slot-cutout'
+                ? `Rasgo Paramétrico ${widthMm}×${lengthMm}mm`
+                : kind === 'through-hole'
+                  ? `Furo Ø${diameterMm}mm`
+                  : kind === 'rib-boss'
+                    ? `Nervura/Ressalto ${widthMm}×${lengthMm}mm`
+                    : `Chanfro/Filete ${widthMm}mm`;
 
       const created = ctx.onAddFeatureOp({
         kind,
@@ -817,11 +881,81 @@ export function executeMcpToolCall(
         threadPitchMm: kind === 'threaded-bolt' ? threadDef.pitchMm : undefined,
         headStyle: args.headStyle === 'hex' ? 'hex' : 'allen',
         slotProfile: args.slotProfile === 'oblong' ? 'oblong' : 'rectangular',
+        rhinoCommand: typeof args.rhinoCommand === 'string' ? args.rhinoCommand : rhinoEntry?.command,
+        count: typeof args.count === 'number' ? args.count : rhinoEntry?.defaultParams.count,
+        angleDeg: typeof args.angleDeg === 'number' ? args.angleDeg : rhinoEntry?.defaultParams.angleDeg,
+        axis:
+          args.axis === 'x' || args.axis === 'y' || args.axis === 'z'
+            ? args.axis
+            : rhinoEntry?.defaultParams.axis,
+        wallThicknessMm:
+          typeof args.wallThicknessMm === 'number'
+            ? args.wallThicknessMm
+            : rhinoEntry?.defaultParams.wallThicknessMm,
+        radiusMm:
+          typeof args.radiusMm === 'number' ? args.radiusMm : rhinoEntry?.defaultParams.radiusMm,
       });
       resultPayload = {
         appliedFeature: created,
         totalFeaturesCount: ctx.featureOps.length + 1,
         status: `${label} aplicado na geometria 3D e acoplado ao cálculo FEA / SCOOBIII-VUC.`,
+      };
+    } else if (toolName === 'cad_rhino_command') {
+      const cmdText = String(args.command ?? '').trim();
+      const parsed = parseRhinoCommandPrompt(cmdText);
+      if (!parsed.matched || !parsed.kind) {
+        throw new Error(`Comando Rhinoceros não reconhecido: "${cmdText}".`);
+      }
+      const bbox = ctx.meshData.boundingBox;
+      const rawPt = Array.isArray(args.point) ? args.point.map(Number) : null;
+      const rawNorm = Array.isArray(args.normal) ? args.normal.map(Number) : null;
+      const pt: [number, number, number] =
+        rawPt && rawPt.length >= 3 && rawPt.every(Number.isFinite)
+          ? [rawPt[0], rawPt[1], rawPt[2]]
+          : [(bbox.min[0] + bbox.max[0]) * 0.5, bbox.max[1], (bbox.min[2] + bbox.max[2]) * 0.5];
+      const norm: [number, number, number] =
+        rawNorm && rawNorm.length >= 3 && rawNorm.every(Number.isFinite)
+          ? [rawNorm[0], rawNorm[1], rawNorm[2]]
+          : [0, 1, 0];
+      const created = ctx.onAddFeatureOp({
+        kind: parsed.kind,
+        label: parsed.label!,
+        targetComponentId: String(args.targetComponentId ?? ctx.display.selectedComponentId ?? 'shell'),
+        point: pt,
+        normal: norm,
+        widthMm: parsed.widthMm!,
+        lengthMm: parsed.lengthMm!,
+        diameterMm: parsed.diameterMm!,
+        depthMm: parsed.depthMm!,
+        rhinoCommand: parsed.rhinoCommand,
+        count: parsed.count,
+        angleDeg: parsed.angleDeg,
+        axis: parsed.axis,
+        wallThicknessMm: parsed.wallThicknessMm,
+        radiusMm: parsed.radiusMm,
+        mcpCommand: cmdText,
+      });
+      resultPayload = {
+        appliedFeature: created,
+        rhinoCommand: parsed.rhinoCommand,
+        totalFeaturesCount: ctx.featureOps.length + 1,
+        status: `${parsed.label} aplicado na cena 3D via motor Rhino MCP.`,
+      };
+    } else if (toolName === 'cad_reset_part_baseline') {
+      if (ctx.onResetPartBaseline) {
+        ctx.onResetPartBaseline();
+      } else {
+        ctx.onUpdateDisplay({
+          isolationTarget: 'all',
+          selectedComponentId: null,
+          componentMaterials: {},
+          componentRotations: {},
+          hiddenComponentIds: [],
+        });
+      }
+      resultPayload = {
+        reset: true,
+        status: 'Peça resetada e base de produção limpa (features, materiais locais e baseline FEA).',
       };
     } else if (toolName === 'cad_get_scoobiii_vuc_proof') {
       resultPayload = ctx.scoobiiiProof;

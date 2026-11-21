@@ -174,6 +174,24 @@ export function computeFeatureVolumeAndKt(
       const h = Math.max(2, op.depthMm);
       addedMm3 += w * l * h * 0.72;
       stiffnessBoost *= 1.08;
+    } else if (
+      op.kind === 'rhino-boolean-diff' ||
+      op.kind === 'rhino-shell' ||
+      op.kind === 'rhino-fillet-edge' ||
+      op.kind === 'rhino-chamfer-edge'
+    ) {
+      const w = Math.max(2, op.widthMm);
+      const l = Math.max(4, op.lengthMm);
+      const d = Math.max(1, op.depthMm);
+      removedMm3 += w * l * d * 0.45;
+      stiffnessBoost *= 1.02;
+    } else if (op.kind.startsWith('rhino-')) {
+      const w = Math.max(2, op.widthMm);
+      const l = Math.max(4, op.lengthMm);
+      const d = Math.max(1, op.depthMm);
+      const mult = op.count ? Math.min(8, Math.max(1, op.count)) : 1;
+      addedMm3 += w * l * d * 0.55 * mult;
+      stiffnessBoost *= 1.04;
     }
   }
 

@@ -1,5 +1,22 @@
-import React, { useState } from 'react';
-import { Box, Download, Eye, FileCode2, FolderOpen, Layers, Loader2, Trash2 } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Box,
+  Cloud,
+  Copy,
+  Cpu,
+  Download,
+  Eye,
+  FileCode2,
+  FolderOpen,
+  HardDrive,
+  Layers,
+  Loader2,
+  Play,
+  RefreshCw,
+  Save,
+  Square,
+  Trash2,
+} from 'lucide-react';
 import {
   SAMPLE_CAD_FILES,
   buildIsolatedEvaluatedMesh,
@@ -17,10 +34,22 @@ import {
   triggerBlobDownload,
 } from '../kernel/cadFormats';
 import { convertImageToCadModel, isRasterImageFilename } from '../kernel/imageToCad';
+import {
+  deleteDriveFile,
+  ensureUserDriveProjectFolder,
+  listDriveProjectFiles,
+  saveFileToDriveFolder,
+} from '../services/googleDriveProjects';
 import type {
+  CamSettings,
   EvaluatedMesh,
+  GoogleDriveFolderFile,
+  GoogleDriveFolderInfo,
   ImportedCadModel,
+  LocalProjectFolderFile,
   NurbsSurfaceData,
+  ParametricDesignParams,
+  RamdiskMcpStatus,
   ToolpathResult,
 } from '../types/cad';
 
@@ -34,7 +63,23 @@ interface CadFilesPanelProps {
   onSetImportedModel: (model: ImportedCadModel | null) => void;
   onToggleImportedOverlay: () => void;
   onOpenViewport: () => void;
+  userSlug?: string;
+  googleAccessToken?: string | null;
+  onConnectGoogleDrive?: () => Promise<void>;
+  designParams?: ParametricDesignParams;
+  camSettings?: CamSettings;
+  sessionToken?: string | null;
 }
+
+type ConfirmActionState =
+  | {
+      kind: 'overwrite-drive' | 'delete-drive' | 'delete-local';
+      filename: string;
+      driveFileId?: string;
+      folderId?: string;
+      message: string;
+    }
+  | null;
 
 export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
   surface,
@@ -46,6 +91,12 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
   onSetImportedModel,
   onToggleImportedOverlay,
   onOpenViewport,
+  userSlug = 'local-operator',
+  googleAccessToken = null,
+  onConnectGoogleDrive,
+  designParams,
+  camSettings,
+  sessionToken = null,
 }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -53,6 +104,272 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
   const [exportIsolatedOnly, setExportIsolatedOnly] = useState<boolean>(
     isolationTarget !== 'all'
   );
+  const [localSlug, setLocalSlug] = useState<string>(userSlug);
+  const [localFolderPath, setLocalFolderPath] = useState<string>('');
+  const [localFiles, setLocalFiles] = useState<LocalProjectFolderFile[]>([]);
+  const [folderBusy, setFolderBusy] = useState(false);
+
+  const [driveFolder, setDriveFolder] = useState<GoogleDriveFolderInfo | null>(null);
+  const [driveFiles, setDriveFiles] = useState<GoogleDriveFolderFile[]>([]);
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<ConfirmActionState>(null);
+
+  const [ramdiskStatus, setRamdiskStatus] = useState<RamdiskMcpStatus | null>(null);
+  const [ramdiskBusy, setRamdiskBusy] = useState(false);
+  const [colabBridgeInput, setColabBridgeInput] = useState('');
+  const [colabScriptText, setColabScriptText] = useState<string | null>(null);
+
+  const authHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    if (sessionToken) headers.Authorization = `Bearer ${sessionToken}`;
+    return headers;
+  }, [sessionToken]);
+
+  const refreshLocalFolder = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/projects/folder', {
+        credentials: 'include',
+        headers: authHeaders(),
+      });
+      if (!resp.ok) return;
+      const data = (await resp.json()) as {
+        userSlug: string;
+        folderPath: string;
+        files: LocalProjectFolderFile[];
+      };
+      setLocalSlug(data.userSlug);
+      setLocalFolderPath(data.folderPath);
+      setLocalFiles(data.files ?? []);
+    } catch {
+      // Ignore offline error
+    }
+  }, [authHeaders]);
+
+  const refreshRamdiskStatus = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/mcp/ramdisk-status');
+      if (!resp.ok) return;
+      const st = (await resp.json()) as RamdiskMcpStatus;
+      setRamdiskStatus(st);
+      if (st.colabBridgeUrl) setColabBridgeInput(st.colabBridgeUrl);
+    } catch {
+      // Ignore offline error
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLocalFolder();
+    void refreshRamdiskStatus();
+  }, [refreshLocalFolder, refreshRamdiskStatus]);
+
+  const refreshDriveFolder = useCallback(async () => {
+    if (!googleAccessToken) return;
+    setDriveBusy(true);
+    setErrorMsg(null);
+    try {
+      const folder = await ensureUserDriveProjectFolder(googleAccessToken, localSlug || userSlug);
+      setDriveFolder(folder);
+      const files = await listDriveProjectFiles(googleAccessToken, folder.folderId);
+      setDriveFiles(files);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Falha ao acessar Google Drive.');
+    } finally {
+      setDriveBusy(false);
+    }
+  }, [googleAccessToken, localSlug, userSlug]);
+
+  useEffect(() => {
+    if (googleAccessToken) {
+      void refreshDriveFolder();
+    } else {
+      setDriveFolder(null);
+      setDriveFiles([]);
+    }
+  }, [googleAccessToken, refreshDriveFolder]);
+
+  const buildSnapshotFilename = () =>
+    `${surface.id.replace(/[^a-z0-9_-]/gi, '_')}_${new Date().toISOString().slice(0, 10)}.parametrix.json`;
+
+  const buildSnapshotPayload = () =>
+    JSON.stringify(
+      {
+        savedAt: new Date().toISOString(),
+        userSlug: localSlug,
+        surfaceName: surface.name,
+        designParams,
+        camSettings,
+        importedFilename: importedModel?.filename ?? null,
+        triangleCount: importedModel?.triangleCount ?? meshData.triangleCount,
+      },
+      null,
+      2
+    );
+
+  const handleSaveToLocalFolder = async () => {
+    setFolderBusy(true);
+    setErrorMsg(null);
+    try {
+      const filename = buildSnapshotFilename();
+      const resp = await fetch('/api/projects/folder', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, content: buildSnapshotPayload() }),
+      });
+      const data = (await resp.json()) as { error?: string };
+      if (!resp.ok) throw new Error(data.error || 'Erro ao salvar na pasta do login.');
+      setStatusMsg(`Projeto salvo na pasta local (${localSlug}/${filename}).`);
+      await refreshLocalFolder();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFolderBusy(false);
+    }
+  };
+
+  const handleSaveToDrive = async (confirmedOverwriteFileId?: string) => {
+    if (!googleAccessToken) return;
+    setDriveBusy(true);
+    setErrorMsg(null);
+    try {
+      const folder = driveFolder ?? (await ensureUserDriveProjectFolder(googleAccessToken, localSlug));
+      setDriveFolder(folder);
+      const filename = buildSnapshotFilename();
+      const existing = driveFiles.find((f) => f.name === filename);
+      if (existing && !confirmedOverwriteFileId) {
+        setDriveBusy(false);
+        setConfirmModal({
+          kind: 'overwrite-drive',
+          filename,
+          driveFileId: existing.id,
+          folderId: folder.folderId,
+          message: `O arquivo "${filename}" já existe na sua pasta do Google Drive (${folder.folderName}). Deseja sobrescrevê-lo?`,
+        });
+        return;
+      }
+      await saveFileToDriveFolder(
+        googleAccessToken,
+        folder.folderId,
+        filename,
+        buildSnapshotPayload(),
+        'application/json',
+        confirmedOverwriteFileId
+      );
+      setStatusMsg(`Projeto salvo no Google Drive (${folder.folderName}/${filename}).`);
+      await refreshDriveFolder();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleExecuteConfirmedAction = async () => {
+    if (!confirmModal) return;
+    const action = confirmModal;
+    setConfirmModal(null);
+    if (action.kind === 'overwrite-drive' && action.driveFileId) {
+      await handleSaveToDrive(action.driveFileId);
+    } else if (action.kind === 'delete-drive' && action.driveFileId && googleAccessToken) {
+      setDriveBusy(true);
+      try {
+        await deleteDriveFile(googleAccessToken, action.driveFileId);
+        setStatusMsg(`Arquivo "${action.filename}" removido do Google Drive.`);
+        await refreshDriveFolder();
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      } finally {
+        setDriveBusy(false);
+      }
+    } else if (action.kind === 'delete-local') {
+      setFolderBusy(true);
+      try {
+        const resp = await fetch(`/api/projects/folder?filename=${encodeURIComponent(action.filename)}`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: authHeaders(),
+        });
+        if (!resp.ok) throw new Error('Falha ao excluir arquivo local.');
+        setStatusMsg(`Arquivo local "${action.filename}" excluído.`);
+        await refreshLocalFolder();
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      } finally {
+        setFolderBusy(false);
+      }
+    }
+  };
+
+  const handleStartRamdisk = async () => {
+    setRamdiskBusy(true);
+    setErrorMsg(null);
+    try {
+      const resp = await fetch('/api/mcp/ramdisk-start', {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      });
+      const data = (await resp.json()) as RamdiskMcpStatus & { error?: string };
+      if (!resp.ok) throw new Error(data.error || 'Falha ao iniciar worker MCP no Ramdisk.');
+      setRamdiskStatus(data);
+      setStatusMsg(`Worker MCP ativo em ${data.mountPath} (PID ${data.workerPid}, porta ${data.workerPort}).`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRamdiskBusy(false);
+    }
+  };
+
+  const handleStopRamdisk = async () => {
+    setRamdiskBusy(true);
+    try {
+      const resp = await fetch('/api/mcp/ramdisk-stop', { method: 'POST' });
+      if (resp.ok) {
+        const data = (await resp.json()) as RamdiskMcpStatus;
+        setRamdiskStatus(data);
+        setStatusMsg('Worker MCP Ramdisk encerrado com limpeza de /dev/shm.');
+      }
+    } finally {
+      setRamdiskBusy(false);
+    }
+  };
+
+  const handleFetchColabScript = async () => {
+    const resp = await fetch('/api/mcp/colab-script');
+    if (resp.ok) {
+      const data = (await resp.json()) as { script: string };
+      setColabScriptText(data.script);
+    }
+  };
+
+  const handleConnectColabBridge = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRamdiskBusy(true);
+    setErrorMsg(null);
+    try {
+      const resp = await fetch('/api/mcp/colab-gcloud-bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bridgeUrl: colabBridgeInput.trim() }),
+      });
+      const data = (await resp.json()) as {
+        reachable?: boolean;
+        status?: RamdiskMcpStatus;
+        error?: string;
+      };
+      if (!resp.ok) throw new Error(data.error || 'Erro ao conectar bridge GCloud/Colab.');
+      if (data.status) setRamdiskStatus(data.status);
+      setStatusMsg(
+        data.reachable
+          ? 'Bridge Colab/GCloud FastAPI acessível (/health OK).'
+          : 'URL GCloud/Colab salva no servidor; aguardando worker responder em /health.'
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRamdiskBusy(false);
+    }
+  };
 
   const handleFileImport = async (file: File) => {
     setErrorMsg(null);
@@ -380,7 +697,274 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
             </div>
           </div>
         )}
+
+        {/* Per-Login Project Folders (Local Server + Google Drive) */}
+        <div className="p-4 sm:p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4 min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div>
+                <h3 className="font-display text-sm font-semibold text-slate-100">
+                  Pasta de Projetos do Login ({localSlug})
+                </h3>
+                <p className="text-[11px] text-slate-400 font-mono-tabular break-all">
+                  Local: {localFolderPath || `data/projects/${localSlug}`}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={folderBusy}
+                onClick={() => void handleSaveToLocalFolder()}
+                className="px-3 py-1.5 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Salvar na Pasta Local
+              </button>
+              <button
+                type="button"
+                disabled={folderBusy}
+                onClick={() => void refreshLocalFolder()}
+                className="px-2.5 py-1.5 text-xs border border-white/12 bg-[#0c1017] text-slate-200 hover:text-white rounded-lg flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Atualizar
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Local User Folder List */}
+            <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg space-y-2">
+              <div className="text-xs font-semibold text-slate-200">
+                Arquivos Locais ({localFiles.length})
+              </div>
+              {localFiles.length === 0 ? (
+                <p className="text-[11px] text-slate-500">
+                  Nenhum arquivo salvo ainda na pasta deste usuário.
+                </p>
+              ) : (
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                  {localFiles.map((f) => (
+                    <div
+                      key={f.name}
+                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-[#111620] border border-white/8 rounded text-[11px]"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-slate-100 truncate font-medium">{f.name}</div>
+                        <div className="text-[10px] text-slate-500 font-mono-tabular">
+                          {f.sizeBytes} B · SHA256 {f.sha256.slice(0, 10)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setConfirmModal({
+                            kind: 'delete-local',
+                            filename: f.name,
+                            message: `Excluir o arquivo local "${f.name}" da pasta do usuário?`,
+                          })
+                        }
+                        className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
+                        title="Excluir arquivo local"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Google Drive User Folder List */}
+            <div className="p-3 bg-[#0c1017] border border-sky-500/20 rounded-lg space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-300">
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>Google Drive ({driveFolder?.folderName || `Parametrix_Projects_${localSlug}`})</span>
+                </div>
+                {googleAccessToken ? (
+                  <button
+                    type="button"
+                    disabled={driveBusy}
+                    onClick={() => void handleSaveToDrive()}
+                    className="px-2.5 py-1 text-[11px] font-semibold bg-sky-500 text-slate-950 rounded hover:bg-sky-400 disabled:opacity-50 cursor-pointer"
+                  >
+                    Salvar no Drive
+                  </button>
+                ) : (
+                  onConnectGoogleDrive && (
+                    <button
+                      type="button"
+                      onClick={() => void onConnectGoogleDrive()}
+                      className="px-2.5 py-1 text-[11px] font-semibold bg-sky-500/20 border border-sky-400/50 text-sky-200 rounded hover:bg-sky-500/30 cursor-pointer"
+                    >
+                      Conectar Google Drive
+                    </button>
+                  )
+                )}
+              </div>
+
+              {!googleAccessToken ? (
+                <p className="text-[11px] text-slate-400">
+                  Conecte sua conta Google com permissão Drive para sincronizar sua pasta pessoal na nuvem.
+                </p>
+              ) : driveFiles.length === 0 ? (
+                <p className="text-[11px] text-slate-500">
+                  {driveBusy ? 'Carregando pasta no Google Drive...' : 'Pasta criada no Drive. Salve o projeto atual acima.'}
+                </p>
+              ) : (
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                  {driveFiles.map((df) => (
+                    <div
+                      key={df.id}
+                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-[#111620] border border-white/8 rounded text-[11px]"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-slate-100 truncate font-medium">{df.name}</div>
+                        <div className="text-[10px] text-slate-500 font-mono-tabular">
+                          {df.size ? `${df.size} B` : 'Drive'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setConfirmModal({
+                            kind: 'delete-drive',
+                            filename: df.name,
+                            driveFileId: df.id,
+                            message: `Excluir "${df.name}" da sua pasta no Google Drive?`,
+                          })
+                        }
+                        className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
+                        title="Excluir do Google Drive"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Ephemeral Ramdisk (/dev/shm) & GCloud / Colab MCP Accelerator */}
+        <div className="p-4 sm:p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4 min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-amber-400 shrink-0" />
+              <div>
+                <h3 className="font-display text-sm font-semibold text-slate-100">
+                  Acelerador MCP Temporário (Ramdisk /dev/shm + GCloud / Colab)
+                </h3>
+                <p className="text-[11px] text-slate-400 font-mono-tabular">
+                  {ramdiskStatus
+                    ? `${ramdiskStatus.mountPath} (${ramdiskStatus.available ? `${ramdiskStatus.freeMb}/${ramdiskStatus.totalMb} MB livres` : 'tmpfs fallback'}) · Worker ${ramdiskStatus.workerActive ? `ATIVO PID ${ramdiskStatus.workerPid} · ${ramdiskStatus.workerUrl}` : 'PARADO'}`
+                    : 'Consultando telemetria Ramdisk...'}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {!ramdiskStatus?.workerActive ? (
+                <button
+                  type="button"
+                  disabled={ramdiskBusy}
+                  onClick={() => void handleStartRamdisk()}
+                  className="px-3 py-1.5 text-xs font-semibold bg-amber-400 text-slate-950 rounded-lg hover:bg-amber-300 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  Subir Worker Ramdisk
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={ramdiskBusy}
+                  onClick={() => void handleStopRamdisk()}
+                  className="px-3 py-1.5 text-xs font-semibold bg-rose-500/20 border border-rose-400/50 text-rose-200 rounded-lg hover:bg-rose-500/30 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Square className="w-3.5 h-3.5" />
+                  Parar Worker
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleFetchColabScript()}
+                className="px-3 py-1.5 text-xs border border-sky-400/40 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 rounded-lg cursor-pointer"
+              >
+                Gerar Script Colab / Cloud Run
+              </button>
+            </div>
+          </div>
+
+          <form onSubmit={handleConnectColabBridge} className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="url"
+              value={colabBridgeInput}
+              onChange={(e) => setColabBridgeInput(e.target.value)}
+              placeholder="URL pública do worker GCloud Run / Colab FastAPI (https://...)"
+              className="flex-1 px-3 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 font-mono-tabular"
+            />
+            <button
+              type="submit"
+              disabled={ramdiskBusy}
+              className="px-4 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 disabled:opacity-50 cursor-pointer shrink-0"
+            >
+              Validar / Conectar Bridge GCloud
+            </button>
+          </form>
+
+          {colabScriptText && (
+            <div className="p-3 bg-[#090c11] border border-white/10 rounded-lg space-y-2">
+              <div className="flex items-center justify-between text-[11px] text-slate-300">
+                <span>Script Colab / Cloud Run (FastAPI + CadQuery/OCCT + Qwen 0.5B em /dev/shm)</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(colabScriptText);
+                    setStatusMsg('Script Colab/GCloud copiado para a área de transferência.');
+                  }}
+                  className="px-2 py-0.5 border border-white/15 rounded flex items-center gap-1 hover:text-white cursor-pointer"
+                >
+                  <Copy className="w-3 h-3" /> Copiar
+                </button>
+              </div>
+              <pre className="text-[10px] font-mono-tabular text-emerald-300 overflow-x-auto max-h-40 whitespace-pre-wrap">
+                {colabScriptText}
+              </pre>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Explicit Confirmation Modal for Drive Overwrite / Delete */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md p-5 bg-[#111620] border border-white/15 rounded-xl shadow-2xl space-y-4">
+            <h4 className="font-display text-sm font-semibold text-slate-100">
+              Confirmar Alteração de Arquivo
+            </h4>
+            <p className="text-xs text-slate-300 leading-relaxed">{confirmModal.message}</p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="px-3 py-1.5 text-xs text-slate-300 border border-white/15 rounded-lg hover:text-white cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExecuteConfirmedAction()}
+                className="px-3 py-1.5 text-xs font-semibold bg-rose-500 text-white rounded-lg hover:bg-rose-400 cursor-pointer"
+              >
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

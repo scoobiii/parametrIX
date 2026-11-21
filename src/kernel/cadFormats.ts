@@ -1,5 +1,6 @@
 import {
   classifyComponentFamily,
+  resolveComponentManufacturingProcess,
   resolvePartEngineeringProfile,
 } from './componentClassifier';
 import type {
@@ -57,6 +58,58 @@ export function computeTriangleNormals(positions: Float32Array): Float32Array {
     }
   }
   return normals;
+}
+
+export function computeCreaseNormals(
+  positions: Float32Array,
+  creaseAngleDeg = 42
+): Float32Array {
+  if (positions.length < 9) return new Float32Array(positions.length);
+  const triCount = Math.floor(positions.length / 9);
+  const faceNormals = computeTriangleNormals(positions);
+  const smooth = new Float32Array(positions.length);
+  const cosThreshold = Math.cos((creaseAngleDeg * Math.PI) / 180);
+
+  const vertBuckets = new Map<string, number[]>();
+  for (let t = 0; t < triCount; t++) {
+    for (let c = 0; c < 3; c++) {
+      const vIdx = t * 3 + c;
+      const key = `${Math.round(positions[vIdx * 3] * 100)},${Math.round(positions[vIdx * 3 + 1] * 100)},${Math.round(positions[vIdx * 3 + 2] * 100)}`;
+      let bucket = vertBuckets.get(key);
+      if (!bucket) {
+        bucket = [];
+        vertBuckets.set(key, bucket);
+      }
+      bucket.push(vIdx);
+    }
+  }
+
+  for (let t = 0; t < triCount; t++) {
+    for (let c = 0; c < 3; c++) {
+      const vIdx = t * 3 + c;
+      const baseNx = faceNormals[vIdx * 3];
+      const baseNy = faceNormals[vIdx * 3 + 1];
+      const baseNz = faceNormals[vIdx * 3 + 2];
+      const key = `${Math.round(positions[vIdx * 3] * 100)},${Math.round(positions[vIdx * 3 + 1] * 100)},${Math.round(positions[vIdx * 3 + 2] * 100)}`;
+      const shared = vertBuckets.get(key)!;
+      let sx = 0, sy = 0, sz = 0;
+      for (const otherIdx of shared) {
+        const ox = faceNormals[otherIdx * 3];
+        const oy = faceNormals[otherIdx * 3 + 1];
+        const oz = faceNormals[otherIdx * 3 + 2];
+        if (baseNx * ox + baseNy * oy + baseNz * oz >= cosThreshold) {
+          sx += ox;
+          sy += oy;
+          sz += oz;
+        }
+      }
+      const len = Math.hypot(sx, sy, sz) || 1;
+      smooth[vIdx * 3] = sx / len;
+      smooth[vIdx * 3 + 1] = sy / len;
+      smooth[vIdx * 3 + 2] = sz / len;
+    }
+  }
+  return smooth;
 }
 
 function buildBoxTriangles(
@@ -198,6 +251,7 @@ export function parseSTL(buffer: ArrayBuffer, filename: string): ImportedCadMode
   const bbox = computeBounds(positions);
   const cls = classifyComponentFamily(filename, 0);
   const partName = filename.replace(/\.[^.]+$/, '');
+  const detectedProfile = resolvePartEngineeringProfile({ filename, layers: ['STL_MESH'] });
   const components: CadComponentPart[] = positions.length > 0
     ? [
         {
@@ -207,6 +261,12 @@ export function parseSTL(buffer: ArrayBuffer, filename: string): ImportedCadMode
           subFamily: cls.subFamily,
           maskColorHex: cls.maskColorHex,
           inferredMaterial: cls.inferredMaterial,
+          manufacturingProcess: resolveComponentManufacturingProcess(
+            partName,
+            cls.subFamily,
+            cls.inferredMaterial,
+            detectedProfile.segment
+          ),
           center: [
             (bbox.min[0] + bbox.max[0]) / 2,
             (bbox.min[1] + bbox.max[1]) / 2,
@@ -233,7 +293,7 @@ export function parseSTL(buffer: ArrayBuffer, filename: string): ImportedCadMode
     boundingBox: bbox,
     notes: `Malha STL importada (${Math.floor(positions.length / 9)} triângulos)`,
     components,
-    detectedProfile: resolvePartEngineeringProfile({ filename, layers: ['STL_MESH'] }),
+    detectedProfile,
   };
 }
 
@@ -274,15 +334,16 @@ export function parseOBJ(text: string, filename: string): ImportedCadModel {
   }
 
   const positions = new Float32Array(allPosList);
-  const normals = computeTriangleNormals(positions);
+  const normals = computeCreaseNormals(positions, 44);
   const layers = groupPosMap.size > 0 ? Array.from(groupPosMap.keys()) : ['OBJ_DEFAULT'];
+  const detectedProfile = resolvePartEngineeringProfile({ filename, rawText: text, layers });
 
   const components: CadComponentPart[] = [];
   let cIdx = 0;
   for (const [gName, gCoords] of groupPosMap.entries()) {
     if (gCoords.length === 0) continue;
     const gPos = new Float32Array(gCoords);
-    const gNorm = computeTriangleNormals(gPos);
+    const gNorm = computeCreaseNormals(gPos, 44);
     const gBox = computeBounds(gPos);
     const cls = classifyComponentFamily(gName, cIdx);
     components.push({
@@ -292,6 +353,12 @@ export function parseOBJ(text: string, filename: string): ImportedCadModel {
       subFamily: cls.subFamily,
       maskColorHex: cls.maskColorHex,
       inferredMaterial: cls.inferredMaterial,
+      manufacturingProcess: resolveComponentManufacturingProcess(
+        gName,
+        cls.subFamily,
+        cls.inferredMaterial,
+        detectedProfile.segment
+      ),
       center: [
         (gBox.min[0] + gBox.max[0]) / 2,
         (gBox.min[1] + gBox.max[1]) / 2,
@@ -318,7 +385,7 @@ export function parseOBJ(text: string, filename: string): ImportedCadModel {
     boundingBox: computeBounds(positions),
     notes: `Modelo Wavefront OBJ (${verts.length} vértices, ${components.length} sub-componentes)`,
     components,
-    detectedProfile: resolvePartEngineeringProfile({ filename, rawText: text, layers }),
+    detectedProfile,
   };
 }
 
@@ -764,6 +831,12 @@ export function parseDXF(text: string, filename: string): ImportedCadModel {
       subFamily: cls.subFamily,
       maskColorHex: cls.maskColorHex,
       inferredMaterial: cls.inferredMaterial,
+      manufacturingProcess: resolveComponentManufacturingProcess(
+        `Camada ${lName}`,
+        cls.subFamily,
+        cls.inferredMaterial,
+        'industrial-cnc'
+      ),
       center: [
         (lBox.min[0] + lBox.max[0]) / 2,
         (lBox.min[1] + lBox.max[1]) / 2,
@@ -905,6 +978,11 @@ export function parse3DM(buffer: ArrayBuffer, filename: string): ImportedCadMode
               subFamily: cls.subFamily,
               maskColorHex: cls.maskColorHex,
               inferredMaterial: cls.inferredMaterial,
+              manufacturingProcess: resolveComponentManufacturingProcess(
+                filename.replace(/\.[^.]+$/, ''),
+                cls.family,
+                cls.inferredMaterial
+              ),
               center: [
                 (bbox.min[0] + bbox.max[0]) / 2,
                 (bbox.min[1] + bbox.max[1]) / 2,
@@ -1045,6 +1123,12 @@ function buildModelFromServerMeshes(params: {
       subFamily: cls.subFamily,
       maskColorHex: cls.maskColorHex,
       inferredMaterial: cls.inferredMaterial,
+      manufacturingProcess: resolveComponentManufacturingProcess(
+        m.name,
+        cls.subFamily,
+        cls.inferredMaterial,
+        'industrial-cnc'
+      ),
       center: [
         (cBox.min[0] + cBox.max[0]) / 2,
         (cBox.min[1] + cBox.max[1]) / 2,
@@ -1795,6 +1879,11 @@ export function parseIPT(buffer: ArrayBuffer, filename: string): ImportedCadMode
         subFamily: cls.subFamily,
         maskColorHex: cls.maskColorHex,
         inferredMaterial: cls.inferredMaterial,
+        manufacturingProcess: resolveComponentManufacturingProcess(
+          compName,
+          cls.family,
+          cls.inferredMaterial
+        ),
         center: [
           (bbox.min[0] + bbox.max[0]) / 2,
           (bbox.min[1] + bbox.max[1]) / 2,
@@ -2239,6 +2328,11 @@ export function parseSVGToCad(svgText: string, filename: string): ImportedCadMod
       subFamily: cls.subFamily,
       maskColorHex: cls.maskColorHex,
       inferredMaterial: cls.inferredMaterial,
+      manufacturingProcess: resolveComponentManufacturingProcess(
+        c.name,
+        cls.family,
+        cls.inferredMaterial
+      ),
       center: [
         (pBox.min[0] + pBox.max[0]) / 2,
         (pBox.min[1] + pBox.max[1]) / 2,
@@ -2517,6 +2611,12 @@ export function buildCadModelFromVisionAndPixels(params: {
         subFamily: cls.subFamily,
         maskColorHex: cls.maskColorHex,
         inferredMaterial: sanitizeMat(comp.material, cls.inferredMaterial),
+        manufacturingProcess: resolveComponentManufacturingProcess(
+          comp.name || `Sub-componente ${components.length + 1}`,
+          cls.subFamily,
+          sanitizeMat(comp.material, cls.inferredMaterial),
+          detectedProfile.segment
+        ),
         center: [
           (cBox.min[0] + cBox.max[0]) / 2,
           (cBox.min[1] + cBox.max[1]) / 2,

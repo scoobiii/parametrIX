@@ -9,6 +9,7 @@ coverage/
 data/*.sqlite*
 data/parametrix.db
 data/*.db
+data/projects/
 *.bak
 *.pre-split
 *.pre-ab
@@ -16,3 +17,8 @@ bun.lock
 
 # Local matplotlib/tool caches
 .cache/
+
+# Downloaded local LLM binaries & GGUF weights (installed via npm run llm:install-qwen)
+models/llama-bin/
+models/qwen/*.gguf
+models/*.tar.gz
