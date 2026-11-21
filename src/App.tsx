@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Boxes,
   Cpu,
@@ -26,18 +26,20 @@ import {
 import { AdditiveCamConfigPanel } from './components/AdditiveCamConfigPanel';
 import { AgentVoiceCommandBar } from './components/AgentVoiceCommandBar';
 import { CadFilesPanel } from './components/CadFilesPanel';
-import { CamRoboticsPanel, type CamServiceSubmissionInput } from './components/CamRoboticsPanel';
-import { EcosystemHubPanel, type RemoteMachineConfigInput } from './components/EcosystemHubPanel';
-import { FrostbiteRackDashboard } from './components/FrostbiteRackDashboard';
-import { GrasshopperCanvas } from './components/GrasshopperCanvas';
-import { McpToolsPanel } from './components/McpToolsPanel';
+const CamRoboticsPanel = lazy(() => import('./components/CamRoboticsPanel').then(m => ({ default: m.CamRoboticsPanel })));
+import type { CamServiceSubmissionInput } from './components/CamRoboticsPanel';
+const EcosystemHubPanel = lazy(() => import('./components/EcosystemHubPanel').then(m => ({ default: m.EcosystemHubPanel })));
+import type { RemoteMachineConfigInput } from './components/EcosystemHubPanel';
+const FrostbiteRackDashboard = lazy(() => import('./components/FrostbiteRackDashboard').then(m => ({ default: m.FrostbiteRackDashboard })));
+const GrasshopperCanvas = lazy(() => import('./components/GrasshopperCanvas').then(m => ({ default: m.GrasshopperCanvas })));
+const McpToolsPanel = lazy(() => import('./components/McpToolsPanel').then(m => ({ default: m.McpToolsPanel })));
 import { OfflineAuthModal } from './components/OfflineAuthModal';
 import { OnboardingHelpView } from './components/OnboardingHelpView';
 import { ParametricSidebar } from './components/ParametricSidebar';
-import { PluginsSdkPanel } from './components/PluginsSdkPanel';
+const PluginsSdkPanel = lazy(() => import('./components/PluginsSdkPanel').then(m => ({ default: m.PluginsSdkPanel })));
 import { ProjectWizardModal } from './components/ProjectWizardModal';
 import { ScoobiiiVucModal } from './components/ScoobiiiVucModal';
-import { SustainabilityDashboard } from './components/SustainabilityDashboard';
+const SustainabilityDashboard = lazy(() => import('./components/SustainabilityDashboard').then(m => ({ default: m.SustainabilityDashboard })));
 import { Viewport3D } from './components/Viewport3D';
 import { useAuth } from './contexts/AuthContext';
 import {

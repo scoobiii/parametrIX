@@ -19,8 +19,8 @@ export default defineConfig(() => {
           if (error) {
             return;
           }
-          const distDir = path.resolve(__dirname, 'dist');
-          const srcAssets = path.resolve(__dirname, 'src/assets');
+          const distDir = path.resolve(import.meta.dirname, 'dist');
+          const srcAssets = path.resolve(import.meta.dirname, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
@@ -30,7 +30,25 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
+      },
+    },
+    build: {
+      chunkSizeWarningLimit: 500,
+      rolldownOptions: {
+        output: {
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom'],
+            'vendor-firebase': ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+            'panel-frostbite': ['./src/components/FrostbiteRackDashboard'],
+            'panel-ecosystem': ['./src/components/EcosystemHubPanel'],
+            'panel-cam': ['./src/components/CamRoboticsPanel', './src/components/AdditiveCamConfigPanel'],
+            'panel-grasshopper': ['./src/components/GrasshopperCanvas'],
+            'panel-sustainability': ['./src/components/SustainabilityDashboard'],
+            'kernel-cad': ['./src/kernel/nurbs', './src/kernel/cadFormats', './src/kernel/componentClassifier'],
+            'kernel-cam': ['./src/kernel/camProcessEngine', './src/kernel/camRobotics'],
+          },
+        },
       },
     },
     server: {
