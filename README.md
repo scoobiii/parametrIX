@@ -160,6 +160,21 @@ e `view` (`perspective`, `isometric`, `top`, `front`, `right`...).
 | [`parametrix_presets_viewer.png`](deliverables/viewer/parametrix_presets_viewer.png) | Os 10 presets carregados no viewer |
 
 
+## Vídeo Walkthrough — da API ao CAM
+
+Gravação de tela comentada (6 min 37 s, 1080p, narração pt-BR) mostrando a peça no viewer, o kernel
+`spurGear.ts`, a geração STEP/OpenCASCADE, o processo CAM 3 eixos, os caminhos para pessoa e agente,
+e o que mais o pipeline pode produzir.
+
+| Conteúdo | Arquivo |
+| :--- | :--- |
+| Vídeo completo | [`parametrix_engrenagem_m2_z24_walkthrough.mp4`](deliverables/video/parametrix_engrenagem_m2_z24_walkthrough.mp4) |
+| Capítulos, respostas rápidas e transcrição | [`LEIA-ME.md`](deliverables/video/LEIA-ME.md) |
+| Poster | [`poster.jpg`](deliverables/video/poster.jpg) |
+
+Capítulos: `00:18` peça no viewer · `01:08` API do kernel · `02:03` STEP e validação · `02:58` CAM ·
+`03:49` pessoa no Parametrix · `04:30` agente via API · `05:35` o que mais produzir · `06:14` encerramento.
+
 ## Stack & Arquitetura
 
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS v4, Three.js (`OrbitControls`, `TransformControls`, `RoomEnvironment`), Lucide Icons.
