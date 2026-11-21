@@ -7,6 +7,8 @@ import os from 'os';
 import path from 'path';
 import { GoogleGenAI, Type, type Content, type FunctionDeclaration } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { tunnelGuard } from './src/tunnelGuard';
+import { mcpLimiter, metricsHandler } from './src/mcpLimits';
 import { WebSocketServer, WebSocket } from 'ws';
 import { buildCadLlmBriefing, parseIptWithOle2, parseStepWithOcct } from './serverCadParser';
 import { MCP_TOOLS_CATALOG } from './src/kernel/mcpServer';
@@ -86,7 +88,7 @@ import type {
   RemoteMachineTarget,
 } from './src/types/cad';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const MAX_FETCH_BYTES = 12 * 1024 * 1024;
 const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
 const FALLBACK_GEMINI_MODEL = 'gemini-3.1-flash-lite';
@@ -598,6 +600,9 @@ function getGeminiClient(): GoogleGenAI {
 
 async function startServer() {
   const app = express();
+  app.use(tunnelGuard);
+  app.get('/metrics', metricsHandler);
+  app.post('/api/mcp', mcpLimiter);
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: false }));
 
