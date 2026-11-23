@@ -252,32 +252,53 @@ export function parseRhinoCommandPrompt(rawPrompt: string): ParsedRhinoPromptRes
     | 'y'
     | 'z';
 
+  const radiusDefault =
+    standaloneNum !== undefined &&
+    (hit.kind === 'rhino-pipe' ||
+      hit.kind === 'rhino-fillet-edge' ||
+      hit.kind === 'rhino-chamfer-edge' ||
+      hit.kind === 'rhino-revolve')
+      ? Math.max(1, Math.min(60, standaloneNum))
+      : (spec.defaultParams.radiusMm ?? 6);
   const radiusMm = extractLabeledOrFirstNumber(
     q,
-    /(?:r|raio|radius)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
-    spec.defaultParams.radiusMm ?? (standaloneNum !== undefined ? Math.max(1, Math.min(60, standaloneNum)) : 6),
+    /\b(?:r|raio|radius)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
+    radiusDefault,
     0.5,
     80
   );
+
+  const wallDefault =
+    standaloneNum !== undefined && (hit.kind === 'rhino-shell' || hit.kind === 'rhino-offset-srf')
+      ? Math.max(0.8, Math.min(20, standaloneNum))
+      : (spec.defaultParams.wallThicknessMm ?? 2.5);
   const wallThicknessMm = extractLabeledOrFirstNumber(
     q,
-    /(?:t|espessura|wall|parede)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
-    spec.defaultParams.wallThicknessMm ??
-      (standaloneNum !== undefined ? Math.max(0.8, Math.min(20, standaloneNum)) : 2.5),
+    /\b(?:t|espessura|wall|parede)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
+    wallDefault,
     0.5,
     30
   );
+
+  const angleDefault =
+    standaloneNum !== undefined &&
+    (hit.kind === 'rhino-bend' ||
+      hit.kind === 'rhino-twist' ||
+      hit.kind === 'rhino-taper' ||
+      hit.kind === 'rhino-revolve')
+      ? Math.max(5, Math.min(360, standaloneNum))
+      : (spec.defaultParams.angleDeg ?? 45);
   const angleDeg = extractLabeledOrFirstNumber(
     q,
     /(\d+(?:\.\d+)?)\s*(?:deg|graus|°)/,
-    spec.defaultParams.angleDeg ?? (standaloneNum !== undefined ? Math.max(5, Math.min(360, standaloneNum)) : 45),
+    angleDefault,
     1,
     360
   );
   const count = Math.round(
     extractLabeledOrFirstNumber(
       q,
-      /(?:n|copias|copies|qtd|count)\s*[:=]?\s*(\d+)/,
+      /\b(?:n|copias|copies|qtd|count)\s*[:=]?\s*(\d+)/,
       standaloneNum !== undefined && (hit.kind === 'rhino-array-polar' || hit.kind === 'rhino-array-linear')
         ? Math.max(2, Math.min(24, Math.round(standaloneNum)))
         : (spec.defaultParams.count ?? 4),
@@ -288,7 +309,7 @@ export function parseRhinoCommandPrompt(rawPrompt: string): ParsedRhinoPromptRes
 
   const depthMm = extractLabeledOrFirstNumber(
     q,
-    /(?:h|altura|depth|profundidade)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
+    /\b(?:h|altura|depth|profundidade)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
     standaloneNum !== undefined && (hit.kind === 'rhino-extrude-crv' || hit.kind === 'rhino-loft')
       ? Math.max(2, Math.min(120, standaloneNum))
       : spec.defaultParams.depthMm,
@@ -297,7 +318,7 @@ export function parseRhinoCommandPrompt(rawPrompt: string): ParsedRhinoPromptRes
   );
   const widthMm = extractLabeledOrFirstNumber(
     q,
-    /(?:w|largura|width)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
+    /\b(?:w|largura|width)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
     hit.kind === 'rhino-fillet-edge' || hit.kind === 'rhino-chamfer-edge'
       ? Math.max(2, radiusMm * 2)
       : spec.defaultParams.widthMm,
@@ -306,7 +327,7 @@ export function parseRhinoCommandPrompt(rawPrompt: string): ParsedRhinoPromptRes
   );
   const lengthMm = extractLabeledOrFirstNumber(
     q,
-    /(?:l|comprimento|length)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
+    /\b(?:l|comprimento|length)\s*[:=]?\s*(\d+(?:\.\d+)?)/,
     spec.defaultParams.lengthMm,
     4,
     220

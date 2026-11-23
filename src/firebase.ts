@@ -11,6 +11,10 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
+const NAMED_FIRESTORE_DB_ID =
+  (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId ||
+  'ai-studio-parametricforge-ac5fa4c1-e94e-4093-bf82-d61cfafbd0bd';
+
 function createFirestoreInstance(): Firestore {
   try {
     return initializeFirestore(
@@ -19,10 +23,10 @@ function createFirestoreInstance(): Firestore {
         experimentalForceLongPolling: true,
         ignoreUndefinedProperties: true,
       },
-      firebaseConfig.firestoreDatabaseId
+      NAMED_FIRESTORE_DB_ID
     );
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    return getFirestore(app, NAMED_FIRESTORE_DB_ID);
   }
 }
 

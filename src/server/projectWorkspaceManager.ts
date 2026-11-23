@@ -3,6 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { LocalProjectFolderFile } from '../types/cad';
 
+export function assertInsideDirectory(parentDir: string, targetPath: string, message = 'Travessia de diretório bloqueada.'): void {
+  const resolvedParent = path.resolve(parentDir);
+  const resolvedTarget = path.resolve(targetPath);
+  if (!resolvedTarget.startsWith(resolvedParent + path.sep)) {
+    throw new Error(message);
+  }
+}
+
 export function buildUserFolderSlug(userId: string, email?: string): string {
   const basis = (email && email.trim() ? email.trim() : userId.trim()) || 'local-operator';
   const cleaned = basis
@@ -15,12 +23,12 @@ export function buildUserFolderSlug(userId: string, email?: string): string {
 }
 
 export function sanitizeProjectFilename(filename: string): string {
-  const base = path.basename(String(filename || '').trim());
+  const base = path.basename(String(filename).trim());
   const cleaned = base
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
     .replace(/^\.+/, '')
     .slice(0, 96);
-  if (!cleaned || cleaned === '.' || cleaned === '..') {
+  if (!cleaned) {
     throw new Error('Nome de arquivo inválido para a pasta do projeto.');
   }
   return cleaned;
@@ -34,7 +42,7 @@ export function ensureUserProjectFolder(
   userSlug: string,
   baseRoot = process.cwd()
 ): { folderPath: string; userSlug: string } {
-  const safeSlug = String(userSlug || '')
+  const safeSlug = String(userSlug)
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '');
@@ -43,9 +51,7 @@ export function ensureUserProjectFolder(
   }
   const projectsRoot = resolveProjectsRoot(baseRoot);
   const resolved = path.resolve(projectsRoot, safeSlug);
-  if (!resolved.startsWith(projectsRoot + path.sep)) {
-    throw new Error('Caminho fora do diretório de projetos do usuário.');
-  }
+  assertInsideDirectory(projectsRoot, resolved, 'Caminho fora do diretório de projetos do usuário.');
   fs.mkdirSync(resolved, { recursive: true });
   return { folderPath: resolved, userSlug: safeSlug };
 }
@@ -58,9 +64,7 @@ function resolveConfinedFilePath(
   const { folderPath } = ensureUserProjectFolder(userSlug, baseRoot);
   const safeName = sanitizeProjectFilename(filename);
   const filePath = path.resolve(folderPath, safeName);
-  if (!filePath.startsWith(folderPath + path.sep)) {
-    throw new Error('Travessia de diretório bloqueada.');
-  }
+  assertInsideDirectory(folderPath, filePath);
   return { folderPath, filePath, safeName };
 }
 
@@ -95,7 +99,7 @@ export function writeUserProjectFile(
   baseRoot = process.cwd()
 ): LocalProjectFolderFile {
   const { filePath, safeName } = resolveConfinedFilePath(userSlug, filename, baseRoot);
-  const payload = String(content ?? '');
+  const payload = String(content);
   fs.writeFileSync(filePath, payload, 'utf8');
   const stat = fs.statSync(filePath);
   const sha256 = crypto.createHash('sha256').update(payload, 'utf8').digest('hex');

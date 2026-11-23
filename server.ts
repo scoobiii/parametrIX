@@ -48,10 +48,18 @@ import {
 import { ParametrixSqliteStore } from './src/server/sqliteStore';
 import {
   getLocalQwenStatus,
+  getRegisteredRagDocs,
   runLocalQwenInference,
   setRegisteredRagDocs,
   syncQwenProjectRagDataset,
 } from './src/server/localQwenRunner';
+import {
+  WebSocketBrowserMcpRelay,
+  buildClawFamilyBundle,
+  buildHermesAgentBundle,
+  executeHermesCompactSearch,
+  type BrowserMcpRpcResponsePayload,
+} from './src/server/hermesBridge';
 import {
   createFormalVucCertificate,
   verifyFormalVucCertificate,
@@ -666,6 +674,8 @@ async function startServer() {
     targetSafetyFactor: 2.0,
   };
 
+  const hermesRelay = new WebSocketBrowserMcpRelay();
+
   const SERVER_MCP_TOOLS = [
     {
       name: 'cad_inspect_ipt_step_briefing',
@@ -684,6 +694,35 @@ async function startServer() {
           },
         },
         required: ['filename', 'base64Data'],
+      },
+    },
+    {
+      name: 'cad_get_bbox',
+      category: 'Geometria Compacta (0.5B)',
+      scope: 'server-stateless',
+      description:
+        'Retorna apenas o bounding box em mm (min, max, sizeMm), volume cm³ e hash VUC formal sem arrays de vértices (<250 tokens).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          designParams: { type: 'object', description: 'Parâmetros opcionais da superfície NURBS.' },
+        },
+      },
+    },
+    {
+      name: 'hermes_search',
+      category: 'Search Engine & RAG (0.5B)',
+      scope: 'server-stateless',
+      description:
+        'Busca compacta (<600 tokens) no corpus RAG do Parametrix e opcionalmente na web (DuckDuckGo) com prova formal VUC.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Consulta técnica (ex: ISO 53 engrenagem M2 Z24).' },
+          includeWeb: { type: 'boolean', description: 'Se true, consulta também DuckDuckGo Instant Answer.' },
+          maxResults: { type: 'number', description: 'Máximo de resultados (1-10).' },
+        },
+        required: ['query'],
       },
     },
     {
@@ -760,8 +799,22 @@ async function startServer() {
       'cad_run_structural_fea',
       'cad_evaluate_nurbs_metrics',
       'cad_optimize_surface_curvature',
+      'cad_generate_optimized_geometry',
       'cad_get_scoobiii_vuc_proof',
     ]),
+    hermesIntegration: {
+      statusEndpoint: `${baseUrl}/api/hermes/status`,
+      bundleEndpoint: `${baseUrl}/api/hermes/bundle`,
+      searchEndpoint: `${baseUrl}/api/hermes/search`,
+      wsRelayPath: '/ws',
+      readyBrowserBridges: hermesRelay.getReadyBridgeCount(),
+    },
+    clawFamilyIntegration: {
+      families: ['openclaw', 'nanoclaw', 'picoclaw', 'hermes'],
+      statusEndpoint: `${baseUrl}/api/claw/status`,
+      bundleEndpoint: `${baseUrl}/api/claw/bundle`,
+      setupCommand: 'npm run claw:setup',
+    },
     browserInteractiveTools: MCP_TOOLS_CATALOG.map((t) => ({
       name: t.name,
       category: t.category,
@@ -771,6 +824,7 @@ async function startServer() {
       inspectIptOrStep: `curl -X POST ${baseUrl}/api/cad/llm-briefing -H "Content-Type: application/json" -d '{"filename":"peca.stp","base64Data":"<BASE64>"}'`,
       mcpListTools: `curl -X POST ${baseUrl}/api/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
       mcpCallBriefing: `curl -X POST ${baseUrl}/api/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"cad_inspect_ipt_step_briefing","arguments":{"filename":"peca.ipt","base64Data":"<BASE64>"}}}'`,
+      hermesSearch: `curl -X POST ${baseUrl}/api/hermes/search -H "Content-Type: application/json" -d '{"query":"engrenagem M2 Z24","includeWeb":false}'`,
     },
   });
 
@@ -789,19 +843,23 @@ LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` 
   - Retorna: Briefing compacto (< 600 tokens em \`llmSummaryText\` + JSON estruturado) com bounding box em **mm**, lista de componentes, papéis mecânicos inferidos, segmento industrial, normas aplicáveis e próximo fluxo MCP. Zero arrays gigantes de vértices.
 - **MCP HTTP JSON-RPC 2.0:** \`POST ${baseUrl}/api/mcp\`
   - \`tools/list\` lista ${SERVER_MCP_TOOLS.length + MCP_TOOLS_CATALOG.length} ferramentas.
-  - \`tools/call\` executa diretamente no servidor:
+  - \`tools/call\` executa diretamente no servidor (e faz relay automático via WebSocket \`/ws\` para ferramentas de cena 3D quando há aba aberta):
     - \`cad_inspect_ipt_step_briefing\` (Traduz \`.ipt\`/\`.stp\`/\`.step\` para LLM)
+    - \`cad_get_bbox\` (Bounding box em mm + VUC compacto <250 tokens)
+    - \`hermes_search\` (Busca RAG + Web DuckDuckGo com prova VUC <600 tokens)
     - \`cad_get_agent_onboarding\` (Retorna manifesto JSON completo)
     - \`cad_run_structural_fea\` (Von Mises MPa, deflexão mm, fator de segurança)
     - \`cad_evaluate_nurbs_metrics\` (Área, volume, curvatura NURBS)
-    - \`cad_optimize_surface_curvature\` (Análise |H| / Willmore e redução de massa)
+    - \`cad_optimize_surface_curvature\` / \`cad_generate_optimized_geometry\` (Análise |H| / Willmore e redução de massa)
     - \`cad_get_scoobiii_vuc_proof\` (Prova matemática determinística Cox-de Boor / Euler-Bernoulli / ISO)
+- **Hermes + Qwen 0.5B Integration:** \`GET ${baseUrl}/api/hermes/status\`, \`GET ${baseUrl}/api/hermes/bundle\` (config.yaml + SKILL.md + bridge stdio) e \`POST ${baseUrl}/api/hermes/search\`.
+- **OpenClaw / NanoClaw / PicoClaw (Baixa Renda) Integration:** \`GET ${baseUrl}/api/claw/status\`, \`GET ${baseUrl}/api/claw/bundle\` (\`~/.openclaw/openclaw.json\`, \`~/.nanoclaw/config.yaml\`, \`~/.picoclaw/config.json\` + SKILL.md + bridge STDIO compartilhada + VUC) e setup \`npm run claw:setup\`.
 - **Manifesto JSON completo:** \`GET ${baseUrl}/api/agent/onboarding\` e \`GET ${baseUrl}/.well-known/agent.json\`
 - **Swagger & OpenAPI 3.0.3 (Serviços CAM via Upload, URL ou API):** \`GET ${baseUrl}/swagger\` e \`GET ${baseUrl}/api/openapi.json\`
   - \`GET ${baseUrl}/api/cam/programs\` (Catálogo pré-programado Datacenter + Robôs Humanoides)
   - \`POST ${baseUrl}/api/cam/services\` (Recebe arquivo base64/texto, URL externa ou payload JSON API)
   - \`POST ${baseUrl}/api/cam/services/:id/restart\` (Reinicia qualquer processo CAM do começo ao fim com VUC)
-- **Bridge de Sessão Visual 3D (Browser):** \`window.__PARAMETRIX_MCP__\` (para isolar peças, explodir vista IX, Caneta Mágica, Máscara de Objetos e exportar \`.3dm\`/\`.stl\`/\`.dxf\`/\`.nc\`/\`.src\`).
+- **Bridge de Sessão Visual 3D (Browser + Relay /ws):** \`window.__PARAMETRIX_MCP__\` (para isolar peças, explodir vista IX, Caneta Mágica, comandos Rhino, Máscara de Objetos e exportar \`.3dm\`/\`.stl\`/\`.dxf\`/\`.nc\`/\`.src\`).
 - **Prova Formal VUC (SHA-256 + Ed25519):** \`POST ${baseUrl}/api/vuc/formal-proof\`, \`POST ${baseUrl}/api/vuc/formal-verify\` e \`GET ${baseUrl}/api/vuc/latest-proof\`.
 - **Chat Voz & Texto CAM Multi-Agente:** \`POST ${baseUrl}/api/agent/multi-chat\` (usa System Instruction canônica do Parametric Forge / FrostbiteEngine com Olho MCP).
 
@@ -926,6 +984,7 @@ LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` 
       }
 
       if (method === 'tools/list') {
+        const readyBridges = hermesRelay.getReadyBridgeCount();
         const allTools = [
           ...SERVER_MCP_TOOLS.map((t) => ({
             name: t.name,
@@ -939,10 +998,13 @@ LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` 
                 'cad_run_structural_fea',
                 'cad_evaluate_nurbs_metrics',
                 'cad_optimize_surface_curvature',
+                'cad_generate_optimized_geometry',
                 'cad_get_scoobiii_vuc_proof',
               ].includes(t.name)
                 ? 'server-stateless + browser'
-                : 'browser-session'
+                : readyBridges > 0
+                  ? 'browser-ws-relay-online'
+                  : 'browser-session'
             }]`,
             inputSchema: t.inputSchema,
           })),
@@ -1058,7 +1120,64 @@ LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` 
           });
         }
 
-        if (toolName === 'cad_optimize_surface_curvature') {
+        if (toolName === 'cad_get_bbox') {
+          const startedAt = Date.now();
+          const params = mergeParams();
+          const surf = buildNurbsSurfaceFromParams(params);
+          const mesh = tessellateNurbsSurface(
+            surf,
+            params.ribCountU,
+            params.ribCountV,
+            params.ribHeightMm
+          );
+          const payload = {
+            mode: 'server-stateless-compact',
+            preset: params.preset,
+            boundingBoxMm: mesh.boundingBox,
+            volumeCm3: Number(mesh.volumeCm3.toFixed(3)),
+            surfaceAreaCm2: Number(mesh.surfaceAreaCm2.toFixed(3)),
+            triangleCount: mesh.triangleCount,
+          };
+          const formalVuc = createFormalVucCertificate({
+            domain: 'MCP_CAD_GET_BBOX',
+            status: 'PASS',
+            inputPayload: params,
+            outputPayload: payload,
+            durationMs: Math.max(1, Date.now() - startedAt),
+          });
+          return rpcOk({
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ ...payload, vucId: formalVuc.vuc_id }, null, 2),
+              },
+            ],
+            structuredContent: { ...payload, formalVuc },
+          });
+        }
+
+        if (toolName === 'hermes_search') {
+          const queryText = typeof args.query === 'string' ? args.query : '';
+          const searchResult = await executeHermesCompactSearch({
+            query: queryText,
+            dynamicDocs: getRegisteredRagDocs(),
+            includeWeb: Boolean(args.includeWeb),
+            maxResults: typeof args.maxResults === 'number' ? args.maxResults : 5,
+          });
+          sqliteStore.recordVucProof('HERMES_SEARCH_MCP', `Busca "${searchResult.query}"`, {
+            vucId: searchResult.vucCertificate.vuc_id,
+            webStatus: searchResult.webStatus,
+          });
+          return rpcOk({
+            content: [{ type: 'text', text: searchResult.compactSummaryText }],
+            structuredContent: searchResult,
+          });
+        }
+
+        if (
+          toolName === 'cad_optimize_surface_curvature' ||
+          toolName === 'cad_generate_optimized_geometry'
+        ) {
           const params = mergeParams();
           const surf = buildNurbsSurfaceFromParams(params);
           const mesh = tessellateNurbsSurface(
@@ -1131,9 +1250,39 @@ LLMs não conseguem ler binários proprietários do Autodesk Inventor (\`.ipt\` 
 
         const existsInCatalog = MCP_TOOLS_CATALOG.some((t) => t.name === toolName);
         if (existsInCatalog) {
+          if (hermesRelay.getReadyBridgeCount() > 0) {
+            const startedAt = Date.now();
+            try {
+              const relayRes = await hermesRelay.dispatchBrowserTool(toolName, args, 8000);
+              const formalVuc = createFormalVucCertificate({
+                domain: 'HERMES_MCP_BROWSER_RELAY',
+                status: relayRes.ok ? 'PASS' : 'FAIL',
+                inputPayload: { toolName, args },
+                outputPayload: relayRes.log ?? { ok: relayRes.ok },
+                durationMs: Math.max(1, Date.now() - startedAt),
+              });
+              sqliteStore.recordVucProof('MCP_BROWSER_RELAY', `${toolName}`, {
+                vucId: formalVuc.vuc_id,
+                ok: relayRes.ok,
+              });
+              const responseText =
+                typeof relayRes.log?.responseJson === 'string'
+                  ? relayRes.log.responseJson
+                  : JSON.stringify(relayRes.log ?? relayRes, null, 2);
+              return rpcOk({
+                content: [{ type: 'text', text: responseText }],
+                structuredContent: { mode: 'browser-ws-relay', log: relayRes.log, formalVuc },
+              });
+            } catch (relayErr) {
+              return rpcErr(
+                -32001,
+                relayErr instanceof Error ? relayErr.message : String(relayErr)
+              );
+            }
+          }
           return rpcErr(
             -32001,
-            `A ferramenta '${toolName}' opera sobre a cena 3D ativa no navegador (window.__PARAMETRIX_MCP__ ou aba Agente RAG + MCP). Use 'cad_inspect_ipt_step_briefing' para inspecionar arquivos .IPT/.STEP no servidor headless.`
+            `A ferramenta '${toolName}' requer uma aba ativa conectada ao relay /ws (window.__PARAMETRIX_MCP__). Abra o Parametrix no navegador ou use ferramentas stateless (cad_inspect_ipt_step_briefing, cad_get_bbox, hermes_search, cad_run_structural_fea).`
           );
         }
 
@@ -1562,34 +1711,97 @@ ${ragBlock}`;
   }
 
   const httpServer = http.createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const wss = new WebSocketServer({ noServer: true });
+  const wsAliveMap = new WeakMap<WebSocket, boolean>();
+
+  httpServer.on('upgrade', (req, socket, head) => {
+    try {
+      const pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+      if (pathname === '/ws') {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit('connection', ws, req);
+        });
+      }
+    } catch {
+      socket.destroy();
+    }
+  });
+
+  const wsHeartbeatTimer = setInterval(() => {
+    for (const client of wss.clients) {
+      if (wsAliveMap.get(client) === false) {
+        client.terminate();
+        continue;
+      }
+      wsAliveMap.set(client, false);
+      try {
+        client.ping();
+      } catch {
+        client.terminate();
+      }
+    }
+  }, 25000);
+  wsHeartbeatTimer.unref();
 
   const broadcastWs = (type: string, payload: unknown) => {
     const raw = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(raw);
+        try {
+          client.send(raw);
+        } catch {
+          // Skip closed/errored socket safely
+        }
       }
     }
   };
 
   wss.on('connection', (socket) => {
-    socket.send(
-      JSON.stringify({
-        type: 'ecosystem:sync',
-        payload: {
-          connectedClients: wss.clients.size,
-          chat: sqliteStore.listChatMessages().slice(-30),
-          logistics: sqliteStore.listLogisticsNodes(),
-          computeNodes: sqliteStore.listComputeNodes(),
-        },
-      })
-    );
+    const wsClientId = `ws-${crypto.randomBytes(4).toString('hex')}`;
+    wsAliveMap.set(socket, true);
+    hermesRelay.registerClient(wsClientId, socket, false);
+
+    socket.on('pong', () => {
+      wsAliveMap.set(socket, true);
+    });
+
+    socket.on('error', () => {
+      hermesRelay.unregisterClient(wsClientId);
+    });
+
+    try {
+      socket.send(
+        JSON.stringify({
+          type: 'ecosystem:sync',
+          payload: {
+            connectedClients: wss.clients.size,
+            chat: sqliteStore.listChatMessages().slice(-30),
+            logistics: sqliteStore.listLogisticsNodes(),
+            computeNodes: sqliteStore.listComputeNodes(),
+          },
+        })
+      );
+    } catch {
+      // Ignore send on closing socket
+    }
+
+    socket.on('close', () => {
+      hermesRelay.unregisterClient(wsClientId);
+    });
 
     socket.on('message', (data) => {
+      wsAliveMap.set(socket, true);
       try {
         const msg = JSON.parse(String(data)) as { type?: string; payload?: Record<string, unknown> };
-        if (msg.type === 'chat:send' && msg.payload) {
+        if (msg.type === 'ping') {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
+          }
+        } else if (msg.type === 'mcp:bridge_ready') {
+          hermesRelay.markBridgeReady(wsClientId, Boolean(msg.payload?.ready ?? true));
+        } else if (msg.type === 'mcp:rpc_response' && msg.payload) {
+          hermesRelay.handleRpcResponse(msg.payload as unknown as BrowserMcpRpcResponsePayload);
+        } else if (msg.type === 'chat:send' && msg.payload) {
           const saved = sqliteStore.appendChatMessage({
             room: String(msg.payload.room || 'geral'),
             senderId: String(msg.payload.senderId || 'anon'),
@@ -2534,6 +2746,128 @@ ${ragBlock}`;
     }
   });
 
+  // Hermes + Qwen 0.5B (32k) + VUC + Compact Search Integration Endpoints
+  app.get('/api/hermes/status', async (req, res) => {
+    const llamaPort = Number(req.query.llamaPort || 11435);
+    let llamaServerOnline = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 800);
+    try {
+      const probe = await fetch(`http://127.0.0.1:${llamaPort}/v1/models`, {
+        signal: controller.signal,
+      });
+      llamaServerOnline = probe.ok;
+    } catch {
+      llamaServerOnline = false;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    return res.json({
+      readyForHermes: true,
+      totalMcpTools: SERVER_MCP_TOOLS.length + MCP_TOOLS_CATALOG.length,
+      browserRelayConnectedCount: hermesRelay.getReadyBridgeCount(),
+      wsConnectedClients: hermesRelay.getTotalConnectedCount(),
+      llamaPort,
+      llamaServerOnline,
+      localQwenStatus: getLocalQwenStatus(),
+      searchEndpoint: '/api/hermes/search',
+      bundleEndpoint: '/api/hermes/bundle',
+      mcpEndpoint: '/api/mcp',
+    });
+  });
+
+  app.get('/api/hermes/bundle', (req, res) => {
+    const baseUrl = resolveAppBaseUrl(req.headers, req.protocol);
+    const llamaPort = Number(req.query.llamaPort || 11435);
+    const contextLength = Number(req.query.contextLength || 32768);
+    const modelName =
+      typeof req.query.modelName === 'string' && req.query.modelName.trim()
+        ? req.query.modelName.trim()
+        : 'qwen2.5-coder:0.5b';
+    const bundle = buildHermesAgentBundle({ baseUrl, llamaPort, contextLength, modelName });
+    return res.json(bundle);
+  });
+
+  app.post('/api/hermes/search', async (req, res) => {
+    try {
+      const queryText = String(req.body?.query || '').trim();
+      if (!queryText) {
+        return res.status(400).json({ error: 'Campo "query" é obrigatório para busca Hermes/RAG.' });
+      }
+      if (Array.isArray(req.body?.ragDocs)) {
+        setRegisteredRagDocs(req.body.ragDocs);
+      }
+      const result = await executeHermesCompactSearch({
+        query: queryText,
+        dynamicDocs: getRegisteredRagDocs(),
+        cadSummary: req.body?.cadSummary as CamAgentContextSummary | undefined,
+        includeWeb: Boolean(req.body?.includeWeb),
+        maxResults: typeof req.body?.maxResults === 'number' ? req.body.maxResults : 5,
+      });
+      sqliteStore.recordVucProof('HERMES_SEARCH_VUC', `Busca "${result.query}"`, {
+        vucId: result.vucCertificate.vuc_id,
+        webStatus: result.webStatus,
+      });
+      return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // OpenClaw + NanoClaw + PicoClaw (ultra-low-RAM) Integration Endpoints
+  app.get('/api/claw/status', async (req, res) => {
+    const llamaPort = Number(req.query.llamaPort || 11435);
+    let llamaServerOnline = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 800);
+    try {
+      const probe = await fetch(`http://127.0.0.1:${llamaPort}/v1/models`, {
+        signal: controller.signal,
+      });
+      llamaServerOnline = probe.ok;
+    } catch {
+      llamaServerOnline = false;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const homeDir = os.homedir();
+    const configsDetected = {
+      hermes: fs.existsSync(path.join(homeDir, '.hermes', 'config.yaml')),
+      openclaw: fs.existsSync(path.join(homeDir, '.openclaw', 'openclaw.json')),
+      nanoclaw: fs.existsSync(path.join(homeDir, '.nanoclaw', 'config.yaml')),
+      picoclaw: fs.existsSync(path.join(homeDir, '.picoclaw', 'config.json')),
+    };
+
+    return res.json({
+      readyForClaw: true,
+      families: ['openclaw', 'nanoclaw', 'picoclaw', 'hermes'],
+      totalMcpTools: SERVER_MCP_TOOLS.length + MCP_TOOLS_CATALOG.length,
+      browserRelayConnectedCount: hermesRelay.getReadyBridgeCount(),
+      wsConnectedClients: hermesRelay.getTotalConnectedCount(),
+      llamaPort,
+      llamaServerOnline,
+      configsDetected,
+      localQwenStatus: getLocalQwenStatus(),
+      bundleEndpoint: '/api/claw/bundle',
+      searchEndpoint: '/api/hermes/search',
+      mcpEndpoint: '/api/mcp',
+    });
+  });
+
+  app.get('/api/claw/bundle', (req, res) => {
+    const baseUrl = resolveAppBaseUrl(req.headers, req.protocol);
+    const llamaPort = Number(req.query.llamaPort || 11435);
+    const contextLength = Number(req.query.contextLength || 32768);
+    const modelName =
+      typeof req.query.modelName === 'string' && req.query.modelName.trim()
+        ? req.query.modelName.trim()
+        : 'qwen2.5-coder:0.5b';
+    const bundle = buildClawFamilyBundle({ baseUrl, llamaPort, contextLength, modelName });
+    return res.json(bundle);
+  });
+
   app.post('/api/sqlite/projects', (req, res) => {
     const saved = sqliteStore.saveProject({
       id: typeof req.body?.id === 'string' ? req.body.id : undefined,
@@ -2781,7 +3115,13 @@ ${ragBlock}`;
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr:
+          process.env.DISABLE_HMR === 'true'
+            ? false
+            : { server: httpServer, path: '/vite-hmr' },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -2800,6 +3140,8 @@ ${ragBlock}`;
   });
 
   const cleanupWorkers = () => {
+    clearInterval(wsHeartbeatTimer);
+    wss.close();
     void stopRamdiskMcpWorker();
   };
   process.once('SIGINT', cleanupWorkers);

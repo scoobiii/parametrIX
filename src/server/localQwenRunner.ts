@@ -66,11 +66,12 @@ export function resolveLocalQwenPaths(rootDir = process.cwd()): {
       ? cliBin
       : null;
 
+  const coderCandidate = path.resolve(rootDir, 'models', 'qwen', 'qwen2.5-coder-0.5b-instruct-q4_k_m.gguf');
   const modelCandidate = path.resolve(rootDir, QWEN_CORE_GGUF_REL_PATH);
-  const modelPath =
-    fs.existsSync(modelCandidate) && fs.statSync(modelCandidate).size > 100_000_000
-      ? modelCandidate
-      : null;
+  const pickedModel = [coderCandidate, modelCandidate].find(
+    (candidate) => fs.existsSync(candidate) && fs.statSync(candidate).size > 100_000_000
+  );
+  const modelPath = pickedModel ?? null;
 
   const ragDatasetPath = path.resolve(rootDir, 'models', 'qwen', 'parametrix-finetune-rag.jsonl');
   const systemPromptPath = path.resolve(rootDir, 'models', 'qwen', 'parametrix-system.txt');

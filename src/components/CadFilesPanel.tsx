@@ -65,7 +65,7 @@ interface CadFilesPanelProps {
   onOpenViewport: () => void;
   userSlug?: string;
   googleAccessToken?: string | null;
-  onConnectGoogleDrive?: () => Promise<void>;
+  onConnectGoogleDrive?: () => Promise<string | null | void>;
   designParams?: ParametricDesignParams;
   camSettings?: CamSettings;
   sessionToken?: string | null;

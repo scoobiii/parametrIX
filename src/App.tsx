@@ -75,8 +75,10 @@ import {
   executeMcpToolCall,
 } from './kernel/mcpServer';
 import { buildNurbsSurfaceFromParams, tessellateNurbsSurface } from './kernel/nurbs';
+import { calculateCarbonFootprint } from './kernel/carbonFootprint';
 import { DEFAULT_PLUGINS, applyActivePlugins } from './kernel/plugins';
 import { computeScoobiiiVucProof } from './kernel/scoobiiiVuc';
+import { buildScoobiiiFullTelemetry } from './kernel/scoobiiiProofTelemetry';
 import {
   type OptimizationObjective,
   buildFeaComparisonReport,
@@ -139,6 +141,7 @@ import type {
   SystemResourceSnapshot,
   ViewportDisplayState,
   VoiceActionIntent,
+  VucLedgerEntry,
   WorkspaceTab,
 } from './types/cad';
 
@@ -237,7 +240,16 @@ export default function App() {
   const [remoteMachines, setRemoteMachines] = useState<RemoteMachineTarget[]>([]);
   const [mqttTelemetryFeed, setMqttTelemetryFeed] = useState<RemoteMqttTelemetryEvent[]>([]);
   const [camServiceJobs, setCamServiceJobs] = useState<CamServiceJob[]>([]);
+  const [vucLedger, setVucLedger] = useState<VucLedgerEntry[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
+  const pushMcpEyeEventRef = useRef<
+    ((
+      direction: McpEyeEvent['direction'],
+      source: string,
+      summary: string,
+      payload: unknown
+    ) => void) | null
+  >(null);
 
   // Core Parametric NURBS & BIM state
   const [designParams, setDesignParams] = useState<ParametricDesignParams>({
@@ -556,6 +568,67 @@ export default function App() {
       importedModel,
     ]
   );
+
+  const carbonReport = useMemo(
+    () =>
+      calculateCarbonFootprint({
+        meshData,
+        importedModel,
+        materialFinish: display.materialFinish,
+        camSettings: effectiveCamSettings,
+        toolpath,
+        featureOps,
+      }),
+    [meshData, importedModel, display.materialFinish, effectiveCamSettings, toolpath, featureOps]
+  );
+
+  const scoobiiiTelemetry = useMemo(() => {
+    if (!scoobiiiModalOpen) return null;
+    return buildScoobiiiFullTelemetry({
+      designParams: effectiveDesignParams,
+      surface,
+      materialFinish: display.materialFinish,
+      feaSettings,
+      feaResult,
+      camSettings: effectiveCamSettings,
+      toolpath,
+      carbonReport,
+      layerComplianceReport,
+      partProfile,
+      featureOps,
+      scoobiiiProof,
+      importedModel,
+      erpRecords,
+      camServiceJobs,
+      remoteMachines,
+      logisticsNodes,
+      computeNodes,
+      vucLedger,
+      lastServerVucHex,
+    });
+  }, [
+    scoobiiiModalOpen,
+    effectiveDesignParams,
+    surface,
+    display.materialFinish,
+    feaSettings,
+    feaResult,
+    effectiveCamSettings,
+    toolpath,
+    carbonReport,
+    layerComplianceReport,
+    partProfile,
+    featureOps,
+    scoobiiiProof,
+    importedModel,
+    erpRecords,
+    camServiceJobs,
+    remoteMachines,
+    logisticsNodes,
+    computeNodes,
+    vucLedger,
+    lastServerVucHex,
+  ]);
 
   // Unified handler whenever any CAD file is loaded (via IX Menu, Onboarding, RAG, or Files Tab)
   // Automatically opens the 3D Viewer & Editor, frames the geometry, and sets context!
@@ -876,6 +949,7 @@ export default function App() {
           computeNodes?: ComputeShareNode[];
           remoteMachines?: RemoteMachineTarget[];
           camServiceJobs?: CamServiceJob[];
+          vucLedger?: VucLedgerEntry[];
         };
         if (data.erp) setErpRecords(data.erp);
         if (data.chat) setChatMessages(data.chat);
@@ -883,6 +957,7 @@ export default function App() {
         if (data.computeNodes) setComputeNodes(data.computeNodes);
         if (data.remoteMachines) setRemoteMachines(data.remoteMachines);
         if (data.camServiceJobs) setCamServiceJobs(data.camServiceJobs);
+        if (data.vucLedger) setVucLedger(data.vucLedger);
       } catch {
         // Offline tolerance
       }
@@ -893,54 +968,182 @@ export default function App() {
     const resTimer = window.setInterval(() => void fetchResources(), 15000);
 
     let ws: WebSocket | null = null;
-    try {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-      wsRef.current = ws;
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(String(ev.data)) as { type?: string; payload?: unknown };
-          if (msg.type === 'chat:message' && msg.payload) {
-            const incoming = msg.payload as EcosystemChatMessage;
-            setChatMessages((prev) =>
-              prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]
+    let reconnectTimer: number | null = null;
+    let keepaliveTimer: number | null = null;
+    let reconnectAttempt = 0;
+
+    const connectWebSocket = () => {
+      if (!active) return;
+      try {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const nextWs = new WebSocket(`${proto}//${window.location.host}/ws`);
+        ws = nextWs;
+        wsRef.current = nextWs;
+
+        nextWs.onopen = () => {
+          reconnectAttempt = 0;
+          try {
+            nextWs.send(
+              JSON.stringify({
+                type: 'mcp:bridge_ready',
+                payload: { ready: true, protocol: '2024-11-05' },
+              })
             );
-          } else if (msg.type === 'logistics:location' && msg.payload) {
-            const node = msg.payload as LogisticsTelemetryNode;
-            setLogisticsNodes((prev) => {
-              const filtered = prev.filter((n) => n.id !== node.id);
-              return [node, ...filtered];
-            });
-          } else if (msg.type === 'compute:pool' && Array.isArray(msg.payload)) {
-            setComputeNodes(msg.payload as ComputeShareNode[]);
-          } else if (msg.type === 'mcp:eye' && msg.payload) {
-            const eyeEvt = msg.payload as McpEyeEvent;
-            setMcpEyeEvents((prev) =>
-              prev.some((e) => e.id === eyeEvt.id) ? prev : [eyeEvt, ...prev.slice(0, 29)]
-            );
-          } else if (msg.type === 'cam:service' && msg.payload) {
-            const job = msg.payload as CamServiceJob;
-            setCamServiceJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
-          } else if (msg.type === 'remote:machine' && msg.payload) {
-            const rm = msg.payload as RemoteMachineTarget;
-            setRemoteMachines((prev) => [rm, ...prev.filter((m) => m.id !== rm.id)]);
-          } else if (msg.type === 'remote:mqtt' && msg.payload) {
-            const tel = msg.payload as RemoteMqttTelemetryEvent;
-            setMqttTelemetryFeed((prev) =>
-              prev.some((t) => t.id === tel.id) ? prev : [tel, ...prev.slice(0, 29)]
-            );
+          } catch {
+            // Ignore send failure
           }
-        } catch {
-          // Ignore invalid WS frame
-        }
-      };
-    } catch {
-      // Ignore WS setup failure in restricted test environments
-    }
+          if (keepaliveTimer !== null) {
+            window.clearInterval(keepaliveTimer);
+          }
+          keepaliveTimer = window.setInterval(() => {
+            if (nextWs.readyState === WebSocket.OPEN) {
+              try {
+                nextWs.send(JSON.stringify({ type: 'ping' }));
+              } catch {
+                // Ignore keepalive error
+              }
+            }
+          }, 25000);
+        };
+
+        nextWs.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(String(ev.data)) as { type?: string; payload?: unknown };
+            if (msg.type === 'pong') return;
+            if (msg.type === 'ecosystem:sync' && msg.payload) {
+              const sync = msg.payload as {
+                chat?: EcosystemChatMessage[];
+                logistics?: LogisticsTelemetryNode[];
+                computeNodes?: ComputeShareNode[];
+              };
+              if (Array.isArray(sync.chat)) {
+                setChatMessages((prev) => {
+                  const seen = new Set(prev.map((m) => m.id));
+                  const merged = [...prev];
+                  for (const item of sync.chat!) {
+                    if (!seen.has(item.id)) {
+                      merged.push(item);
+                      seen.add(item.id);
+                    }
+                  }
+                  return merged;
+                });
+              }
+              if (Array.isArray(sync.logistics) && sync.logistics.length > 0) {
+                setLogisticsNodes(sync.logistics);
+              }
+              if (Array.isArray(sync.computeNodes) && sync.computeNodes.length > 0) {
+                setComputeNodes(sync.computeNodes);
+              }
+            } else if (msg.type === 'chat:message' && msg.payload) {
+              const incoming = msg.payload as EcosystemChatMessage;
+              setChatMessages((prev) =>
+                prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]
+              );
+            } else if (msg.type === 'logistics:location' && msg.payload) {
+              const node = msg.payload as LogisticsTelemetryNode;
+              setLogisticsNodes((prev) => {
+                const filtered = prev.filter((n) => n.id !== node.id);
+                return [node, ...filtered];
+              });
+            } else if (msg.type === 'compute:pool' && Array.isArray(msg.payload)) {
+              setComputeNodes(msg.payload as ComputeShareNode[]);
+            } else if (msg.type === 'mcp:eye' && msg.payload) {
+              const eyeEvt = msg.payload as McpEyeEvent;
+              setMcpEyeEvents((prev) =>
+                prev.some((e) => e.id === eyeEvt.id) ? prev : [eyeEvt, ...prev.slice(0, 29)]
+              );
+            } else if (msg.type === 'cam:service' && msg.payload) {
+              const job = msg.payload as CamServiceJob;
+              setCamServiceJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
+            } else if (msg.type === 'remote:machine' && msg.payload) {
+              const rm = msg.payload as RemoteMachineTarget;
+              setRemoteMachines((prev) => [rm, ...prev.filter((m) => m.id !== rm.id)]);
+            } else if (msg.type === 'remote:mqtt' && msg.payload) {
+              const tel = msg.payload as RemoteMqttTelemetryEvent;
+              setMqttTelemetryFeed((prev) =>
+                prev.some((t) => t.id === tel.id) ? prev : [tel, ...prev.slice(0, 29)]
+              );
+            } else if (msg.type === 'mcp:rpc_request' && msg.payload) {
+              const req = msg.payload as {
+                requestId?: string;
+                name?: string;
+                args?: Record<string, unknown>;
+              };
+              if (req.requestId && req.name) {
+                try {
+                  const log = executeMcpToolCall(req.name, req.args ?? {}, mcpContextRef.current);
+                  pushMcpEyeEventRef.current?.(
+                    'mcp-input',
+                    `Hermes.${req.name}`,
+                    log.responseJson.slice(0, 120),
+                    req.args ?? {}
+                  );
+                  if (nextWs.readyState === WebSocket.OPEN) {
+                    nextWs.send(
+                      JSON.stringify({
+                        type: 'mcp:rpc_response',
+                        payload: {
+                          requestId: req.requestId,
+                          ok: log.status === 'ok',
+                          log,
+                        },
+                      })
+                    );
+                  }
+                } catch (err) {
+                  if (nextWs.readyState === WebSocket.OPEN) {
+                    nextWs.send(
+                      JSON.stringify({
+                        type: 'mcp:rpc_response',
+                        payload: {
+                          requestId: req.requestId,
+                          ok: false,
+                          error: err instanceof Error ? err.message : String(err),
+                        },
+                      })
+                    );
+                  }
+                }
+              }
+            }
+          } catch {
+            // Ignore invalid WS frame
+          }
+        };
+
+        nextWs.onerror = () => {
+          // Close triggers exponential reconnect cleanly
+          if (nextWs.readyState === WebSocket.OPEN || nextWs.readyState === WebSocket.CONNECTING) {
+            nextWs.close();
+          }
+        };
+
+        nextWs.onclose = () => {
+          if (wsRef.current === nextWs) {
+            wsRef.current = null;
+          }
+          if (keepaliveTimer !== null) {
+            window.clearInterval(keepaliveTimer);
+            keepaliveTimer = null;
+          }
+          if (!active) return;
+          const delayMs = Math.min(15000, 1000 * Math.pow(2, reconnectAttempt));
+          reconnectAttempt += 1;
+          reconnectTimer = window.setTimeout(connectWebSocket, delayMs);
+        };
+      } catch {
+        // Ignore WS setup failure in restricted test environments
+      }
+    };
+
+    connectWebSocket();
 
     return () => {
       active = false;
       window.clearInterval(resTimer);
+      if (keepaliveTimer !== null) window.clearInterval(keepaliveTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
   }, []);
@@ -1483,6 +1686,7 @@ export default function App() {
       wsRef.current.send(JSON.stringify({ type: 'mcp:eye', payload: evt }));
     }
   };
+  pushMcpEyeEventRef.current = pushMcpEyeEvent;
 
   const defaultPostForMachine = (machineType: MachineType): PostProcessorFormat => {
     switch (machineType) {
@@ -2333,6 +2537,7 @@ export default function App() {
                 onAddFeatureOp={handleAddFeatureOp}
                 onRemoveFeatureOp={handleRemoveFeatureOp}
                 scoobiiiProof={scoobiiiProof}
+                onOpenScoobiiiModal={() => setScoobiiiModalOpen(true)}
                 onUploadFile={handleUnifiedFileUpload}
                 onExecuteMagicPenMcpPrompt={handleExecuteMagicPenMcpPrompt}
                 onExportCertificate={(filename, kind, summary) =>
@@ -2643,6 +2848,7 @@ export default function App() {
                   onAddFeatureOp={handleAddFeatureOp}
                   onRemoveFeatureOp={handleRemoveFeatureOp}
                   scoobiiiProof={scoobiiiProof}
+                  onOpenScoobiiiModal={() => setScoobiiiModalOpen(true)}
                   onUploadFile={handleUnifiedFileUpload}
                   onExecuteMagicPenMcpPrompt={handleExecuteMagicPenMcpPrompt}
                   onExportCertificate={(filename, kind, summary) =>
@@ -2919,10 +3125,45 @@ export default function App() {
       {scoobiiiModalOpen && (
         <ScoobiiiVucModal
           report={scoobiiiProof}
+          telemetry={scoobiiiTelemetry}
           onClose={() => setScoobiiiModalOpen(false)}
           onExportCertificate={(filename, kind, summary) =>
             recordDeliverable({ filename, kind, summary })
           }
+          onIssueFormalVuc={async () => {
+            try {
+              const resp = await fetch('/api/vuc/formal-proof', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  domain: 'SCOOBIII_100PCT_MATRIX',
+                  inputPayload: {
+                    subdivisions: `${effectiveDesignParams.uDivisions}x${effectiveDesignParams.vDivisions}`,
+                    segment: partProfile.segment,
+                    material: display.materialFinish,
+                  },
+                  outputPayload: {
+                    certificateId: scoobiiiProof.certificateId,
+                    correlation: scoobiiiTelemetry?.correlation,
+                    unitCostBrl: scoobiiiTelemetry?.financialSummary.unitCost.totalUnitCostBrl,
+                  },
+                }),
+              });
+              if (resp.ok) {
+                const payload = (await resp.json()) as { certificate?: { vuc_id?: string } };
+                if (payload.certificate?.vuc_id) {
+                  setLastServerVucHex(payload.certificate.vuc_id);
+                }
+                const stateResp = await fetch('/api/sqlite/state');
+                if (stateResp.ok) {
+                  const st = (await stateResp.json()) as { vucLedger?: VucLedgerEntry[] };
+                  if (st.vucLedger) setVucLedger(st.vucLedger);
+                }
+              }
+            } catch {
+              // Offline fallback tolerance
+            }
+          }}
         />
       )}
 

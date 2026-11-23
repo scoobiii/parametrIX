@@ -24,7 +24,10 @@ import type {
   MachineType,
   PostProcessorFormat,
   RemoteMachineTarget,
+  VucLedgerEntry,
 } from '../types/cad';
+
+export type { VucLedgerEntry };
 
 export interface SavedSqliteProject {
   id: string;
@@ -36,15 +39,6 @@ export interface SavedSqliteProject {
   camJson: string;
   vucHash: string;
   updatedAt: string;
-}
-
-export interface VucLedgerEntry {
-  vucHash: string;
-  domain: string;
-  summary: string;
-  payloadJson: string;
-  sha256Hex: string;
-  createdAt: string;
 }
 
 function hashPassword(raw: string): string {
@@ -1352,7 +1346,7 @@ export class ParametrixSqliteStore {
     const countRow = this.db
       .prepare('SELECT COUNT(*) as total FROM cam_service_jobs')
       .get() as { total: number };
-    const clearedCount = Number(countRow?.total ?? 0);
+    const clearedCount = countRow.total;
     this.db.prepare('DELETE FROM cam_service_jobs').run();
     const proof = this.recordVucProof(
       'CAM_BASELINE_RESET',

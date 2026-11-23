@@ -5,8 +5,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LLAMA_TAG="${LLAMA_TAG:-b12608}"
 BIN_DIR="$ROOT_DIR/models/llama-bin"
 MODEL_DIR="$ROOT_DIR/models/qwen"
-MODEL_FILE="$MODEL_DIR/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+MODEL_VARIANT="${MODEL_VARIANT:-instruct}"
+if [ "$MODEL_VARIANT" = "coder" ]; then
+  MODEL_FILE="$MODEL_DIR/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf"
+  MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf"
+else
+  MODEL_FILE="$MODEL_DIR/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+  MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+fi
 
 mkdir -p "$BIN_DIR" "$MODEL_DIR"
 

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, animate, motion } from 'motion/react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
@@ -32,6 +33,12 @@ import {
   Volume2,
   Wand2,
 } from 'lucide-react';
+import {
+  CAMERA_NUDGE_MOTION_EASE,
+  CAMERA_PRESET_MOTION_EASE,
+  computeCameraPresetPose,
+  interpolateSphericalCameraPose,
+} from '../kernel/cameraTransitions';
 import { solveRobot6AxisIK } from '../kernel/camRobotics';
 import { RHINO_COMMAND_CATALOG } from '../kernel/rhinoGeometryEngine';
 import { ISO_METRIC_THREADS } from '../kernel/scoobiiiVuc';
@@ -188,6 +195,7 @@ interface Viewport3DProps {
   onAddFeatureOp?: (op: Omit<CadFeatureOperation, 'id' | 'createdAt'>) => void;
   onRemoveFeatureOp?: (id: string) => void;
   scoobiiiProof?: ScoobiiiVucProofReport;
+  onOpenScoobiiiModal?: () => void;
   onUploadFile?: (file: File) => Promise<void>;
   onExecuteMagicPenMcpPrompt?: (
     prompt: string,
@@ -883,12 +891,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   onAddFeatureOp,
   onRemoveFeatureOp,
   scoobiiiProof,
+  onOpenScoobiiiModal,
   onUploadFile,
   onExecuteMagicPenMcpPrompt,
   onExportCertificate,
   compact = false,
   onOpenHelp,
   onRunQuickFea,
+  onResetPart,
   camVisualState = null,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -930,7 +940,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [penRhinoWall, setPenRhinoWall] = useState(2.5);
   const [penRhinoAngle, setPenRhinoAngle] = useState(45);
   const [penRhinoCount, setPenRhinoCount] = useState(6);
-  const [penRhinoAxis, setPenRhinoAxis] = useState<'X' | 'Y' | 'Z'>('Y');
+  const [penRhinoAxis, setPenRhinoAxis] = useState<'x' | 'y' | 'z'>('y');
   const [penMcpPrompt, setPenMcpPrompt] = useState('');
   const [penMcpBusy, setPenMcpBusy] = useState(false);
   const [penMcpFeedback, setPenMcpFeedback] = useState<string | null>(null);
@@ -1114,8 +1124,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     defaultEnv: THREE.Texture | null;
     cpMeshes: THREE.Mesh[];
     currentExplode: number;
-    cameraTargetPos: THREE.Vector3 | null;
-    cameraTargetLook: THREE.Vector3 | null;
+    cameraTween: { stop: () => void } | null;
+    animateCameraTo: (
+      endPos: THREE.Vector3,
+      endLook: THREE.Vector3,
+      durationSec?: number,
+      ease?: [number, number, number, number]
+    ) => void;
     requestRender: () => void;
     isSoftwareGl: boolean;
   } | null>(null);
@@ -1515,25 +1530,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             refs.assemblyRoot.rotation.y += delta * 0.55;
             needsAnother = true;
           }
-
-          if (refs.cameraTargetPos && refs.cameraTargetLook) {
-            const lambda = 7.5;
-            camera.position.x = THREE.MathUtils.damp(camera.position.x, refs.cameraTargetPos.x, lambda, delta);
-            camera.position.y = THREE.MathUtils.damp(camera.position.y, refs.cameraTargetPos.y, lambda, delta);
-            camera.position.z = THREE.MathUtils.damp(camera.position.z, refs.cameraTargetPos.z, lambda, delta);
-            controls.target.x = THREE.MathUtils.damp(controls.target.x, refs.cameraTargetLook.x, lambda, delta);
-            controls.target.y = THREE.MathUtils.damp(controls.target.y, refs.cameraTargetLook.y, lambda, delta);
-            controls.target.z = THREE.MathUtils.damp(controls.target.z, refs.cameraTargetLook.z, lambda, delta);
-            if (
-              camera.position.distanceTo(refs.cameraTargetPos) < 0.5 &&
-              controls.target.distanceTo(refs.cameraTargetLook) < 0.5
-            ) {
-              refs.cameraTargetPos = null;
-              refs.cameraTargetLook = null;
-            } else {
-              needsAnother = true;
-            }
-          }
         }
 
         if (stateRef.current.simPlaying && stateRef.current.toolpath) {
@@ -1560,10 +1556,53 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       });
     };
 
-    const handleControlsStart = () => {
+    const animateCameraTo = (
+      endPos: THREE.Vector3,
+      endLook: THREE.Vector3,
+      durationSec = CAMERA_PRESET_MOTION_EASE.durationSec,
+      ease: [number, number, number, number] = CAMERA_PRESET_MOTION_EASE.ease
+    ) => {
+      if (sceneRefs.current?.cameraTween) {
+        sceneRefs.current.cameraTween.stop();
+        sceneRefs.current.cameraTween = null;
+      }
+      const startPose = {
+        position: camera.position.clone(),
+        target: controls.target.clone(),
+      };
+      const endPose = {
+        position: endPos.clone(),
+        target: endLook.clone(),
+      };
+      const tween = animate(0, 1, {
+        duration: durationSec,
+        ease,
+        onUpdate: (progress) => {
+          const nextPose = interpolateSphericalCameraPose(startPose, endPose, progress);
+          camera.position.copy(nextPose.position);
+          controls.target.copy(nextPose.target);
+          controls.update();
+          requestRender();
+        },
+        onComplete: () => {
+          camera.position.copy(endPose.position);
+          controls.target.copy(endPose.target);
+          controls.update();
+          if (sceneRefs.current && sceneRefs.current.cameraTween === tween) {
+            sceneRefs.current.cameraTween = null;
+          }
+          requestRender();
+        },
+      });
       if (sceneRefs.current) {
-        sceneRefs.current.cameraTargetPos = null;
-        sceneRefs.current.cameraTargetLook = null;
+        sceneRefs.current.cameraTween = tween;
+      }
+    };
+
+    const handleControlsStart = () => {
+      if (sceneRefs.current?.cameraTween) {
+        sceneRefs.current.cameraTween.stop();
+        sceneRefs.current.cameraTween = null;
       }
     };
     const handleControlsChange = () => requestRender();
@@ -1884,8 +1923,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       defaultEnv,
       cpMeshes: [],
       currentExplode: 0,
-      cameraTargetPos: null,
-      cameraTargetLook: null,
+      cameraTween: null,
+      animateCameraTo,
       requestRender,
       isSoftwareGl,
     };
@@ -1893,6 +1932,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     requestRender();
 
     return () => {
+      sceneRefs.current?.cameraTween?.stop();
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
       resizeObserver.disconnect();
@@ -2603,9 +2643,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     refs.camera.far = Math.max(4500, radius * 18);
     refs.camera.updateProjectionMatrix();
 
-    refs.cameraTargetLook = center.clone();
-    refs.cameraTargetPos = center.clone().add(new THREE.Vector3(radius * 1.35, radius * 0.72, radius * 1.55));
-    refs.requestRender();
+    refs.animateCameraTo(
+      center.clone().add(new THREE.Vector3(radius * 1.35, radius * 0.72, radius * 1.55)),
+      center.clone(),
+      CAMERA_PRESET_MOTION_EASE.durationSec,
+      CAMERA_PRESET_MOTION_EASE.ease
+    );
   }, [display.fitViewTrigger, importedModel]);
 
   // Render 3D Measurement Markers & Dimension Lines
@@ -2854,7 +2897,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         mesh.castShadow = true;
         container.add(mesh);
       } else if (op.kind === 'rhino-revolve') {
-        const rMax = Math.max(4, op.radiusMm ?? op.diameterMm * 0.5 ?? 10);
+        const rMax = Math.max(4, op.radiusMm ?? op.diameterMm * 0.5);
         const h = Math.max(6, op.depthMm);
         const profile = [
           new THREE.Vector2(rMax * 0.35, 0),
@@ -2890,14 +2933,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         container.add(ring);
       } else if (
         op.kind === 'rhino-boolean-union' ||
-        op.kind === 'rhino-boolean-difference' ||
-        op.kind === 'rhino-boolean-intersection'
+        op.kind === 'rhino-boolean-diff' ||
+        op.kind === 'rhino-boolean-intersect'
       ) {
         const r = Math.max(3, op.diameterMm * 0.5);
         const d = Math.max(4, op.depthMm);
-        const mat = op.kind === 'rhino-boolean-difference' ? pocketMat : rimMat;
+        const mat = op.kind === 'rhino-boolean-diff' ? pocketMat : rimMat;
         const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d, 24), mat);
-        cyl.position.y = op.kind === 'rhino-boolean-difference' ? -d * 0.35 : d * 0.45;
+        cyl.position.y = op.kind === 'rhino-boolean-diff' ? -d * 0.35 : d * 0.45;
         container.add(cyl);
       } else if (op.kind === 'rhino-shell' || op.kind === 'rhino-offset-srf') {
         const w = Math.max(8, op.widthMm);
@@ -2961,7 +3004,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     refs.requestRender();
   }, [featureOps, display.sectionEnabled, display.sectionRatio, display.sectionAxis, display.sectionFlipped]);
 
-  // Trigger camera preset smooth transition (all 7 IX Standard Views + perspective)
+  // Trigger Framer Motion spherical camera preset transition (all 7 IX Standard Views + perspective)
   useEffect(() => {
     const refs = sceneRefs.current;
     if (!refs || display.cameraTrigger === 0) return;
@@ -2975,28 +3018,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       box.getCenter(center);
       box.getSize(size);
     }
-    const dist = Math.max(180, size.length() * 1.45);
 
-    const presets: Record<CameraPreset, { pos: [number, number, number]; look: [number, number, number] }> = {
-      perspective: {
-        pos: [center.x + dist * 0.65, center.y + dist * 0.48, center.z + dist * 0.78],
-        look: [center.x, center.y, center.z],
-      },
-      isometric: {
-        pos: [center.x + dist * 0.68, center.y + dist * 0.62, center.z + dist * 0.68],
-        look: [center.x, center.y, center.z],
-      },
-      top: { pos: [center.x, center.y + dist * 1.15, center.z + 0.01], look: [center.x, center.y, center.z] },
-      bottom: { pos: [center.x, center.y - dist * 1.15, center.z + 0.01], look: [center.x, center.y, center.z] },
-      front: { pos: [center.x, center.y + dist * 0.04, center.z + dist * 1.15], look: [center.x, center.y, center.z] },
-      back: { pos: [center.x, center.y + dist * 0.04, center.z - dist * 1.15], look: [center.x, center.y, center.z] },
-      left: { pos: [center.x - dist * 1.15, center.y + dist * 0.04, center.z], look: [center.x, center.y, center.z] },
-      right: { pos: [center.x + dist * 1.15, center.y + dist * 0.04, center.z], look: [center.x, center.y, center.z] },
-    };
-    const p = presets[display.cameraPreset];
-    refs.cameraTargetPos = new THREE.Vector3(...p.pos);
-    refs.cameraTargetLook = new THREE.Vector3(...p.look);
-    refs.requestRender();
+    const pose = computeCameraPresetPose(display.cameraPreset, center, size);
+    refs.animateCameraTo(
+      pose.position,
+      pose.target,
+      CAMERA_PRESET_MOTION_EASE.durationSec,
+      CAMERA_PRESET_MOTION_EASE.ease
+    );
   }, [display.cameraPreset, display.cameraTrigger, importedModel]);
 
   useEffect(() => {
@@ -3013,9 +3042,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     spherical.theta += deltaTheta;
     spherical.phi = THREE.MathUtils.clamp(spherical.phi + deltaPhi, 0.08, Math.PI - 0.08);
     offset.setFromSpherical(spherical);
-    refs.cameraTargetLook = target;
-    refs.cameraTargetPos = target.clone().add(offset);
-    refs.requestRender();
+    refs.animateCameraTo(
+      target.clone().add(offset),
+      target,
+      CAMERA_NUDGE_MOTION_EASE.durationSec,
+      CAMERA_NUDGE_MOTION_EASE.ease
+    );
   };
 
   const nudgeZoom = (factor: number) => {
@@ -3025,9 +3057,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const offset = refs.camera.position.clone().sub(target);
     const nextLen = THREE.MathUtils.clamp(offset.length() * factor, 25, refs.controls.maxDistance);
     offset.setLength(nextLen);
-    refs.cameraTargetLook = target;
-    refs.cameraTargetPos = target.clone().add(offset);
-    refs.requestRender();
+    refs.animateCameraTo(
+      target.clone().add(offset),
+      target,
+      CAMERA_NUDGE_MOTION_EASE.durationSec,
+      CAMERA_NUDGE_MOTION_EASE.ease
+    );
   };
 
   const modes: { id: DisplayMode; label: string }[] = [
@@ -3440,7 +3475,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               <button
                 type="button"
                 title="SCOOBIII / VUC — Prova Matemática Paramétrica NURBS, BIM, Física e Normas"
-                onClick={() => setScoobiiiModalOpen(true)}
+                onClick={() => {
+                  if (onOpenScoobiiiModal) {
+                    onOpenScoobiiiModal();
+                  } else {
+                    setScoobiiiModalOpen(true);
+                  }
+                }}
                 className={`h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-[11px] font-semibold border transition-colors shrink-0 cursor-pointer ${
                   scoobiiiProof.allPassed
                     ? 'bg-emerald-500/15 border-emerald-400/45 text-emerald-200 hover:bg-emerald-500/25'
@@ -3949,28 +3990,37 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               VIEWS
             </button>
 
-            {viewsMenuOpen && (
-              <div className="absolute top-0 right-full mr-2 w-44 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl overflow-hidden grid grid-cols-2 text-[11px] font-bold text-slate-100">
-                {standardViews.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => {
-                      onUpdateDisplay({
-                        cameraPreset: v.id,
-                        cameraTrigger: display.cameraTrigger + 1,
-                      });
-                      setViewsMenuOpen(false);
-                    }}
-                    className={`py-2.5 px-2 text-center border-b border-r border-white/10 hover:bg-red-600 hover:text-white transition-colors cursor-pointer ${
-                      v.full ? 'col-span-2 border-r-0' : ''
-                    } ${display.cameraPreset === v.id ? 'bg-red-600/30 text-white' : ''}`}
-                  >
-                    {v.label}
-                  </button>
-                ))}
-              </div>
-            )}
+            <AnimatePresence>
+              {viewsMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.94, x: 10 }}
+                  animate={{ opacity: 1, scale: 1, x: 0 }}
+                  exit={{ opacity: 0, scale: 0.94, x: 10 }}
+                  transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                  className="absolute top-0 right-full mr-2 w-44 bg-[#232730]/95 border border-white/15 rounded-xl shadow-2xl overflow-hidden grid grid-cols-2 text-[11px] font-bold text-slate-100"
+                >
+                  {standardViews.map((v) => (
+                    <motion.button
+                      key={v.id}
+                      type="button"
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {
+                        onUpdateDisplay({
+                          cameraPreset: v.id,
+                          cameraTrigger: display.cameraTrigger + 1,
+                        });
+                        setViewsMenuOpen(false);
+                      }}
+                      className={`py-2.5 px-2 text-center border-b border-r border-white/10 hover:bg-red-600 hover:text-white transition-colors cursor-pointer ${
+                        v.full ? 'col-span-2 border-r-0' : ''
+                      } ${display.cameraPreset === v.id ? 'bg-red-600/35 text-white' : ''}`}
+                    >
+                      {v.label}
+                    </motion.button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       )}
@@ -4440,15 +4490,16 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1">
-                  <button
+                  <motion.button
                     type="button"
+                    whileTap={{ scale: 0.94 }}
                     onClick={() =>
                       onUpdateDisplay({ fitViewTrigger: display.fitViewTrigger + 1 })
                     }
                     className="px-2 py-1 rounded-md border border-emerald-400/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 whitespace-nowrap cursor-pointer"
                   >
                     Enquadrar
-                  </button>
+                  </motion.button>
                   {(
                     [
                       { id: 'isometric', label: 'Iso' },
@@ -4457,19 +4508,24 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                       { id: 'right', label: 'Lateral' },
                     ] as { id: CameraPreset; label: string }[]
                   ).map((cam) => (
-                    <button
+                    <motion.button
                       key={cam.id}
                       type="button"
+                      whileTap={{ scale: 0.94 }}
                       onClick={() =>
                         onUpdateDisplay({
                           cameraPreset: cam.id,
                           cameraTrigger: display.cameraTrigger + 1,
                         })
                       }
-                      className="px-2 py-1 text-slate-300 hover:text-white hover:bg-white/10 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      className={`px-2 py-1 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        display.cameraPreset === cam.id
+                          ? 'bg-sky-500/20 text-sky-200 border border-sky-400/40'
+                          : 'text-slate-300 hover:text-white hover:bg-white/10 border border-transparent'
+                      }`}
                     >
                       {cam.label}
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
               </div>
@@ -4808,12 +4864,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 <select
                   aria-label="Eixo Rhino"
                   value={penRhinoAxis}
-                  onChange={(e) => setPenRhinoAxis(e.target.value as 'X' | 'Y' | 'Z')}
+                  onChange={(e) => setPenRhinoAxis(e.target.value as 'x' | 'y' | 'z')}
                   className="px-2 py-1 bg-[#141923] border border-white/12 rounded text-slate-100"
                 >
-                  <option value="X">Eixo X</option>
-                  <option value="Y">Eixo Y</option>
-                  <option value="Z">Eixo Z</option>
+                  <option value="x">Eixo X</option>
+                  <option value="y">Eixo Y</option>
+                  <option value="z">Eixo Z</option>
                 </select>
                 <button
                   type="button"

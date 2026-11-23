@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RamdiskMcpStatus } from '../types/cad';
+import { assertInsideDirectory } from './projectWorkspaceManager';
 
 interface ActiveRamdiskWorker {
   child: ChildProcess;
@@ -28,9 +29,9 @@ export function inspectDevShmStatus(shmRoot = '/dev/shm'): {
       return { available: false, mountPath: os.tmpdir(), freeMb: 0, totalMb: 0 };
     }
     const stat = fs.statfsSync(shmRoot);
-    const bsize = Number(stat.bsize || 4096);
-    const blocks = Number(stat.blocks || 0);
-    const bfree = Number(stat.bavail ?? stat.bfree ?? 0);
+    const bsize = Number(stat.bsize);
+    const blocks = Number(stat.blocks);
+    const bfree = Number(stat.bavail);
     const totalMb = Math.round((blocks * bsize) / (1024 * 1024));
     const freeMb = Math.round((bfree * bsize) / (1024 * 1024));
     return { available: true, mountPath: shmRoot, freeMb, totalMb };
@@ -108,25 +109,25 @@ process.on('SIGTERM', () => {
 
 export async function startRamdiskMcpWorker(
   userSlug: string,
-  shmRoot = '/dev/shm'
+  shmRoot = '/dev/shm',
+  options?: { workerScriptOverride?: string; readyTimeoutMs?: number }
 ): Promise<RamdiskMcpStatus> {
   if (activeWorker && activeWorker.child.exitCode === null && !activeWorker.child.killed) {
     return getRamdiskMcpStatus(undefined, shmRoot);
   }
 
   const shm = inspectDevShmStatus(shmRoot);
-  const safeSlug = String(userSlug || 'local')
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'local';
+  const safeSlug =
+    String(userSlug)
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'local';
   const baseRoot = shm.available ? shm.mountPath : os.tmpdir();
   const workspaceDir = path.resolve(baseRoot, `parametrix-mcp-${safeSlug}`);
-  if (!workspaceDir.startsWith(path.resolve(baseRoot) + path.sep)) {
-    throw new Error('Caminho inválido para workspace Ramdisk.');
-  }
+  assertInsideDirectory(baseRoot, workspaceDir, 'Caminho inválido para workspace Ramdisk.');
   fs.mkdirSync(workspaceDir, { recursive: true });
   const scriptPath = path.join(workspaceDir, 'worker.cjs');
-  fs.writeFileSync(scriptPath, buildInlineWorkerScript(), 'utf8');
+  fs.writeFileSync(scriptPath, options?.workerScriptOverride ?? buildInlineWorkerScript(), 'utf8');
 
   const child = spawn(process.execPath, [scriptPath], {
     shell: false,
@@ -138,36 +139,41 @@ export async function startRamdiskMcpWorker(
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  const readyInfo = await new Promise<{ port: number }>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('Timeout ao inicializar worker MCP no Ramdisk.'));
-    }, 4000);
+  const timeoutMs = options?.readyTimeoutMs ?? 4000;
+  let readyInfo: { port: number };
+  try {
+    readyInfo = await new Promise<{ port: number }>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error('Timeout ao inicializar worker MCP no Ramdisk.'));
+      }, timeoutMs);
 
-    let buffer = '';
-    child.stdout?.on('data', (chunk) => {
-      buffer += String(chunk);
-      const line = buffer.split('\n')[0]?.trim();
-      if (!line) return;
-      try {
-        const parsed = JSON.parse(line) as { ready?: boolean; port?: number };
-        if (parsed.ready && typeof parsed.port === 'number' && parsed.port > 0) {
-          clearTimeout(timer);
-          resolve({ port: parsed.port });
+      let buffer = '';
+      child.stdout.on('data', (chunk) => {
+        buffer += String(chunk);
+        const nlIdx = buffer.indexOf('\n');
+        if (nlIdx === -1) return;
+        const line = buffer.slice(0, nlIdx).trim();
+        try {
+          const parsed = JSON.parse(line) as { ready?: boolean; port?: number };
+          if (parsed.ready && typeof parsed.port === 'number' && parsed.port > 0) {
+            clearTimeout(timer);
+            resolve({ port: parsed.port });
+          }
+        } catch {
+          // ignore non-JSON line
         }
-      } catch {
-        // wait for full JSON line
-      }
-    });
+      });
 
-    child.once('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
+      child.once('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`Worker MCP Ramdisk encerrou prematuramente (código ${code}).`));
+      });
     });
-    child.once('exit', (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Worker MCP Ramdisk encerrou prematuramente (código ${code ?? 'null'}).`));
-    });
-  });
+  } catch (err) {
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+    throw err;
+  }
 
   const url = `http://127.0.0.1:${readyInfo.port}`;
   activeWorker = {
@@ -192,21 +198,15 @@ export async function stopRamdiskMcpWorker(shmRoot = '/dev/shm'): Promise<Ramdis
   const current = activeWorker;
   if (current) {
     activeWorker = null;
-    if (current.child.exitCode === null && !current.child.killed) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => resolve(), 1500);
-        current.child.once('exit', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-        current.child.kill('SIGTERM');
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 1500);
+      current.child.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
       });
-    }
-    try {
-      fs.rmSync(current.ramdiskPath, { recursive: true, force: true });
-    } catch {
-      // Non-fatal cleanup error
-    }
+      current.child.kill('SIGTERM');
+    });
+    fs.rmSync(current.ramdiskPath, { recursive: true, force: true });
   }
   return getRamdiskMcpStatus(undefined, shmRoot);
 }

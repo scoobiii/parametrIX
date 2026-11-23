@@ -515,7 +515,7 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
                     </span>
                   </div>
                   <div className="text-slate-400 leading-snug">
-                    {selectedComp.manufacturingProcess.rationale}
+                    Máquina: <span className="font-mono-tabular text-sky-300">{selectedComp.manufacturingProcess.machineType}</span> · {selectedComp.manufacturingProcess.fixtureNotes}
                   </div>
                   <ol className="list-decimal list-inside space-y-0.5 text-slate-300">
                     {selectedComp.manufacturingProcess.routingSteps.map((step, idx) => (

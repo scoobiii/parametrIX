@@ -34,6 +34,7 @@ export async function ensureUserDriveProjectFolder(
       folderId: existing.id,
       folderName: existing.name,
       webViewLink: existing.webViewLink,
+      files: [],
     };
   }
 
@@ -57,6 +58,7 @@ export async function ensureUserDriveProjectFolder(
     folderId: created.id,
     folderName: created.name,
     webViewLink: created.webViewLink,
+    files: [],
   };
 }
 

@@ -142,6 +142,78 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
   const [logs, setLogs] = useState<McpExecutionLog[]>([]);
   const [copiedConfig, setCopiedConfig] = useState(false);
 
+  // Hermes + Claw Family (OpenClaw / NanoClaw / PicoClaw) + Qwen 0.5B + Search + VUC state
+  const [selectedAgentFamily, setSelectedAgentFamily] = useState<
+    'hermes' | 'openclaw' | 'nanoclaw' | 'picoclaw'
+  >('hermes');
+  const [hermesStatus, setHermesStatus] = useState<{
+    browserRelayConnectedCount: number;
+    wsConnectedClients: number;
+    llamaPort: number;
+    llamaServerOnline: boolean;
+    localQwenStatus: {
+      installed: boolean;
+      modelId: string;
+    };
+  } | null>(null);
+  const [hermesBundle, setHermesBundle] = useState<{
+    configYaml: string;
+    skillMarkdown: string;
+    mcpBridgePy: string;
+    llamaServerCmd: string;
+    contextLength: number;
+  } | null>(null);
+  const [clawStatus, setClawStatus] = useState<{
+    configsDetected: Record<'hermes' | 'openclaw' | 'nanoclaw' | 'picoclaw', boolean>;
+  } | null>(null);
+  const [clawBundle, setClawBundle] = useState<{
+    openclawJson: string;
+    nanoclawYaml: string;
+    picoclawJson: string;
+    clawSkillMarkdown: string;
+    mcpBridgePy: string;
+    llamaServerCmd: string;
+  } | null>(null);
+  const [hermesCopiedKind, setHermesCopiedKind] = useState<'yaml' | 'bridge' | null>(null);
+  const [hermesSearchBusy, setHermesSearchBusy] = useState(false);
+  const [hermesSearchPreview, setHermesSearchPreview] = useState<{
+    compactSummaryText: string;
+    approxTokens: number;
+    vucId: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+    const loadAgents = async () => {
+      try {
+        const [stResp, bResp, clawStResp, clawBResp] = await Promise.all([
+          fetch('/api/hermes/status'),
+          fetch('/api/hermes/bundle'),
+          fetch('/api/claw/status'),
+          fetch('/api/claw/bundle'),
+        ]);
+        if (stResp.ok && mounted) {
+          setHermesStatus(await stResp.json());
+        }
+        if (bResp.ok && mounted) {
+          setHermesBundle(await bResp.json());
+        }
+        if (clawStResp.ok && mounted) {
+          setClawStatus(await clawStResp.json());
+        }
+        if (clawBResp.ok && mounted) {
+          setClawBundle(await clawBResp.json());
+        }
+      } catch {
+        // Offline tolerance
+      }
+    };
+    void loadAgents();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const selectedTool =
     MCP_TOOLS_CATALOG.find((t) => t.name === selectedToolName) ?? MCP_TOOLS_CATALOG[0];
 
@@ -508,6 +580,80 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
       setTimeout(() => setCopiedConfig(false), 1800);
     } catch {
       // Clipboard blocked in sandbox
+    }
+  };
+
+  const activeFamilyConfigText = (() => {
+    if (selectedAgentFamily === 'openclaw' && clawBundle) return clawBundle.openclawJson;
+    if (selectedAgentFamily === 'nanoclaw' && clawBundle) return clawBundle.nanoclawYaml;
+    if (selectedAgentFamily === 'picoclaw' && clawBundle) return clawBundle.picoclawJson;
+    if (hermesBundle) return hermesBundle.configYaml;
+    return '';
+  })();
+
+  const handleCopyHermesYaml = async () => {
+    if (!activeFamilyConfigText) return;
+    try {
+      const cmd = hermesBundle?.llamaServerCmd ?? clawBundle?.llamaServerCmd ?? '';
+      await navigator.clipboard.writeText(
+        `${activeFamilyConfigText}\n# Subir Qwen 0.5B:\n# ${cmd}\n`
+      );
+      setHermesCopiedKind('yaml');
+      setTimeout(() => setHermesCopiedKind(null), 1800);
+    } catch {
+      // Clipboard blocked in sandbox
+    }
+  };
+
+  const handleCopyHermesBridge = async () => {
+    const py = hermesBundle?.mcpBridgePy ?? clawBundle?.mcpBridgePy;
+    const md = hermesBundle?.skillMarkdown ?? clawBundle?.clawSkillMarkdown;
+    if (!py || !md) return;
+    try {
+      await navigator.clipboard.writeText(
+        `# === ~/.hermes/mcp/parametrix_mcp_stdio.py ===\n${py}\n# === SKILL.md ===\n${md}`
+      );
+      setHermesCopiedKind('bridge');
+      setTimeout(() => setHermesCopiedKind(null), 1800);
+    } catch {
+      // Clipboard blocked in sandbox
+    }
+  };
+
+  const handleTestHermesSearch = async () => {
+    setHermesSearchBusy(true);
+    try {
+      const resp = await fetch('/api/hermes/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: runtimeContext.partProfile?.partName || 'engrenagem M2 Z24',
+          includeWeb: false,
+          maxResults: 4,
+          cadSummary: {
+            partName: runtimeContext.partProfile?.partName || 'Modelo Parametrix',
+            activeSegment: runtimeContext.activeSegment,
+            machineType: runtimeContext.camSettings.machineType,
+            estimatedMinutes: runtimeContext.toolpath.estimatedMinutes,
+            cuttingLengthMm: runtimeContext.toolpath.cuttingLengthMm,
+            safetyFactor: runtimeContext.feaResult.safetyFactor,
+          },
+        }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          compactSummaryText: string;
+          approxTokens: number;
+          vucCertificate?: { vuc_id?: string };
+        };
+        setHermesSearchPreview({
+          compactSummaryText: data.compactSummaryText,
+          approxTokens: data.approxTokens,
+          vucId: data.vucCertificate?.vuc_id ?? 'N/A',
+        });
+      }
+    } finally {
+      setHermesSearchBusy(false);
     }
   };
 
@@ -1213,6 +1359,149 @@ export const McpToolsPanel: React.FC<McpToolsPanelProps> = ({
                 <pre className="p-3.5 bg-[#080a0f] border border-white/8 rounded-lg font-mono-tabular text-[11px] text-slate-300 overflow-x-auto">
                   {MCP_CLIENT_CONFIG}
                 </pre>
+              </div>
+
+              <div className="p-5 bg-[#111620] border border-emerald-500/25 rounded-xl space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="font-display text-sm font-semibold text-emerald-300">
+                      Hermes + Família Claw Baixa Renda (OpenClaw / NanoClaw / PicoClaw) + Qwen 0.5B + VUC
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Setup Termux/Debian Proot: <code className="text-emerald-300">npm run hermes:setup</code>{' '}
+                      ou <code className="text-sky-300">npm run claw:setup</code> para gravar{' '}
+                      <code className="text-slate-200">~/.openclaw/openclaw.json</code>,{' '}
+                      <code className="text-slate-200">~/.nanoclaw/config.yaml</code>,{' '}
+                      <code className="text-slate-200">~/.picoclaw/config.json</code> e bridge STDIO &lt;600 tokens.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`px-2 py-1 text-[11px] font-mono-tabular rounded border ${
+                        hermesStatus && hermesStatus.browserRelayConnectedCount > 0
+                          ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                          : 'bg-[#0c1017] border-white/10 text-slate-300'
+                      }`}
+                    >
+                      Relay /ws:{' '}
+                      {hermesStatus ? `${hermesStatus.browserRelayConnectedCount} aba(s)` : '...'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyHermesYaml}
+                      disabled={!activeFamilyConfigText}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 hover:border-emerald-400/50 text-slate-200 rounded-lg cursor-pointer disabled:opacity-50"
+                    >
+                      {hermesCopiedKind === 'yaml' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      Copiar Config ({selectedAgentFamily})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyHermesBridge}
+                      disabled={!hermesBundle && !clawBundle}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 hover:border-sky-400/50 text-slate-200 rounded-lg cursor-pointer disabled:opacity-50"
+                    >
+                      {hermesCopiedKind === 'bridge' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      Copiar STDIO + SKILL
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestHermesSearch}
+                      disabled={hermesSearchBusy}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg cursor-pointer disabled:opacity-50"
+                    >
+                      {hermesSearchBusy ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Play className="w-3.5 h-3.5" />
+                      )}
+                      Testar Search + VUC
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      { id: 'hermes', label: 'Hermes Git (YAML)' },
+                      { id: 'openclaw', label: 'OpenClaw (JSON5/Zod)' },
+                      { id: 'nanoclaw', label: 'NanoClaw (Sandbox YAML)' },
+                      { id: 'picoclaw', label: 'PicoClaw (Go ~10MB JSON)' },
+                    ] as const
+                  ).map((tab) => {
+                    const installedHere = clawStatus?.configsDetected?.[tab.id];
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setSelectedAgentFamily(tab.id)}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                          selectedAgentFamily === tab.id
+                            ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-200'
+                            : 'bg-[#080a0f] border-white/10 text-slate-300 hover:border-white/25'
+                        }`}
+                      >
+                        {tab.label}
+                        {installedHere ? ' ✓' : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {activeFamilyConfigText && (
+                  <pre className="p-3 bg-[#080a0f] border border-white/8 rounded-lg font-mono-tabular text-[11px] text-slate-300 max-h-44 overflow-auto">
+                    {activeFamilyConfigText}
+                  </pre>
+                )}
+
+                {hermesStatus && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono-tabular">
+                    <div className="p-2 bg-[#080a0f] border border-white/8 rounded">
+                      <span className="text-slate-400 block">Modelo Qwen</span>
+                      <span className="text-slate-100">
+                        {hermesStatus.localQwenStatus?.installed ? 'Instalado' : 'Pendente'} (
+                        {hermesStatus.localQwenStatus?.modelId ?? 'qwen2.5-0.5b'})
+                      </span>
+                    </div>
+                    <div className="p-2 bg-[#080a0f] border border-white/8 rounded">
+                      <span className="text-slate-400 block">Porta llama-server</span>
+                      <span className="text-slate-100">
+                        127.0.0.1:{hermesStatus.llamaPort}{' '}
+                        {hermesStatus.llamaServerOnline ? '(ON)' : '(OFF)'}
+                      </span>
+                    </div>
+                    <div className="p-2 bg-[#080a0f] border border-white/8 rounded">
+                      <span className="text-slate-400 block">Contexto / Gate</span>
+                      <span className="text-slate-100">
+                        {hermesBundle?.contextLength ?? 32768} tok
+                      </span>
+                    </div>
+                    <div className="p-2 bg-[#080a0f] border border-white/8 rounded">
+                      <span className="text-slate-400 block">Clientes WS</span>
+                      <span className="text-slate-100">{hermesStatus.wsConnectedClients}</span>
+                    </div>
+                  </div>
+                )}
+
+                {hermesSearchPreview && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono-tabular text-emerald-300">
+                      <span>VUC: {hermesSearchPreview.vucId}</span>
+                      <span>~{hermesSearchPreview.approxTokens} tokens</span>
+                    </div>
+                    <pre className="p-3 bg-[#080a0f] border border-white/8 rounded-lg font-mono-tabular text-[11px] text-slate-300 max-h-40 overflow-auto whitespace-pre-wrap">
+                      {hermesSearchPreview.compactSummaryText}
+                    </pre>
+                  </div>
+                )}
               </div>
             </div>
           </div>

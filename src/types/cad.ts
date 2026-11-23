@@ -778,6 +778,15 @@ export interface VucExecutionProof {
   deterministicSeed: string;
 }
 
+export interface VucLedgerEntry {
+  vucHash: string;
+  domain: string;
+  summary: string;
+  payloadJson: string;
+  sha256Hex: string;
+  createdAt: string;
+}
+
 export interface RackArchitectureSpec {
   id: 'nvidia-1mw' | 'frostbite-1mw';
   label: string;
@@ -1112,8 +1121,8 @@ export interface FrostbiteDatacenterState {
 export interface LocalProjectFolderFile {
   name: string;
   sizeBytes: number;
-  modifiedAt: string;
-  relativePath: string;
+  updatedAt: string;
+  sha256: string;
 }
 
 export interface GoogleDriveFolderFile {
@@ -1133,18 +1142,14 @@ export interface GoogleDriveFolderInfo {
 }
 
 export interface RamdiskMcpStatus {
-  tmpfsAvailable: boolean;
-  shmPath: string;
-  workspaceDir: string;
-  shmTotalMb: number;
-  shmFreeMb: number;
-  workerRunning: boolean;
-  workerPid: number | null;
-  workerPort: number | null;
-  workerUrl: string | null;
-  startedAt: string | null;
-  lastError: string | null;
-  colabBridgeUrl: string | null;
-  colabBridgeHealthy: boolean;
-  colabBridgeDetails?: string | null;
+  available: boolean;
+  mountPath: string;
+  freeMb: number;
+  totalMb: number;
+  workerActive: boolean;
+  workerPid?: number;
+  workerPort?: number;
+  workerUrl?: string;
+  workerWorkspace?: string;
+  colabBridgeUrl?: string;
 }

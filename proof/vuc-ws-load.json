@@ -1,0 +1,31 @@
+{
+  "summary": {
+    "concurrentWsClients": 12,
+    "allSawSync": true,
+    "wsHandshakeP50Ms": 20.22,
+    "wsHandshakeP95Ms": 23.98,
+    "wsPongP50Ms": 8.91,
+    "wsPongP95Ms": 13.84,
+    "bidirectionalMcpRelayMs": 76.1,
+    "bidirectionalMcpRelayVucId": "VUC-ED25519-3D25693FC83A2739"
+  },
+  "certificate": {
+    "vuc_id": "VUC-ED25519-3518555D6B1D58A0",
+    "domain": "WEBSOCKET_K6_SOAK_VUC",
+    "status": "PASS",
+    "hash_input": "239B5636710F5C50BFD98779B524671D3D056A638D03224DFF48D84BFFB1AE21",
+    "hash_output": "AC4996C2A62A9139CA3EBED62B6729DB70F8D6E812062330476457ECD3F2CA2E",
+    "hash_processo": "3518555D6B1D58A0A5EED00336E99C668844DD17056770D0ED4ACB1FA1C2473C",
+    "commit": "local-working-tree",
+    "runner": "local-sandbox",
+    "node_version": "v22.23.4",
+    "duracao_ms": 159,
+    "timestamp": "2026-11-23T02:39:41.993Z",
+    "assinatura_ed25519": "d85558dAaEMffEAcgodHlte1QDjUvB-b0wQRm5jORvF3RIY-9Mu-TXgsjx4y9x_YAhDZcVqgSPyeQxYGYoFmBQ",
+    "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKvrYTExr203e6Avrw33rbtl450EVmnm7ZERqMe/vyD8=\n-----END PUBLIC KEY-----\n"
+  },
+  "verify": {
+    "valid": true,
+    "reason": "Assinatura Ed25519 e hashes SHA-256 verificados."
+  }
+}
