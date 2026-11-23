@@ -2,27 +2,27 @@
   "summary": {
     "concurrentWsClients": 12,
     "allSawSync": true,
-    "wsHandshakeP50Ms": 20.22,
-    "wsHandshakeP95Ms": 23.98,
-    "wsPongP50Ms": 8.91,
-    "wsPongP95Ms": 13.84,
-    "bidirectionalMcpRelayMs": 76.1,
-    "bidirectionalMcpRelayVucId": "VUC-ED25519-3D25693FC83A2739"
+    "wsHandshakeP50Ms": 73.77,
+    "wsHandshakeP95Ms": 94.37,
+    "wsPongP50Ms": 32.61,
+    "wsPongP95Ms": 67.62,
+    "bidirectionalMcpRelayMs": 211.62,
+    "bidirectionalMcpRelayVucId": "VUC-ED25519-1FE089465A2FF193"
   },
   "certificate": {
-    "vuc_id": "VUC-ED25519-3518555D6B1D58A0",
+    "vuc_id": "VUC-ED25519-8C25431F4CEDC37A",
     "domain": "WEBSOCKET_K6_SOAK_VUC",
     "status": "PASS",
     "hash_input": "239B5636710F5C50BFD98779B524671D3D056A638D03224DFF48D84BFFB1AE21",
-    "hash_output": "AC4996C2A62A9139CA3EBED62B6729DB70F8D6E812062330476457ECD3F2CA2E",
-    "hash_processo": "3518555D6B1D58A0A5EED00336E99C668844DD17056770D0ED4ACB1FA1C2473C",
+    "hash_output": "D9817F71793E8C4E82FD0A20123DA7777283A0CB0FF0E085B718BC3CAC62FA23",
+    "hash_processo": "8C25431F4CEDC37AE285D93C8CCCCAA5CB04F9E077EF35BDD7B4720AF042A859",
     "commit": "local-working-tree",
     "runner": "local-sandbox",
     "node_version": "v22.23.4",
-    "duracao_ms": 159,
-    "timestamp": "2026-11-23T02:39:41.993Z",
-    "assinatura_ed25519": "d85558dAaEMffEAcgodHlte1QDjUvB-b0wQRm5jORvF3RIY-9Mu-TXgsjx4y9x_YAhDZcVqgSPyeQxYGYoFmBQ",
-    "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKvrYTExr203e6Avrw33rbtl450EVmnm7ZERqMe/vyD8=\n-----END PUBLIC KEY-----\n"
+    "duracao_ms": 421,
+    "timestamp": "2026-11-23T20:14:53.889Z",
+    "assinatura_ed25519": "hFsS4k6tMcsmr57rNiczNjgYqVyablySDeFEIcgSMSYY9CmAfE9ARlWYZwjbEA-HE3gH3wHjucww1moCuz1sCg",
+    "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAaKRaFb3bE+tZqKnkCweLpg56d1qfc9A67IK7qLQlLHI=\n-----END PUBLIC KEY-----\n"
   },
   "verify": {
     "valid": true,

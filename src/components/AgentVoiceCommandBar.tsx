@@ -9,6 +9,7 @@ import {
   Mic,
   MicOff,
   RotateCcw,
+  Search,
   Send,
   Sparkles,
   Volume2,
@@ -49,6 +50,7 @@ interface SpeechRecognitionLike {
 interface AgentVoiceCommandBarProps {
   selectedAgentId: AgentProviderId;
   onSelectAgent: (id: AgentProviderId) => void;
+  offlineMode?: boolean;
   systemResources: SystemResourceSnapshot | null;
   localLlmRec: LocalLlmRecommendation | null;
   localQwenStatus?: {
@@ -70,6 +72,7 @@ interface AgentVoiceCommandBarProps {
 export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
   selectedAgentId,
   onSelectAgent,
+  offlineMode = false,
   systemResources,
   localLlmRec,
   localQwenStatus,
@@ -185,6 +188,37 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
     }
   };
 
+  const handleSearchHermes = async (rawQuery?: string) => {
+    const query = (rawQuery ?? promptDraft).trim() || 'status cam qwen 0.5b vuc';
+    setAgentBusy(true);
+    try {
+      const resp = await fetch('/api/hermes/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          includeWeb: !offlineMode || /https?:\/\/|grabcad/i.test(query),
+          maxResults: 4,
+        }),
+      });
+      const data = (await resp.json()) as {
+        compactSummaryText?: string;
+        specialistProfile?: { title?: string; modelVariant?: string };
+        vucCertificate?: { vuc_id?: string };
+        error?: string;
+      };
+      const summary = data.compactSummaryText
+        ? `[Hermes Search · ${data.specialistProfile?.title ?? 'Qwen 0.5B RT'} · VUC ${data.vucCertificate?.vuc_id ?? ''}] ${data.compactSummaryText.replace(/\n+/g, ' | ')}`
+        : data.error || 'Busca Hermes executada no RAG local.';
+      setAgentReply(summary);
+      speakFeedback(summary.slice(0, 220));
+    } catch {
+      setAgentReply('Busca Hermes indisponível no momento; usando estado local do processo.');
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
   const handleDispatchPrompt = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = promptDraft.trim();
@@ -235,6 +269,18 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
             <KeyRound className="w-3 h-3 text-amber-400" />
             <span className="hidden sm:inline">Login Agente</span>
           </button>
+
+          {(offlineMode || selectedAgentId === 'local-llm') && (
+            <div
+              className="flex items-center gap-1.5 px-2 py-1 border border-emerald-400/45 bg-emerald-500/15 rounded text-[11px] font-mono-tabular text-emerald-200"
+              title="Agente Local ativo: Mordomo Hermes + Burrinhos OpenClaw/NanoClaw/PicoClaw + Qwen 2.5 0.5B Super-RAG"
+            >
+              <Sparkles className="w-3 h-3 shrink-0 text-emerald-300" />
+              <span>
+                {offlineMode ? 'Offline: ' : ''}Hermes + Burrinhos · Qwen 0.5B RT
+              </span>
+            </div>
+          )}
 
           {localLlmRec && systemResources && (
             <div
@@ -331,14 +377,24 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
         <div className="mt-2 pt-2 border-t border-white/8 flex flex-col gap-1.5">
           {barExpanded && (
             <div className="space-y-1.5">
-              <form onSubmit={handleDispatchPrompt} className="flex items-center gap-2">
+              <form onSubmit={handleDispatchPrompt} className="flex flex-wrap items-center gap-2">
                 <input
                   type="text"
                   value={promptDraft}
                   onChange={(e) => setPromptDraft(e.target.value)}
-                  placeholder='Comando CAM ou pergunta ao agente (ex: "reiniciar cam", "modo po metalico", "qual a sinterizacao?")...'
-                  className="flex-1 px-3 py-1.5 text-xs bg-[#090c11] border border-white/12 rounded text-slate-100 outline-none focus:border-sky-400"
+                  placeholder='Comando CAM, URL GrabCAD ou pergunta ao Hermes/Qwen 0.5B...'
+                  className="flex-1 min-w-[200px] px-3 py-1.5 text-xs bg-[#090c11] border border-white/12 rounded text-slate-100 outline-none focus:border-sky-400"
                 />
+                <button
+                  type="button"
+                  disabled={agentBusy}
+                  onClick={() => void handleSearchHermes()}
+                  className="px-3 py-1.5 text-xs font-semibold bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 rounded hover:bg-emerald-500/30 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+                  title="Buscar via Hermes + Burrinhos no Super-RAG local e GrabCAD"
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  Buscar Hermes
+                </button>
                 <button
                   type="submit"
                   disabled={agentBusy}
@@ -360,12 +416,17 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
                   { label: 'Cold-Plate DC', cmd: 'coldplate' },
                   { label: 'Prova VUC Ed25519', cmd: 'prova vuc' },
                   { label: 'Enviar Código G / MQTT', cmd: 'enviar codigo g' },
+                  { label: 'Search GrabCAD / RAG', cmd: 'buscar grabcad engrenagem helice step stl' },
                   { label: 'Agente: Status CAM & Sinterização', cmd: 'qual parametro de sinterizacao e ferramenta CAM atual?' },
                 ].map((chip) => (
                   <button
                     key={chip.label}
                     type="button"
                     onClick={() => {
+                      if (chip.label === 'Search GrabCAD / RAG') {
+                        void handleSearchHermes(chip.cmd);
+                        return;
+                      }
                       const intent = onVoiceTranscript(chip.cmd);
                       if (intent.matched && intent.action !== 'agent-query') {
                         speakFeedback(intent.feedbackText);

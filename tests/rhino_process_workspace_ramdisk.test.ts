@@ -550,11 +550,11 @@ describe('ramdiskMcpAccelerator ephemeral worker & Colab/GCloud bridge', () => {
       await new Promise((r) => setTimeout(r, 120));
       expect(getRamdiskMcpStatus(undefined, tmpRoot).workerActive).toBe(false);
 
-      // Error handling: startup timeout
+      // Error handling: startup timeout + partial chunk without newline
       await expect(
         startRamdiskMcpWorker('timeout-worker', tmpRoot, {
-          workerScriptOverride: 'process.stdout.write("partial-no-newline"); setTimeout(() => {}, 5000);',
-          readyTimeoutMs: 60,
+          workerScriptOverride: 'process.stdout.write("partial-no-newline"); setInterval(() => {}, 1000);',
+          readyTimeoutMs: 250,
         })
       ).rejects.toThrow(/Timeout/);
 

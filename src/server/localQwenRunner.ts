@@ -6,9 +6,12 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { CamAgentContextSummary } from '../kernel/camAgentSystemInstruction';
 import {
+  QWEN_CODER_GGUF_REL_PATH,
   QWEN_CORE_GGUF_REL_PATH,
   QWEN_CORE_MODEL_ID,
   QWEN_CORE_SYSTEM_PROMPT,
+  type Qwen05bVariantId,
+  type QwenSpecialistFunctionId,
   buildQwenChatMlFinetuneDataset,
   retrieveQwenRagContext,
   serializeQwenFinetuneJsonl,
@@ -20,6 +23,8 @@ const execFileAsync = promisify(execFile);
 
 export interface LocalQwenRuntimeStatus {
   installed: boolean;
+  coderInstalled: boolean;
+  instructInstalled: boolean;
   modelId: string;
   binaryPath: string | null;
   modelPath: string | null;
@@ -33,6 +38,9 @@ export interface LocalQwenRuntimeStatus {
 export interface LocalQwenInferResult {
   reply: string;
   modelUsed: string;
+  specialistId: QwenSpecialistFunctionId;
+  specialistTitle: string;
+  modelVariant: Qwen05bVariantId;
   durationMs: number;
   ragSourcesUsed: string[];
   finetuneExamplesCount: number;
@@ -50,10 +58,15 @@ export function getRegisteredRagDocs(): RagSourceDocument[] {
   return REGISTRY_CACHE.docs;
 }
 
-export function resolveLocalQwenPaths(rootDir = process.cwd()): {
+export function resolveLocalQwenPaths(
+  rootDir = process.cwd(),
+  preferredVariant?: Qwen05bVariantId
+): {
   binDir: string;
   binaryPath: string | null;
   modelPath: string | null;
+  coderModelPath: string | null;
+  instructModelPath: string | null;
   ragDatasetPath: string;
   systemPromptPath: string;
 } {
@@ -66,17 +79,36 @@ export function resolveLocalQwenPaths(rootDir = process.cwd()): {
       ? cliBin
       : null;
 
-  const coderCandidate = path.resolve(rootDir, 'models', 'qwen', 'qwen2.5-coder-0.5b-instruct-q4_k_m.gguf');
-  const modelCandidate = path.resolve(rootDir, QWEN_CORE_GGUF_REL_PATH);
-  const pickedModel = [coderCandidate, modelCandidate].find(
-    (candidate) => fs.existsSync(candidate) && fs.statSync(candidate).size > 100_000_000
-  );
-  const modelPath = pickedModel ?? null;
+  const coderCandidate = path.resolve(rootDir, QWEN_CODER_GGUF_REL_PATH);
+  const instructCandidate = path.resolve(rootDir, QWEN_CORE_GGUF_REL_PATH);
+  const coderReady = fs.existsSync(coderCandidate) && fs.statSync(coderCandidate).size > 100_000_000;
+  const instructReady =
+    fs.existsSync(instructCandidate) && fs.statSync(instructCandidate).size > 100_000_000;
+
+  const orderedCandidates =
+    preferredVariant === 'qwen2.5-0.5b-instruct-q4'
+      ? [
+          instructReady ? instructCandidate : null,
+          coderReady ? coderCandidate : null,
+        ]
+      : [
+          coderReady ? coderCandidate : null,
+          instructReady ? instructCandidate : null,
+        ];
+  const modelPath = orderedCandidates.find(Boolean) ?? null;
 
   const ragDatasetPath = path.resolve(rootDir, 'models', 'qwen', 'parametrix-finetune-rag.jsonl');
   const systemPromptPath = path.resolve(rootDir, 'models', 'qwen', 'parametrix-system.txt');
 
-  return { binDir, binaryPath, modelPath, ragDatasetPath, systemPromptPath };
+  return {
+    binDir,
+    binaryPath,
+    modelPath,
+    coderModelPath: coderReady ? coderCandidate : null,
+    instructModelPath: instructReady ? instructCandidate : null,
+    ragDatasetPath,
+    systemPromptPath,
+  };
 }
 
 export function syncQwenProjectRagDataset(
@@ -126,7 +158,8 @@ export function syncQwenProjectRagDataset(
 }
 
 export function getLocalQwenStatus(rootDir = process.cwd()): LocalQwenRuntimeStatus {
-  const { binaryPath, modelPath, ragDatasetPath } = resolveLocalQwenPaths(rootDir);
+  const { binaryPath, modelPath, coderModelPath, instructModelPath, ragDatasetPath } =
+    resolveLocalQwenPaths(rootDir);
   if (!fs.existsSync(ragDatasetPath)) {
     syncQwenProjectRagDataset(REGISTRY_CACHE.docs, undefined, rootDir);
   }
@@ -137,7 +170,9 @@ export function getLocalQwenStatus(rootDir = process.cwd()): LocalQwenRuntimeSta
 
   return {
     installed: Boolean(binaryPath && modelPath),
-    modelId: QWEN_CORE_MODEL_ID,
+    coderInstalled: Boolean(coderModelPath),
+    instructInstalled: Boolean(instructModelPath),
+    modelId: coderModelPath ? 'qwen2.5-coder-0.5b-instruct-q4' : QWEN_CORE_MODEL_ID,
     binaryPath: binaryPath ? path.relative(rootDir, binaryPath) : null,
     modelPath: modelPath ? path.relative(rootDir, modelPath) : null,
     modelSizeBytes,
@@ -157,7 +192,18 @@ export async function runLocalQwenInference(params: {
 }): Promise<LocalQwenInferResult> {
   const rootDir = params.rootDir ?? process.cwd();
   const startedAt = Date.now();
-  const { binDir, binaryPath, modelPath } = resolveLocalQwenPaths(rootDir);
+  const docs = params.dynamicDocs ?? REGISTRY_CACHE.docs;
+  const { specialistProfile, matchedEntries, chatMlPrompt } = retrieveQwenRagContext({
+    query: params.query,
+    dynamicDocs: docs,
+    cadSummary: params.cadSummary,
+    topK: 3,
+  });
+
+  const { binDir, binaryPath, modelPath } = resolveLocalQwenPaths(
+    rootDir,
+    specialistProfile.modelVariant
+  );
 
   if (!binaryPath || !modelPath) {
     throw new Error(
@@ -165,15 +211,7 @@ export async function runLocalQwenInference(params: {
     );
   }
 
-  const docs = params.dynamicDocs ?? REGISTRY_CACHE.docs;
   const syncInfo = syncQwenProjectRagDataset(docs, params.cadSummary, rootDir);
-  const { matchedEntries, chatMlPrompt } = retrieveQwenRagContext({
-    query: params.query,
-    dynamicDocs: docs,
-    cadSummary: params.cadSummary,
-    topK: 4,
-  });
-
   const threads = String(Math.max(1, Math.min(4, os.cpus().length)));
   const maxTokens = String(Math.max(48, Math.min(320, params.maxTokens ?? 180)));
 
@@ -216,7 +254,7 @@ export async function runLocalQwenInference(params: {
 
   const reply =
     cleaned ||
-    `[Qwen 0.5B Core + RAG] Consultei ${matchedEntries.map((e) => e.title).join(', ')} (${syncInfo.examplesCount} exemplos SFT).`;
+    `[${specialistProfile.title}] Consultei ${matchedEntries.map((e) => e.title).join(', ')} (${syncInfo.examplesCount} exemplos SFT).`;
 
   const durationMs = Math.max(1, Date.now() - startedAt);
   const tokensApprox = Math.max(1, Math.round(reply.split(/\s+/).length * 1.35));
@@ -225,11 +263,13 @@ export async function runLocalQwenInference(params: {
     status: 'PASS',
     inputPayload: {
       query: params.query,
+      specialistId: specialistProfile.id,
+      modelVariant: specialistProfile.modelVariant,
       ragSources: matchedEntries.map((e) => e.id),
       datasetSha256: syncInfo.datasetSha256,
     },
     outputPayload: {
-      modelId: QWEN_CORE_MODEL_ID,
+      modelId: specialistProfile.modelVariant,
       reply,
       tokensApprox,
     },
@@ -238,7 +278,10 @@ export async function runLocalQwenInference(params: {
 
   return {
     reply,
-    modelUsed: `${QWEN_CORE_MODEL_ID} (llama.cpp binary)`,
+    modelUsed: `${specialistProfile.modelVariant} (${specialistProfile.id} · llama.cpp)`,
+    specialistId: specialistProfile.id,
+    specialistTitle: specialistProfile.title,
+    modelVariant: specialistProfile.modelVariant,
     durationMs,
     ragSourcesUsed: matchedEntries.map((e) => e.title),
     finetuneExamplesCount: syncInfo.examplesCount,

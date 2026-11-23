@@ -860,10 +860,144 @@ describe('ecosystemErpLogistics & ParametrixSqliteStore', () => {
         last_job_vuc TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE chat_messages (
+        id TEXT PRIMARY KEY,
+        room TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_role TEXT NOT NULL,
+        is_agent INTEGER NOT NULL DEFAULT 0,
+        content TEXT NOT NULL,
+        lat REAL,
+        lng REAL,
+        vuc_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
     legacyRawDb.close();
     const migratedStore = new ParametrixSqliteStore(legacyDbPath);
     expect(migratedStore.listRemoteMachines()).toHaveLength(4);
+
+    // Exercise isRegisteredUser, updateRemoteMachineProbe, saveProductionSessionLog & listProductionSessionLogs
+    expect(migratedStore.isRegisteredUser('unknown-user', 'unknown@none')).toBe(false);
+    expect(migratedStore.isRegisteredUser()).toBe(false);
+    const registeredUser = migratedStore.loginOrRegister({
+      email: 'registrado@parametrix.local',
+      displayName: 'Registrado Chat',
+      provider: 'email',
+      offlineMode: false,
+    });
+    expect(migratedStore.isRegisteredUser(registeredUser.id)).toBe(true);
+    expect(migratedStore.isRegisteredUser('other-id', 'registrado@parametrix.local')).toBe(true);
+
+    const chatWithUrl = migratedStore.appendChatMessage({
+      room: 'cam-cnc',
+      theme: 'cam-cnc',
+      senderId: registeredUser.id,
+      senderEmail: 'registrado@parametrix.local',
+      senderName: registeredUser.displayName,
+      senderRole: 'client',
+      isAgent: false,
+      content: 'Processo anexado',
+      processUrl: 'https://parametrix.app/?tab=cam&process=powder-metal',
+    });
+    expect(chatWithUrl.processUrl).toContain('powder-metal');
+    expect(
+      migratedStore.listChatMessages('cam-cnc').some((m) => m.senderEmail === 'registrado@parametrix.local')
+    ).toBe(true);
+    migratedStore.db.prepare("UPDATE chat_messages SET theme = '' WHERE id = ?").run(chatWithUrl.id);
+    expect(migratedStore.listChatMessages('cam-cnc').find((m) => m.id === chatWithUrl.id)?.theme).toBe(
+      'cam-cnc'
+    );
+
+    expect(
+      migratedStore.updateRemoteMachineProbe('missing-mach', {
+        status: 'offline',
+        latencyMs: 5,
+        detail: 'Not found',
+      })
+    ).toBeNull();
+    const probedMach = migratedStore.upsertRemoteMachine({
+      id: 'mach-probe-1',
+      name: 'Laser Corte',
+      machineType: 'laser-cut',
+      protocol: 'GRBL-Serial-WS',
+      endpointUrl: 'ws://laser.local:81',
+      assignedProgramId: 'dc-manifold',
+      mqttEnabled: false,
+    });
+    expect(probedMach.status).toBe('standby');
+    const updatedProbeWithProg = migratedStore.updateRemoteMachineProbe('mach-probe-1', {
+      status: 'online',
+      latencyMs: 12,
+      detail: 'TCP conectado',
+      assignedProgramId: 'dc-coldplate',
+    });
+    expect(updatedProbeWithProg?.assignedProgramId).toBe('dc-coldplate');
+    expect(updatedProbeWithProg?.lastProbeLatencyMs).toBe(12);
+    const updatedProbeKeepProg = migratedStore.updateRemoteMachineProbe('mach-probe-1', {
+      status: 'offline',
+      latencyMs: 2500,
+      detail: 'Timeout TCP',
+    });
+    expect(updatedProbeKeepProg?.assignedProgramId).toBe('dc-coldplate');
+
+    const machEmptyProg = migratedStore.upsertRemoteMachine({
+      id: 'mach-probe-2',
+      name: 'CNC Empty Prog',
+      machineType: 'cnc-3axis',
+      protocol: 'HTTP-Moonraker',
+      endpointUrl: 'http://cnc3.local:7125',
+    });
+    const probeEmptyProg = migratedStore.updateRemoteMachineProbe(machEmptyProg.id, {
+      status: 'offline',
+      latencyMs: 10,
+      detail: 'Offline',
+    });
+    expect(probeEmptyProg?.assignedProgramId).toBeUndefined();
+
+    migratedStore.saveProductionSessionLog({
+      id: 'sess-demo-1',
+      sessionId: 'demo-1',
+      userId: registeredUser.id,
+      poHumano: 'Registrado Chat (@registradochat)',
+      llmAgent: 'gemini',
+      delegatedByPo: true,
+      activeTab: 'cam',
+      processMachine: 'powder-metal',
+      processUrl: 'https://parametrix.app/?tab=cam',
+      pointerCount: 4,
+      actionCount: 2,
+      durationSec: 12,
+      hotzoneLabel: 'Q[1,1]',
+      heatmap: [{ col: 1, row: 1, count: 4 }],
+      events: [],
+      insights: [{ code: 'OK', severity: 'info', recommendation: 'Nominal' }],
+      vucHash: 'VUC-ABCD',
+      createdAt: '2026-11-23T12:00:00.000Z',
+    });
+    migratedStore.saveProductionSessionLog({
+      id: 'sess-demo-2',
+      sessionId: 'demo-2',
+      userId: registeredUser.id,
+      poHumano: 'Registrado Chat (@registradochat)',
+      llmAgent: 'gemini',
+      delegatedByPo: false,
+      activeTab: 'viewport',
+      processMachine: 'cnc-5axis',
+      processUrl: 'https://parametrix.app/?tab=viewport',
+      pointerCount: 0,
+      actionCount: 0,
+      durationSec: 0,
+      hotzoneLabel: 'Sem movimento registrado',
+      heatmap: [],
+      events: [],
+      insights: [],
+      vucHash: 'VUC-EF01',
+      createdAt: '2026-11-23T12:01:00.000Z',
+    });
+    expect(migratedStore.listProductionSessionLogs()).toHaveLength(2);
+
     migratedStore.db.close();
 
     fs.rmSync(tmpDir, { recursive: true, force: true });

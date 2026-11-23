@@ -1,26 +1,49 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   Briefcase,
+  Check,
+  Copy,
   Cpu,
+  ExternalLink,
+  Link2,
   MapPin,
   MessageSquare,
+  Mic,
+  MicOff,
+  Monitor,
+  MonitorOff,
   Navigation,
   Pencil,
+  PhoneOff,
   Radio,
   Save,
   Send,
   Server,
   Settings,
+  ShieldCheck,
   Truck,
   UserCheck,
+  Video,
+  VideoOff,
   Wifi,
 } from 'lucide-react';
+import { usePublicChatRtc } from '../hooks/usePublicChatRtc';
+import { CAM_PRODUCTION_PROGRAMS } from '../kernel/camProcessEngine';
 import {
   ECOSYSTEM_ROLE_DEFINITIONS,
   aggregateComputeSharePool,
   estimateMultimodalLogisticsRoute,
   summarizeErpCrmPipeline,
 } from '../kernel/ecosystemErpLogistics';
+import {
+  PUBLIC_CHAT_RULES,
+  PUBLIC_CHAT_THEMES,
+  isRegisteredEcosystemUser,
+  normalizeChatRoomTheme,
+} from '../kernel/publicChatSignaling';
+import { resolveMachineProcessAssociation } from '../kernel/realMachineConnector';
+import { HEATMAP_COLS, HEATMAP_ROWS } from '../kernel/sessionPointerRecorder';
 import type {
   AuthUserProfile,
   ComputeShareNode,
@@ -30,6 +53,8 @@ import type {
   LogisticsModal,
   LogisticsTelemetryNode,
   MachineType,
+  ProductionSessionLogRecord,
+  PublicChatThemeId,
   RemoteMachineTarget,
   RemoteMqttTelemetryEvent,
 } from '../types/cad';
@@ -40,18 +65,67 @@ export interface RemoteMachineConfigInput {
   machineType: MachineType;
   protocol: RemoteMachineTarget['protocol'];
   endpointUrl: string;
+  assignedProgramId?: string;
   mqttEnabled: boolean;
   mqttBrokerUrl: string;
   mqttTopic: string;
   mqttQos: 0 | 1 | 2;
 }
 
+const RtcStreamView: React.FC<{ stream: MediaStream; muted?: boolean; label: string }> = ({
+  stream,
+  muted = false,
+  label,
+}) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const el = videoRef.current;
+    if (el) {
+      el.srcObject = stream;
+    }
+  }, [stream]);
+  const hasVideo = stream.getVideoTracks().length > 0;
+  if (!hasVideo) {
+    return (
+      <div className="p-2.5 bg-[#090d14] border border-emerald-400/35 rounded-lg flex items-center justify-between text-xs">
+        <span className="text-emerald-200 font-medium truncate">{label} (Áudio Full-Duplex)</span>
+        <audio
+          ref={(el) => {
+            if (el) el.srcObject = stream;
+          }}
+          autoPlay
+          muted={muted}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="bg-[#090d14] border border-sky-400/35 rounded-lg overflow-hidden">
+      <video ref={videoRef} autoPlay playsInline muted={muted} className="w-full h-36 object-cover bg-black" />
+      <div className="px-2 py-1 text-[10px] font-mono-tabular text-slate-300 bg-[#0e131c] truncate">
+        {label}
+      </div>
+    </div>
+  );
+};
+
 interface EcosystemHubPanelProps {
   profile: AuthUserProfile;
   onUpdateProfile: (patch: Partial<AuthUserProfile>) => Promise<void>;
   onOpenAuthModal: () => void;
   chatMessages: EcosystemChatMessage[];
-  onSendChat: (room: string, content: string, asAgent?: boolean, askCamAgent?: boolean) => Promise<void>;
+  onSendChat: (
+    room: string,
+    content: string,
+    asAgent?: boolean,
+    askCamAgent?: boolean,
+    processUrl?: string,
+    askLocalAgent?: boolean
+  ) => Promise<void>;
+  chatError?: string | null;
+  activeProcessUrl?: string;
+  onOpenProcessUrl?: (url: string) => void;
+  wsRef?: React.RefObject<WebSocket | null>;
   logisticsNodes: LogisticsTelemetryNode[];
   onPingGpsLocation: (modal: LogisticsModal, routeLabel: string) => Promise<void>;
   computeNodes: ComputeShareNode[];
@@ -59,13 +133,27 @@ interface EcosystemHubPanelProps {
   onAddErpRecord: (rec: Omit<ErpCrmRecord, 'id' | 'vucHash' | 'updatedAt'>) => Promise<void>;
   remoteMachines: RemoteMachineTarget[];
   onDispatchRemoteMachine: (machineId: string) => Promise<void>;
+  onProbeRemoteMachine?: (machineId: string) => Promise<void>;
+  remoteDispatchStatus?: string | null;
   onSaveRemoteMachine?: (input: RemoteMachineConfigInput) => Promise<void>;
   onPingRemoteMqtt?: (machineId: string) => Promise<void>;
   mqttTelemetryFeed?: RemoteMqttTelemetryEvent[];
   onRunAutonomousProjectWorkflow: (role: EcosystemRole) => void;
+  activeSessionLog?: ProductionSessionLogRecord;
+  savedSessionLogs?: ProductionSessionLogRecord[];
+  sessionRecordingEnabled?: boolean;
+  onToggleSessionRecording?: () => void;
+  onFlushSessionLog?: () => Promise<void>;
+  delegatedByPo?: boolean;
+  onToggleDelegatedByPo?: () => void;
+  selectedAgentId?: string;
+  offlineMode?: boolean;
+  onRecordSessionAction?: (detail: string) => void;
+  initialSubTab?: EcosystemSubTab;
+  initialChatRoom?: PublicChatThemeId;
 }
 
-type EcosystemSubTab = 'chat' | 'logistics' | 'erp' | 'compute' | 'remote';
+type EcosystemSubTab = 'chat' | 'session' | 'logistics' | 'erp' | 'compute' | 'remote';
 
 export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   profile,
@@ -73,6 +161,10 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   onOpenAuthModal,
   chatMessages,
   onSendChat,
+  chatError = null,
+  activeProcessUrl = '',
+  onOpenProcessUrl,
+  wsRef,
   logisticsNodes,
   onPingGpsLocation,
   computeNodes,
@@ -80,14 +172,38 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   onAddErpRecord,
   remoteMachines,
   onDispatchRemoteMachine,
+  onProbeRemoteMachine,
+  remoteDispatchStatus = null,
   onSaveRemoteMachine,
   onPingRemoteMqtt,
   mqttTelemetryFeed = [],
   onRunAutonomousProjectWorkflow,
+  activeSessionLog,
+  savedSessionLogs = [],
+  sessionRecordingEnabled = true,
+  onToggleSessionRecording,
+  onFlushSessionLog,
+  delegatedByPo = true,
+  onToggleDelegatedByPo,
+  selectedAgentId = 'gemini',
+  offlineMode = false,
+  onRecordSessionAction,
+  initialSubTab = 'chat',
+  initialChatRoom = 'geral',
 }) => {
-  const [subTab, setSubTab] = useState<EcosystemSubTab>('chat');
-  const [chatRoom, setChatRoom] = useState('geral');
+  const [subTab, setSubTab] = useState<EcosystemSubTab>(initialSubTab);
+  const [chatRoom, setChatRoom] = useState<PublicChatThemeId>(normalizeChatRoomTheme(initialChatRoom));
   const [chatDraft, setChatDraft] = useState('');
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [urlCopied, setUrlCopied] = useState(false);
+  const fallbackWsRef = useRef<WebSocket | null>(null);
+  const effectiveWsRef = wsRef ?? fallbackWsRef;
+  const isRegistered = isRegisteredEcosystemUser({
+    userId: profile.id,
+    email: profile.email,
+    isAgent: false,
+    dbRegistered: profile.id !== 'local-default-op',
+  });
   const [routeModal, setRouteModal] = useState<LogisticsModal>('road');
   const [routeDistanceKm, setRouteDistanceKm] = useState(185);
   const [routeMassKg, setRouteMassKg] = useState(14);
@@ -108,6 +224,7 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   const [rmType, setRmType] = useState<MachineType>('cnc-5axis');
   const [rmProtocol, setRmProtocol] = useState<RemoteMachineTarget['protocol']>('HTTP-Moonraker');
   const [rmEndpointUrl, setRmEndpointUrl] = useState('');
+  const [rmProgramId, setRmProgramId] = useState<string>(CAM_PRODUCTION_PROGRAMS[0]?.id ?? '');
   const [rmMqttEnabled, setRmMqttEnabled] = useState(true);
   const [rmMqttBrokerUrl, setRmMqttBrokerUrl] = useState('mqtt://broker.parametrix.local:1883');
   const [rmMqttTopic, setRmMqttTopic] = useState('parametrix/machines/nova-celula/telemetry');
@@ -115,6 +232,16 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   const [rmBusy, setRmBusy] = useState(false);
   const [rmFeedback, setRmFeedback] = useState<string | null>(null);
   const [rmError, setRmError] = useState<string | null>(null);
+
+  const rtc = usePublicChatRtc({
+    wsRef: effectiveWsRef,
+    profile,
+    room: chatRoom,
+    processUrl: activeProcessUrl,
+    isRegistered,
+    onRequireAuth: onOpenAuthModal,
+    onRecordAction: onRecordSessionAction,
+  });
 
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -221,16 +348,32 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
     }
   };
 
-  const handleSend = async (asAgent = false, askCamAgent = false) => {
+  const handleSend = async (
+    asAgent = false,
+    askCamAgent = false,
+    attachProcessUrl = false,
+    askLocalAgent = false
+  ) => {
     const text = chatDraft.trim();
-    if (!text && !asAgent && !askCamAgent) return;
+    if (!text && !asAgent && !askCamAgent && !attachProcessUrl && !askLocalAgent) return;
     const msg =
       text ||
-      (askCamAgent
-        ? 'Qual o estado atual do processo CAM, ferramenta ATC e prova VUC?'
-        : `[Agente Autônomo ${profile.handleAt}] Executando checklist completo do perfil (${ECOSYSTEM_ROLE_DEFINITIONS[profile.role].shortTag}) no endereço ${agentAddress} · Contato ${agentPhone}.`);
+      (attachProcessUrl
+        ? `Compartilhando processo em tempo real (${activeProcessUrl || '?tab=viewport'})`
+        : askLocalAgent
+          ? '@hermes Resuma o estado atual do processo, ferramenta ATC, RAG local e próximo passo CAM/VUC.'
+          : askCamAgent
+            ? 'Qual o estado atual do processo CAM, ferramenta ATC e prova VUC?'
+            : `[Agente Autônomo ${profile.handleAt}] Executando checklist completo do perfil (${ECOSYSTEM_ROLE_DEFINITIONS[profile.role].shortTag}) no endereço ${agentAddress} · Contato ${agentPhone}.`);
     setChatDraft('');
-    await onSendChat(chatRoom, msg, asAgent, askCamAgent);
+    await onSendChat(
+      chatRoom,
+      msg,
+      asAgent,
+      askCamAgent,
+      attachProcessUrl ? activeProcessUrl : undefined,
+      askLocalAgent
+    );
   };
 
   const resetRemoteForm = () => {
@@ -239,6 +382,7 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
     setRmType('cnc-5axis');
     setRmProtocol('HTTP-Moonraker');
     setRmEndpointUrl('');
+    setRmProgramId(CAM_PRODUCTION_PROGRAMS[0]?.id ?? '');
     setRmMqttEnabled(true);
     setRmMqttBrokerUrl('mqtt://broker.parametrix.local:1883');
     setRmMqttTopic('parametrix/machines/nova-celula/telemetry');
@@ -252,6 +396,7 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
     setRmType(m.machineType);
     setRmProtocol(m.protocol);
     setRmEndpointUrl(m.endpointUrl);
+    setRmProgramId(m.assignedProgramId ?? CAM_PRODUCTION_PROGRAMS[0]?.id ?? '');
     setRmMqttEnabled(m.mqttEnabled ?? true);
     setRmMqttBrokerUrl(m.mqttBrokerUrl || 'mqtt://broker.parametrix.local:1883');
     setRmMqttTopic(m.mqttTopic || `parametrix/machines/${m.id}/telemetry`);
@@ -277,6 +422,7 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
         machineType: rmType,
         protocol: rmProtocol,
         endpointUrl: rmEndpointUrl.trim(),
+        assignedProgramId: rmProgramId || undefined,
         mqttEnabled: rmMqttEnabled,
         mqttBrokerUrl: rmMqttBrokerUrl.trim(),
         mqttTopic: rmMqttTopic.trim(),
@@ -376,11 +522,12 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
         <div className="flex flex-wrap gap-2 border-b border-white/10 pb-2">
           {(
             [
-              { id: 'chat', label: 'Chat Multi-Perfil & Agentes', icon: MessageSquare },
+              { id: 'chat', label: 'Chat Público + Voz/Vídeo WebRTC', icon: MessageSquare },
+              { id: 'session', label: 'Sessão Gravada & Ponteiro', icon: Activity },
               { id: 'logistics', label: 'Hub Logística GPS 4-Modais', icon: Truck },
               { id: 'erp', label: 'ERP / CRM Open Free', icon: Briefcase },
               { id: 'compute', label: 'Malha Compute 20%', icon: Cpu },
-              { id: 'remote', label: 'Máquinas Remotas CAM', icon: Server },
+              { id: 'remote', label: 'Máquinas Remotas Reais', icon: Server },
             ] as const
           ).map((t) => {
             const Icon = t.icon;
@@ -402,50 +549,226 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
           })}
         </div>
 
-        {/* 1. Real-Time WebSocket Chat */}
+        {/* 1. Public Chat for Registered Users: Rules, Themes, Process URL & Full-Duplex WebRTC */}
         {subTab === 'chat' && (
           <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-3">
+            {/* Registration Gate Banner */}
+            {!isRegistered && (
+              <div className="p-3 bg-amber-500/10 border border-amber-400/40 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <div className="text-amber-200">
+                  <strong>Acesso Somente Leitura:</strong> o Chat Público e WebRTC (voz/vídeo/tela) exigem usuário cadastrado no Parametrix.
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenAuthModal}
+                  className="px-3 py-1.5 bg-amber-400 text-slate-950 font-semibold rounded-lg hover:bg-amber-300 shrink-0 cursor-pointer"
+                >
+                  Entrar / Cadastrar Conta
+                </button>
+              </div>
+            )}
+
+            {(offlineMode || profile.offlineMode || selectedAgentId === 'local-llm') && (
+              <div className="p-2.5 bg-emerald-500/10 border border-emerald-400/35 rounded-lg text-[11px] text-emerald-200 flex items-center justify-between gap-2">
+                <span>
+                  <strong>Modo Offline / Agente Local Ativo:</strong> Mordomo{' '}
+                  <strong>Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) + Qwen 2.5 0.5B RT + Search Local/GrabCAD</strong>{' '}
+                  respondem automaticamente neste chat e nos processos.
+                </span>
+              </div>
+            )}
+
+            {/* Themes Selector + Rules Toggle */}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap gap-1.5">
-                {['geral', 'cam-foxconn', 'logistica-gps', 'insumos-suprimentos'].map((r) => (
+                {PUBLIC_CHAT_THEMES.map((t) => (
                   <button
-                    key={r}
+                    key={t.id}
                     type="button"
-                    onClick={() => setChatRoom(r)}
+                    title={t.description}
+                    onClick={() => setChatRoom(t.id)}
                     className={`px-2.5 py-1 text-xs font-mono-tabular rounded border cursor-pointer ${
-                      chatRoom === r
+                      chatRoom === t.id
                         ? 'border-sky-400 bg-sky-500/15 text-sky-200'
-                        : 'border-white/10 bg-[#0c1017] text-slate-400'
+                        : 'border-white/10 bg-[#0c1017] text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    #{r}
+                    {t.label}
                   </button>
                 ))}
               </div>
               <button
                 type="button"
-                onClick={() => handleSend(true)}
-                className="px-3 py-1.5 text-xs font-medium bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 rounded-lg cursor-pointer"
+                onClick={() => setRulesOpen((v) => !v)}
+                className="px-2.5 py-1 text-[11px] font-medium border border-white/15 bg-[#0c1017] text-slate-300 hover:text-white rounded-lg cursor-pointer"
               >
-                Acionar Resposta Agente {profile.handleAt}
+                {rulesOpen ? 'Ocultar Regras' : 'Regras do Chat Público'}
               </button>
             </div>
 
+            {rulesOpen && (
+              <div className="p-3 bg-[#090d14] border border-sky-400/30 rounded-lg space-y-1 text-[11px] text-slate-300">
+                <div className="font-semibold text-sky-300 mb-1">Regras Oficiais do Chat Público Parametrix:</div>
+                {PUBLIC_CHAT_RULES.map((rule) => (
+                  <div key={rule}>{rule}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Real-Time Full-Duplex Voice / Video / Screen Share + Process URL Bar */}
+            <div className="p-3 bg-[#0c1017] border border-white/10 rounded-lg space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-slate-300 flex items-center gap-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>
+                    Sala WebRTC: <strong className="text-sky-300">#{chatRoom}</strong> ·{' '}
+                    {rtc.allPeers.length} participante(s)
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void rtc.toggleVoiceOrVideo(!rtc.audioEnabled, rtc.videoEnabled)}
+                    className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg border flex items-center gap-1 cursor-pointer ${
+                      rtc.audioEnabled
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                        : 'bg-[#111620] border-white/15 text-slate-300'
+                    }`}
+                  >
+                    {rtc.audioEnabled ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                    {rtc.audioEnabled ? 'Voz Ativa' : 'Ligar Voz'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void rtc.toggleVoiceOrVideo(rtc.audioEnabled || true, !rtc.videoEnabled)}
+                    className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg border flex items-center gap-1 cursor-pointer ${
+                      rtc.videoEnabled
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-200'
+                        : 'bg-[#111620] border-white/15 text-slate-300'
+                    }`}
+                  >
+                    {rtc.videoEnabled ? <Video className="w-3.5 h-3.5" /> : <VideoOff className="w-3.5 h-3.5" />}
+                    {rtc.videoEnabled ? 'Vídeo Ativo' : 'Ligar Vídeo'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void rtc.toggleScreenShare()}
+                    className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg border flex items-center gap-1 cursor-pointer ${
+                      rtc.screenEnabled
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                        : 'bg-[#111620] border-white/15 text-slate-300'
+                    }`}
+                  >
+                    {rtc.screenEnabled ? <Monitor className="w-3.5 h-3.5" /> : <MonitorOff className="w-3.5 h-3.5" />}
+                    {rtc.screenEnabled ? 'Compartilhando Tela' : 'Compartilhar Tela'}
+                  </button>
+                  {(rtc.joinedRoom || rtc.audioEnabled || rtc.videoEnabled || rtc.screenEnabled) && (
+                    <button
+                      type="button"
+                      onClick={rtc.leaveCall}
+                      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg border border-rose-400/50 bg-rose-500/15 text-rose-200 flex items-center gap-1 cursor-pointer"
+                    >
+                      <PhoneOff className="w-3.5 h-3.5" />
+                      Sair Chamada
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Active Session Process URL */}
+              {activeProcessUrl && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/8 text-[11px]">
+                  <div className="flex items-center gap-1.5 min-w-0 text-slate-300 font-mono-tabular">
+                    <Link2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <span className="truncate">{activeProcessUrl}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(activeProcessUrl);
+                        setUrlCopied(true);
+                        window.setTimeout(() => setUrlCopied(false), 1800);
+                      }}
+                      className="px-2 py-1 rounded border border-white/15 bg-[#111620] text-slate-200 flex items-center gap-1 cursor-pointer"
+                    >
+                      {urlCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      {urlCopied ? 'Copiada' : 'Copiar URL'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isRegistered}
+                      onClick={() => void handleSend(false, false, true)}
+                      className="px-2.5 py-1 rounded border border-sky-400/45 bg-sky-500/15 text-sky-200 disabled:opacity-40 cursor-pointer"
+                    >
+                      Postar URL no Chat
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {rtc.rtcError && <div className="text-[11px] text-rose-400">{rtc.rtcError}</div>}
+
+              {(rtc.localMediaStream || rtc.localScreenStream || rtc.remoteStreams.length > 0) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-1">
+                  {rtc.localMediaStream && (
+                    <RtcStreamView
+                      stream={rtc.localMediaStream}
+                      muted
+                      label={`Você (${profile.displayName})`}
+                    />
+                  )}
+                  {rtc.localScreenStream && (
+                    <RtcStreamView
+                      stream={rtc.localScreenStream}
+                      muted
+                      label="Sua Tela / Módulo CAD"
+                    />
+                  )}
+                  {rtc.remoteStreams.map((rs) => (
+                    <RtcStreamView
+                      key={rs.peerId}
+                      stream={rs.stream}
+                      label={`Peer ${rs.peerId}`}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {chatError && (
+              <div className="p-2.5 bg-rose-500/15 border border-rose-400/40 rounded-lg text-xs text-rose-200">
+                {chatError}
+              </div>
+            )}
+
             <div className="h-72 overflow-y-auto space-y-2 p-3 bg-[#090d14] border border-white/8 rounded-lg">
               {chatMessages
-                .filter((m) => m.room === chatRoom || chatRoom === 'geral')
+                .filter((m) => (m.theme ?? m.room) === chatRoom || chatRoom === 'geral')
                 .map((m) => (
                   <div
                     key={m.id}
-                    className="p-2.5 bg-[#111620] border border-white/8 rounded-lg space-y-1"
+                    className="p-2.5 bg-[#111620] border border-white/8 rounded-lg space-y-1.5"
                   >
-                    <div className="flex items-center justify-between text-[11px] font-mono-tabular">
+                    <div className="flex items-center justify-between text-[11px] font-mono-tabular gap-2">
                       <span className={m.isAgent ? 'text-emerald-300 font-semibold' : 'text-sky-300 font-semibold'}>
-                        {m.senderName} · {ECOSYSTEM_ROLE_DEFINITIONS[m.senderRole]?.shortTag ?? m.senderRole}
+                        {m.senderName} · {ECOSYSTEM_ROLE_DEFINITIONS[m.senderRole]?.shortTag ?? m.senderRole} · #{m.theme ?? m.room}
                       </span>
-                      <span className="text-slate-500">{m.vucHash.slice(0, 14)}</span>
+                      <span className="text-slate-500 shrink-0">{m.vucHash.slice(0, 14)}</span>
                     </div>
-                    <p className="text-xs text-slate-200">{m.content}</p>
+                    <p className="text-xs text-slate-200 whitespace-pre-wrap">{m.content}</p>
+                    {m.processUrl && (
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() => onOpenProcessUrl?.(m.processUrl!)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-500/15 border border-sky-400/40 text-[10px] font-mono-tabular text-sky-200 hover:bg-sky-500/25 cursor-pointer"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Abrir Processo Compartilhado
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
             </div>
@@ -453,18 +776,41 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
             <div className="flex flex-wrap gap-2">
               <input
                 type="text"
-                placeholder={`Enviar em #${chatRoom} (use @cam ou @vuc para resposta técnica automática)...`}
+                disabled={!isRegistered}
+                placeholder={
+                  isRegistered
+                    ? `Enviar em #${chatRoom} (use @hermes, @burrinho, @grabcad, @cam ou URL GrabCAD)...`
+                    : 'Faça login ou cadastre-se para enviar mensagens no chat público'
+                }
                 value={chatDraft}
                 onChange={(e) => setChatDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') void handleSend(false, false);
+                  if (e.key === 'Enter' && isRegistered) void handleSend(false, false);
                 }}
-                className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
+                className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400 disabled:opacity-50"
               />
               <button
                 type="button"
+                onClick={() => void handleSend(true)}
+                className="px-3 py-2 text-xs font-medium bg-[#141a24] border border-emerald-400/40 text-emerald-200 rounded-lg cursor-pointer"
+              >
+                Agente {profile.handleAt}
+              </button>
+              <button
+                type="button"
+                disabled={!isRegistered}
+                onClick={() => void handleSend(false, false, false, true)}
+                className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-400/45 text-amber-200 rounded-lg hover:bg-amber-500/25 flex items-center gap-1.5 disabled:opacity-45 cursor-pointer"
+                title="Aciona Mordomo Hermes + Burrinhos + Qwen 2.5 0.5B Super-RAG + Search no chat"
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                Hermes + Burrinho
+              </button>
+              <button
+                type="button"
+                disabled={!isRegistered}
                 onClick={() => void handleSend(false, true)}
-                className="px-3 py-2 text-xs font-semibold bg-emerald-500/15 border border-emerald-400/45 text-emerald-200 rounded-lg hover:bg-emerald-500/25 flex items-center gap-1.5 cursor-pointer"
+                className="px-3 py-2 text-xs font-semibold bg-emerald-500/15 border border-emerald-400/45 text-emerald-200 rounded-lg hover:bg-emerald-500/25 flex items-center gap-1.5 disabled:opacity-45 cursor-pointer"
                 title="Envia pergunta e aciona o Agente Orquestrador CAM com prova VUC na sala"
               >
                 <Send className="w-3.5 h-3.5" />
@@ -472,12 +818,183 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
               </button>
               <button
                 type="button"
+                disabled={!isRegistered}
                 onClick={() => void handleSend(false, false)}
-                className="px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 flex items-center gap-1.5 cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 flex items-center gap-1.5 disabled:opacity-45 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
                 Enviar
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1B. Live Session Pointer Tracking, Production History & Refinement Recommendations */}
+        {subTab === 'session' && (
+          <div className="space-y-4">
+            <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
+                <div>
+                  <h2 className="font-display text-sm font-bold text-slate-100">
+                    Sessão Gravada com Movimentação do Ponteiro + Proveniência GOS7 ({selectedAgentId})
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Registra trajeto do ponteiro e ações CAD/CAE/CAM para refinar usabilidade e emitir certificado VUC.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onToggleDelegatedByPo && (
+                    <button
+                      type="button"
+                      onClick={onToggleDelegatedByPo}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${
+                        delegatedByPo
+                          ? 'bg-emerald-500/15 border-emerald-400/45 text-emerald-200'
+                          : 'bg-[#0c1017] border-white/15 text-slate-300'
+                      }`}
+                    >
+                      {delegatedByPo ? 'PO Delegou p/ Agente LLM' : 'PO Supervisionando Direto'}
+                    </button>
+                  )}
+                  {onToggleSessionRecording && (
+                    <button
+                      type="button"
+                      onClick={onToggleSessionRecording}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${
+                        sessionRecordingEnabled
+                          ? 'bg-rose-500/15 border-rose-400/45 text-rose-200'
+                          : 'bg-[#0c1017] border-white/15 text-slate-300'
+                      }`}
+                    >
+                      {sessionRecordingEnabled ? '● Gravando Ponteiro' : 'Gravação Pausada'}
+                    </button>
+                  )}
+                  {onFlushSessionLog && (
+                    <button
+                      type="button"
+                      onClick={() => void onFlushSessionLog()}
+                      className="px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 cursor-pointer"
+                    >
+                      Persistir Log no SQLite
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {activeSessionLog && (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                      <div className="text-slate-500">Amostras Ponteiro</div>
+                      <div className="font-mono-tabular text-base font-bold text-sky-300">
+                        {activeSessionLog.pointerCount}
+                      </div>
+                    </div>
+                    <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                      <div className="text-slate-500">Ações Discretas</div>
+                      <div className="font-mono-tabular text-base font-bold text-emerald-300">
+                        {activeSessionLog.actionCount}
+                      </div>
+                    </div>
+                    <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                      <div className="text-slate-500">Duração Gravada</div>
+                      <div className="font-mono-tabular text-base font-bold text-slate-100">
+                        {activeSessionLog.durationSec}s
+                      </div>
+                    </div>
+                    <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                      <div className="text-slate-500">Hotzone Ponteiro</div>
+                      <div className="font-mono-tabular text-[11px] font-semibold text-amber-300 truncate">
+                        {activeSessionLog.hotzoneLabel}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 6x4 Spatial Pointer Heatmap */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg space-y-2">
+                      <div className="text-xs font-semibold text-slate-200">
+                        Mapa de Calor Espacial do Ponteiro ({HEATMAP_COLS}×{HEATMAP_ROWS})
+                      </div>
+                      <div className="grid grid-cols-6 gap-1.5">
+                        {Array.from({ length: HEATMAP_ROWS * HEATMAP_COLS }).map((_, idx) => {
+                          const col = idx % HEATMAP_COLS;
+                          const row = Math.floor(idx / HEATMAP_COLS);
+                          const cell = activeSessionLog.heatmap.find((h) => h.col === col && h.row === row);
+                          const cnt = cell?.count ?? 0;
+                          const maxCnt = Math.max(1, ...activeSessionLog.heatmap.map((h) => h.count));
+                          const intensity = cnt / maxCnt;
+                          return (
+                            <div
+                              key={`${col}:${row}`}
+                              title={`Q[${col},${row}] = ${cnt} amostras`}
+                              className="h-10 rounded border border-white/10 flex flex-col items-center justify-center text-[10px] font-mono-tabular"
+                              style={{
+                                backgroundColor:
+                                  cnt === 0
+                                    ? 'rgba(15, 23, 42, 0.8)'
+                                    : `rgba(56, 189, 248, ${(0.15 + intensity * 0.7).toFixed(2)})`,
+                              }}
+                            >
+                              <span className="text-slate-100 font-semibold">{cnt}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg space-y-2">
+                      <div className="text-xs font-semibold text-slate-200">
+                        Recomendações de Refinamento do Ecossistema
+                      </div>
+                      <div className="space-y-1.5">
+                        {activeSessionLog.insights.map((ins) => (
+                          <div
+                            key={ins.code}
+                            className={`p-2 rounded border text-xs ${
+                              ins.severity === 'atencao'
+                                ? 'bg-amber-500/10 border-amber-400/35 text-amber-200'
+                                : ins.severity === 'otimizacao'
+                                  ? 'bg-emerald-500/10 border-emerald-400/35 text-emerald-200'
+                                  : 'bg-[#111620] border-white/10 text-slate-300'
+                            }`}
+                          >
+                            <div className="font-mono-tabular text-[10px] opacity-80">{ins.code}</div>
+                            <div>{ins.recommendation}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Persisted SQLite Historical Production Sessions */}
+              <div className="space-y-2 pt-2 border-t border-white/10">
+                <div className="text-xs font-semibold text-slate-200">
+                  Histórico Persistido no SQLite ({savedSessionLogs.length} sessões)
+                </div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {savedSessionLogs.slice(0, 8).map((s) => (
+                    <div
+                      key={s.id}
+                      className="p-2.5 bg-[#090d14] border border-white/8 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-100 truncate">
+                          {s.poHumano} · Agente {s.llmAgent} ({s.delegatedByPo ? 'Delegado' : 'Direto'})
+                        </div>
+                        <div className="text-[11px] font-mono-tabular text-slate-400 truncate">
+                          {s.pointerCount} ponteiro · {s.actionCount} ações · {s.processMachine} · {s.hotzoneLabel}
+                        </div>
+                      </div>
+                      <span className="font-mono-tabular text-[10px] text-emerald-400 shrink-0">
+                        {s.vucHash}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -864,6 +1381,25 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
                   </div>
                 </div>
 
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    Programa / Processo Associado
+                  </label>
+                  <select
+                    aria-label="Programa CAM Associado"
+                    value={rmProgramId}
+                    onChange={(e) => setRmProgramId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
+                  >
+                    <option value="">Automático pelo Tipo CAM</option>
+                    {CAM_PRODUCTION_PROGRAMS.map((prog) => (
+                      <option key={prog.id} value={prog.id}>
+                        {prog.title} ({prog.machineType} · {prog.postFormat})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="p-3 bg-[#0c1017] border border-white/10 rounded-lg space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-xs font-semibold text-emerald-300">
@@ -944,71 +1480,106 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
               </form>
             )}
 
-            {/* Saved Endpoints Grid + Dispatch + MQTT Ping */}
+            {/* Saved Endpoints Grid + Real Network Probe + Dispatch + MQTT Ping */}
             <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-3">
               <div className="text-xs text-slate-400">
-                Conecte e despache o pós-processado (.NC / .SRC / SLM / SLA) diretamente para os endpoints cadastrados com assinatura VUC e retorno em tempo real via MQTT.
+                Associação real entre processos CAM e controladores físicos (HTTP Moonraker, OPC-UA, SSH KUKA, GRBL WS, MQTT). Sem mock: endpoints offline retornam falha explícita.
               </div>
+              {remoteDispatchStatus && (
+                <div className="p-2.5 bg-[#090d14] border border-amber-400/40 rounded-lg text-xs text-amber-200 font-mono-tabular">
+                  {remoteDispatchStatus}
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {remoteMachines.map((m) => (
-                  <div
-                    key={m.id}
-                    className="p-3.5 bg-[#0c1017] border border-white/10 rounded-lg space-y-2"
-                  >
-                    <div className="flex items-center justify-between text-xs gap-2">
-                      <span className="font-semibold text-slate-100 truncate">{m.name}</span>
-                      <span className="font-mono-tabular text-[11px] text-emerald-400 shrink-0">
-                        {m.status.toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="text-[11px] font-mono-tabular text-slate-300 truncate">
-                      {m.protocol} · {m.endpointUrl}
-                    </div>
-                    <div className="text-[11px] font-mono-tabular text-slate-400 flex items-center justify-between gap-2">
-                      <span className="truncate">
-                        {m.mqttEnabled
-                          ? `MQTT (QoS ${m.mqttQos ?? 1}): ${m.mqttTopic || 'tópico padrão'}`
-                          : 'MQTT: desativado'}
-                      </span>
-                      <span className="text-[10px] text-slate-500 shrink-0">{m.machineType}</span>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-white/8">
-                      <span className="text-[10px] font-mono-tabular text-slate-500 truncate max-w-[160px]">
-                        {m.lastJobVuc}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        {onSaveRemoteMachine && (
+                {remoteMachines.map((m) => {
+                  const assoc = resolveMachineProcessAssociation(m);
+                  const badgeColor =
+                    m.status === 'online'
+                      ? 'text-emerald-400'
+                      : m.status === 'executando'
+                        ? 'text-amber-300'
+                        : m.status === 'offline'
+                          ? 'text-rose-400'
+                          : 'text-slate-400';
+                  return (
+                    <div
+                      key={m.id}
+                      className="p-3.5 bg-[#0c1017] border border-white/10 rounded-lg space-y-2"
+                    >
+                      <div className="flex items-center justify-between text-xs gap-2">
+                        <span className="font-semibold text-slate-100 truncate">{m.name}</span>
+                        <span className={`font-mono-tabular text-[11px] shrink-0 ${badgeColor}`}>
+                          {m.status.toUpperCase()}
+                          {typeof m.lastProbeLatencyMs === 'number' ? ` (${m.lastProbeLatencyMs}ms)` : ''}
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono-tabular text-slate-300 truncate">
+                        {m.protocol} · {m.endpointUrl}
+                      </div>
+                      <div className="text-[11px] text-sky-300 truncate">
+                        Processo: {assoc.processLabel}
+                        {assoc.assignedProgram ? ` · ${assoc.assignedProgram.title}` : ''}
+                      </div>
+                      {m.lastProbeDetail && (
+                        <div className="text-[10px] font-mono-tabular text-slate-400 truncate">
+                          Sonda Real: {m.lastProbeDetail}
+                        </div>
+                      )}
+                      <div className="text-[11px] font-mono-tabular text-slate-400 flex items-center justify-between gap-2">
+                        <span className="truncate">
+                          {m.mqttEnabled
+                            ? `MQTT (QoS ${m.mqttQos ?? 1}): ${m.mqttTopic || 'tópico padrão'}`
+                            : 'MQTT: desativado'}
+                        </span>
+                        <span className="text-[10px] text-slate-500 shrink-0">{m.machineType}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-white/8">
+                        <span className="text-[10px] font-mono-tabular text-slate-500 truncate max-w-[140px]">
+                          {m.lastJobVuc}
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {onProbeRemoteMachine && (
+                            <button
+                              type="button"
+                              onClick={() => void onProbeRemoteMachine(m.id)}
+                              className="px-2.5 py-1.5 text-[11px] font-medium bg-[#141a24] border border-sky-400/40 text-sky-200 hover:bg-sky-500/20 rounded-lg cursor-pointer"
+                            >
+                              Testar Conexão
+                            </button>
+                          )}
+                          {onSaveRemoteMachine && (
+                            <button
+                              type="button"
+                              onClick={() => handleEditRemoteMachine(m)}
+                              className="px-2.5 py-1.5 text-[11px] font-medium border border-white/15 text-slate-200 hover:border-sky-400 rounded-lg flex items-center gap-1 cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              Editar
+                            </button>
+                          )}
+                          {onPingRemoteMqtt && (
+                            <button
+                              type="button"
+                              onClick={() => void onPingRemoteMqtt(m.id)}
+                              className="px-2.5 py-1.5 text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/25 rounded-lg flex items-center gap-1 cursor-pointer"
+                            >
+                              <Wifi className="w-3 h-3" />
+                              MQTT Ping
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => handleEditRemoteMachine(m)}
-                            className="px-2.5 py-1.5 text-[11px] font-medium border border-white/15 text-slate-200 hover:border-sky-400 rounded-lg flex items-center gap-1 cursor-pointer"
+                            onClick={() => void onDispatchRemoteMachine(m.id)}
+                            className="px-3 py-1.5 text-[11px] font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-lg flex items-center gap-1 cursor-pointer"
                           >
-                            <Pencil className="w-3 h-3" />
-                            Editar
+                            <Radio className="w-3 h-3" />
+                            Enviar Código G
                           </button>
-                        )}
-                        {onPingRemoteMqtt && (
-                          <button
-                            type="button"
-                            onClick={() => void onPingRemoteMqtt(m.id)}
-                            className="px-2.5 py-1.5 text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/25 rounded-lg flex items-center gap-1 cursor-pointer"
-                          >
-                            <Wifi className="w-3 h-3" />
-                            MQTT Ping
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => void onDispatchRemoteMachine(m.id)}
-                          className="px-3 py-1.5 text-[11px] font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-lg flex items-center gap-1 cursor-pointer"
-                        >
-                          <Radio className="w-3 h-3" />
-                          Enviar Código G
-                        </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

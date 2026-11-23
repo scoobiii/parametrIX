@@ -79,6 +79,59 @@ export async function listDriveProjectFiles(
   return data.files ?? [];
 }
 
+const CAD_DRIVE_EXT_FILTERS = [
+  '.stl',
+  '.step',
+  '.stp',
+  '.ipt',
+  '.dxf',
+  '.3dm',
+  '.obj',
+  '.ifc',
+  '.svg',
+  '.parametrix.json',
+];
+
+export async function listDriveCadFiles(
+  accessToken: string,
+  searchTerm?: string
+): Promise<GoogleDriveFolderFile[]> {
+  const cleanSearch = searchTerm?.trim().replace(/'/g, "\\'") || '';
+  const extOr = CAD_DRIVE_EXT_FILTERS.map((ext) => `name contains '${ext}'`).join(' or ');
+  const q = cleanSearch
+    ? `trashed=false and mimeType!='application/vnd.google-apps.folder' and name contains '${cleanSearch}'`
+    : `trashed=false and mimeType!='application/vnd.google-apps.folder' and (${extOr})`;
+
+  const resp = await fetch(
+    `${DRIVE_FILES_API}?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime,webViewLink)&orderBy=modifiedTime desc&pageSize=30&spaces=drive`,
+    { headers: authHeaders(accessToken) }
+  );
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Falha ao pesquisar CAD no Google Drive (${resp.status}): ${errText.slice(0, 140)}`);
+  }
+  const data = (await resp.json()) as { files?: GoogleDriveFolderFile[] };
+  return data.files ?? [];
+}
+
+export async function downloadDriveFileContent(
+  accessToken: string,
+  fileId: string,
+  filename: string
+): Promise<{ arrayBuffer: ArrayBuffer; mimeType: string }> {
+  const resp = await fetch(`${DRIVE_FILES_API}/${encodeURIComponent(fileId)}?alt=media`, {
+    headers: authHeaders(accessToken),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Falha ao baixar "${filename}" do Google Drive (${resp.status}): ${errText.slice(0, 140)}`);
+  }
+  return {
+    arrayBuffer: await resp.arrayBuffer(),
+    mimeType: resp.headers.get('content-type') || 'application/octet-stream',
+  };
+}
+
 export async function saveFileToDriveFolder(
   accessToken: string,
   folderId: string,

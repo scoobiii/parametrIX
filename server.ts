@@ -3,6 +3,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import fs from 'fs';
 import http from 'http';
+import net from 'node:net';
 import os from 'os';
 import path from 'path';
 import { GoogleGenAI, Type, type Content, type FunctionDeclaration } from '@google/genai';
@@ -47,17 +48,21 @@ import {
 } from './src/server/oauthAuthHandler';
 import { ParametrixSqliteStore } from './src/server/sqliteStore';
 import {
-  getLocalQwenStatus,
-  getRegisteredRagDocs,
-  runLocalQwenInference,
   setRegisteredRagDocs,
+  getRegisteredRagDocs,
   syncQwenProjectRagDataset,
+  getLocalQwenStatus,
+  runLocalQwenInference,
 } from './src/server/localQwenRunner';
+import {
+  routeQwenSpecialistFunction,
+} from './src/kernel/qwenProjectRagFinetune';
 import {
   WebSocketBrowserMcpRelay,
   buildClawFamilyBundle,
   buildHermesAgentBundle,
   executeHermesCompactSearch,
+  inspectGrabCadOrCadUrl,
   type BrowserMcpRpcResponsePayload,
 } from './src/server/hermesBridge';
 import {
@@ -78,6 +83,17 @@ import {
   startRamdiskMcpWorker,
   stopRamdiskMcpWorker,
 } from './src/server/ramdiskMcpAccelerator';
+import {
+  PUBLIC_CHAT_RULES,
+  PUBLIC_CHAT_THEMES,
+  isRegisteredEcosystemUser,
+  normalizeChatRoomTheme,
+  validatePublicChatMessage,
+} from './src/kernel/publicChatSignaling';
+import {
+  resolveMachineProcessAssociation,
+  validateRealMachineEndpoint,
+} from './src/kernel/realMachineConnector';
 import type {
   AgentProviderId,
   ApplicationSegment,
@@ -93,7 +109,10 @@ import type {
   MaterialFinish,
   ParametricDesignParams,
   PostProcessorFormat,
+  ProductionSessionLogRecord,
+  PublicChatThemeId,
   RemoteMachineTarget,
+  RtcPeerPresence,
 } from './src/types/cad';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -1756,6 +1775,47 @@ ${ragBlock}`;
     }
   };
 
+  interface RtcRoomPeerRecord extends RtcPeerPresence {
+    wsClientId: string;
+    socket: WebSocket;
+  }
+  const rtcRooms = new Map<string, Map<string, RtcRoomPeerRecord>>();
+
+  const broadcastRtcRoomPeers = (room: string) => {
+    const map = rtcRooms.get(room);
+    const peers: RtcPeerPresence[] = map
+      ? Array.from(map.values()).map(({ wsClientId: _wsId, socket: _s, ...presence }) => presence)
+      : [];
+    const payloadRaw = JSON.stringify({
+      type: 'rtc:peers',
+      payload: { room, peers },
+      timestamp: new Date().toISOString(),
+    });
+    if (!map) return;
+    for (const member of map.values()) {
+      if (member.socket.readyState === WebSocket.OPEN) {
+        try {
+          member.socket.send(payloadRaw);
+        } catch {
+          // Ignore closed socket
+        }
+      }
+    }
+  };
+
+  const cleanupPeerFromRtcRooms = (wsClientId: string) => {
+    for (const [room, members] of rtcRooms.entries()) {
+      if (members.has(wsClientId)) {
+        members.delete(wsClientId);
+        if (members.size === 0) {
+          rtcRooms.delete(room);
+        } else {
+          broadcastRtcRoomPeers(room);
+        }
+      }
+    }
+  };
+
   wss.on('connection', (socket) => {
     const wsClientId = `ws-${crypto.randomBytes(4).toString('hex')}`;
     wsAliveMap.set(socket, true);
@@ -1767,6 +1827,7 @@ ${ragBlock}`;
 
     socket.on('error', () => {
       hermesRelay.unregisterClient(wsClientId);
+      cleanupPeerFromRtcRooms(wsClientId);
     });
 
     try {
@@ -1787,6 +1848,7 @@ ${ragBlock}`;
 
     socket.on('close', () => {
       hermesRelay.unregisterClient(wsClientId);
+      cleanupPeerFromRtcRooms(wsClientId);
     });
 
     socket.on('message', (data) => {
@@ -1802,17 +1864,121 @@ ${ragBlock}`;
         } else if (msg.type === 'mcp:rpc_response' && msg.payload) {
           hermesRelay.handleRpcResponse(msg.payload as unknown as BrowserMcpRpcResponsePayload);
         } else if (msg.type === 'chat:send' && msg.payload) {
-          const saved = sqliteStore.appendChatMessage({
+          const senderId = String(msg.payload.senderId || 'anon');
+          const senderEmail = typeof msg.payload.senderEmail === 'string' ? msg.payload.senderEmail : undefined;
+          const isAgent = Boolean(msg.payload.isAgent);
+          const check = validatePublicChatMessage({
+            senderId,
+            senderEmail,
+            isAgent,
+            dbRegistered: sqliteStore.isRegisteredUser(senderId, senderEmail),
             room: String(msg.payload.room || 'geral'),
-            senderId: String(msg.payload.senderId || 'anon'),
-            senderName: String(msg.payload.senderName || 'Engenheiro Local'),
-            senderRole: (msg.payload.senderRole as EcosystemRole) || 'client',
-            isAgent: Boolean(msg.payload.isAgent),
             content: String(msg.payload.content || ''),
+          });
+          if (!check.ok) {
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: 'chat:error',
+                  payload: { reason: check.reason, requiresAuth: true },
+                })
+              );
+            }
+            return;
+          }
+          const saved = sqliteStore.appendChatMessage({
+            room: check.room,
+            theme: check.room as PublicChatThemeId,
+            senderId,
+            senderEmail,
+            senderName: String(msg.payload.senderName || 'Engenheiro Cadastrado'),
+            senderRole: (msg.payload.senderRole as EcosystemRole) || 'client',
+            isAgent,
+            content: check.content,
+            processUrl: typeof msg.payload.processUrl === 'string' ? msg.payload.processUrl : undefined,
             lat: typeof msg.payload.lat === 'number' ? msg.payload.lat : undefined,
             lng: typeof msg.payload.lng === 'number' ? msg.payload.lng : undefined,
           });
           broadcastWs('chat:message', saved);
+        } else if (msg.type === 'rtc:join' && msg.payload) {
+          const userId = String(msg.payload.userId || '');
+          const email = typeof msg.payload.email === 'string' ? msg.payload.email : undefined;
+          const allowed = isRegisteredEcosystemUser({
+            userId,
+            email,
+            isAgent: false,
+            dbRegistered: sqliteStore.isRegisteredUser(userId, email),
+          });
+          if (!allowed) {
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: 'rtc:error',
+                  payload: {
+                    reason: 'Chamada de voz, vídeo e compartilhamento de tela exigem usuário cadastrado.',
+                    requiresAuth: true,
+                  },
+                })
+              );
+            }
+            return;
+          }
+          const room = normalizeChatRoomTheme(String(msg.payload.room || 'geral'));
+          cleanupPeerFromRtcRooms(wsClientId);
+          if (!rtcRooms.has(room)) rtcRooms.set(room, new Map());
+          const peerRecord: RtcRoomPeerRecord = {
+            peerId: wsClientId,
+            wsClientId,
+            socket,
+            room,
+            userId,
+            displayName: String(msg.payload.displayName || 'Usuário Parametrix'),
+            role: (msg.payload.role as EcosystemRole) || 'client',
+            audioEnabled: Boolean(msg.payload.audioEnabled),
+            videoEnabled: Boolean(msg.payload.videoEnabled),
+            screenEnabled: Boolean(msg.payload.screenEnabled),
+            processUrl: typeof msg.payload.processUrl === 'string' ? msg.payload.processUrl : undefined,
+            joinedAt: new Date().toISOString(),
+          };
+          rtcRooms.get(room)!.set(wsClientId, peerRecord);
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'rtc:joined', payload: { peerId: wsClientId, room } }));
+          }
+          broadcastRtcRoomPeers(room);
+        } else if (msg.type === 'rtc:leave') {
+          cleanupPeerFromRtcRooms(wsClientId);
+        } else if (msg.type === 'rtc:media-state' && msg.payload) {
+          const room = normalizeChatRoomTheme(String(msg.payload.room || 'geral'));
+          const members = rtcRooms.get(room);
+          const existing = members?.get(wsClientId);
+          if (existing) {
+            existing.audioEnabled = Boolean(msg.payload.audioEnabled);
+            existing.videoEnabled = Boolean(msg.payload.videoEnabled);
+            existing.screenEnabled = Boolean(msg.payload.screenEnabled);
+            if (typeof msg.payload.processUrl === 'string') {
+              existing.processUrl = msg.payload.processUrl;
+            }
+            broadcastRtcRoomPeers(room);
+          }
+        } else if (
+          (msg.type === 'rtc:offer' || msg.type === 'rtc:answer' || msg.type === 'rtc:ice') &&
+          msg.payload
+        ) {
+          const room = normalizeChatRoomTheme(String(msg.payload.room || 'geral'));
+          const targetPeerId = String(msg.payload.targetPeerId || '');
+          const target = rtcRooms.get(room)?.get(targetPeerId);
+          if (target && target.socket.readyState === WebSocket.OPEN) {
+            target.socket.send(
+              JSON.stringify({
+                type: msg.type,
+                payload: {
+                  ...msg.payload,
+                  room,
+                  fromPeerId: wsClientId,
+                },
+              })
+            );
+          }
         } else if (msg.type === 'logistics:ping' && msg.payload) {
           const updated = sqliteStore.upsertLogisticsNode({
             id: String(msg.payload.id || `log-gps-${Date.now()}`),
@@ -2185,7 +2351,9 @@ ${ragBlock}`;
   // Multi-Agent Dropdown Router + MCP Eye Feedback Loop (Voice & Text CAM)
   app.post('/api/agent/multi-chat', async (req, res) => {
     const startedAt = Date.now();
-    const agentId = (req.body?.agentId as AgentProviderId) || 'gemini';
+    const requestedAgentId = (req.body?.agentId as AgentProviderId) || 'gemini';
+    const offlineMode = Boolean(req.body?.offlineMode);
+    const agentId: AgentProviderId = offlineMode ? 'local-llm' : requestedAgentId;
     const userMessage = String(req.body?.userMessage || '');
     const eyeEvents = Array.isArray(req.body?.eyeEvents) ? req.body.eyeEvents : [];
     const cadSummary = (req.body?.cadSummary ?? {}) as CamAgentContextSummary;
@@ -2204,8 +2372,16 @@ ${ragBlock}`;
       eyeEvents,
     });
     const externalEndpoint = typeof req.body?.externalEndpoint === 'string' ? req.body.externalEndpoint : '';
+    const specialistProfile = routeQwenSpecialistFunction(userMessage);
 
-    if (agentId === 'local-llm') {
+    if (agentId === 'local-llm' || offlineMode) {
+      const searchRes = await executeHermesCompactSearch({
+        query: userMessage,
+        dynamicDocs: getRegisteredRagDocs(),
+        cadSummary: enrichedSummary,
+        includeWeb: Boolean(req.body?.includeWeb) || /https?:\/\/|grabcad/i.test(userMessage),
+        maxResults: 3,
+      });
       const qwenStatus = getLocalQwenStatus();
       if (qwenStatus.installed) {
         try {
@@ -2215,14 +2391,25 @@ ${ragBlock}`;
             dynamicDocs: Array.isArray(req.body?.ragDocs) ? req.body.ragDocs : undefined,
             maxTokens: 180,
           });
-          const proof = sqliteStore.recordVucProof('AGENT_LOCAL_QWEN_05B', 'Qwen 2.5 0.5B Binary + RAG', {
-            agentId,
-            userMessage,
-            ragSourcesUsed: qwenRes.ragSourcesUsed,
-          });
+          const proof = sqliteStore.recordVucProof(
+            'AGENT_LOCAL_QWEN_05B',
+            `Qwen 0.5B RT (${qwenRes.specialistId})`,
+            {
+              agentId,
+              offlineMode,
+              specialistId: qwenRes.specialistId,
+              modelVariant: qwenRes.modelVariant,
+              userMessage,
+              ragSourcesUsed: qwenRes.ragSourcesUsed,
+            }
+          );
           return res.json({
             agentId,
+            offlineMode,
             modelUsed: qwenRes.modelUsed,
+            specialistProfile,
+            searchHits: searchRes.hits.slice(0, 4),
+            grabCadInspection: searchRes.grabCadInspection,
             reply: qwenRes.reply,
             vucHash: proof.vucHash,
             formalVuc: qwenRes.vucCertificate,
@@ -2231,9 +2418,98 @@ ${ragBlock}`;
             durationMs: qwenRes.durationMs,
           });
         } catch {
-          // Fall through to Ollama or deterministic bridge if native invocation fails
+          // Fall through to Ollama or Hermes+Burrinho specialist reply below
         }
       }
+
+      if (externalEndpoint && /^http:\/\/(localhost|127\.0\.0\.1)/.test(externalEndpoint)) {
+        try {
+          const localResp = await fetch(`${externalEndpoint.replace(/\/$/, '')}/api/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: specialistProfile.modelVariant.replace('-q4', ':0.5b').replace('-instruct', ''),
+              system: `${systemInstruction}\n[Especialista RT]: ${specialistProfile.title} — ${specialistProfile.rtDirective}`,
+              prompt: `${userMessage}\n\n${searchRes.compactSummaryText}`,
+              stream: false,
+            }),
+            signal: AbortSignal.timeout(4000),
+          });
+          if (localResp.ok) {
+            const data = (await localResp.json()) as { response?: string };
+            const replyText = data.response || 'Resposta executada no LLM local Qwen 0.5B.';
+            const proof = sqliteStore.recordVucProof('AGENT_LOCAL_OLLAMA', 'Hermes + Qwen 0.5B Local', {
+              agentId,
+              specialistId: specialistProfile.id,
+              userMessage,
+            });
+            const formalCert = createFormalVucCertificate({
+              domain: 'AGENT_LOCAL_OLLAMA',
+              status: 'PASS',
+              inputPayload: { agentId, userMessage, specialistId: specialistProfile.id },
+              outputPayload: { replyText },
+              durationMs: Date.now() - startedAt,
+            });
+            return res.json({
+              agentId,
+              offlineMode,
+              modelUsed: `${specialistProfile.modelVariant} (localhost)`,
+              specialistProfile,
+              searchHits: searchRes.hits.slice(0, 4),
+              grabCadInspection: searchRes.grabCadInspection,
+              reply: replyText,
+              vucHash: proof.vucHash,
+              formalVuc: formalCert,
+            });
+          }
+        } catch {
+          // Continue cleanly to deterministic Hermes + Burrinho + Search reply
+        }
+      }
+
+      const proof = sqliteStore.recordVucProof(
+        'AGENT_HERMES_BURRINHO_LOCAL',
+        `Hermes+Burrinho RT (${specialistProfile.id})`,
+        {
+          agentId,
+          offlineMode,
+          specialistId: specialistProfile.id,
+          modelVariant: specialistProfile.modelVariant,
+          searchHits: searchRes.hits.map((h) => h.id),
+        }
+      );
+      const baseDeterministic = buildDeterministicCamAgentReply({
+        agentId: `hermes-burrinho/${specialistProfile.modelVariant}`,
+        userMessage,
+        cadSummary: enrichedSummary,
+        eyeEvents,
+        vucHash: proof.vucHash,
+      });
+      const grabCadNote = searchRes.grabCadInspection
+        ? ` | GrabCAD/URL: "${searchRes.grabCadInspection.title}" (${searchRes.grabCadInspection.detectedFormats.join('/') || searchRes.grabCadInspection.status}) — ${searchRes.grabCadInspection.diagnosticNote}`
+        : '';
+      const topSearchLine = searchRes.hits[0]
+        ? ` | Search (${searchRes.hits[0].source}): ${searchRes.hits[0].title}`
+        : '';
+      const reply = `[Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) · ${specialistProfile.title}] ${baseDeterministic}${topSearchLine}${grabCadNote}`;
+      const formalCert = createFormalVucCertificate({
+        domain: 'AGENT_HERMES_LOCAL_RT',
+        status: 'PASS',
+        inputPayload: { agentId, offlineMode, specialistId: specialistProfile.id, userMessage },
+        outputPayload: { reply, hitIds: searchRes.hits.map((h) => h.id) },
+        durationMs: Math.max(1, Date.now() - startedAt),
+      });
+      return res.json({
+        agentId,
+        offlineMode,
+        modelUsed: `${specialistProfile.modelVariant} (${specialistProfile.id} · Hermes+Claw)`,
+        specialistProfile,
+        searchHits: searchRes.hits.slice(0, 4),
+        grabCadInspection: searchRes.grabCadInspection,
+        reply,
+        vucHash: proof.vucHash,
+        formalVuc: formalCert,
+      });
     }
 
     if (agentId === 'gemini' && process.env.GEMINI_API_KEY) {
@@ -2347,6 +2623,9 @@ ${ragBlock}`;
       remoteMachines: sqliteStore.listRemoteMachines(),
       vucLedger: sqliteStore.listVucLedger(),
       camServiceJobs: sqliteStore.listCamServiceJobs(),
+      sessionLogs: sqliteStore.listProductionSessionLogs(),
+      chatThemes: PUBLIC_CHAT_THEMES,
+      chatRules: PUBLIC_CHAT_RULES,
     });
   });
 
@@ -2808,8 +3087,73 @@ ${ragBlock}`;
       sqliteStore.recordVucProof('HERMES_SEARCH_VUC', `Busca "${result.query}"`, {
         vucId: result.vucCertificate.vuc_id,
         webStatus: result.webStatus,
+        specialistId: result.specialistProfile.id,
       });
       return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/cad/import-url', async (req, res) => {
+    try {
+      const rawUrl = String(req.body?.url || '').trim();
+      if (!rawUrl) {
+        return res.status(400).json({ error: 'Campo "url" é obrigatório.' });
+      }
+      const inspection = await inspectGrabCadOrCadUrl({ url: rawUrl });
+      if (inspection.status === 'invalid-url') {
+        return res.status(400).json({ error: inspection.diagnosticNote, inspection });
+      }
+
+      const candidateDownload = inspection.directCadUrl;
+      let downloadedFile:
+        | { filename: string; mimeType: string; byteSize: number; base64Content: string }
+        | undefined;
+
+      if (candidateDownload) {
+        try {
+          const parsedDl = new URL(candidateDownload);
+          if (!isDisallowedHostname(parsedDl.hostname)) {
+            const dlResp = await fetch(candidateDownload, {
+              redirect: 'follow',
+              signal: AbortSignal.timeout(12000),
+              headers: { 'User-Agent': 'ParametrixCAD-UrlImport/1.0' },
+            });
+            if (dlResp.ok) {
+              const arrBuf = await dlResp.arrayBuffer();
+              if (arrBuf.byteLength > 0 && arrBuf.byteLength <= MAX_FETCH_BYTES) {
+                const rawName = decodeURIComponent(path.basename(parsedDl.pathname) || 'modelo_url.stl');
+                downloadedFile = {
+                  filename: rawName,
+                  mimeType: (dlResp.headers.get('content-type') || 'application/octet-stream').split(';')[0],
+                  byteSize: arrBuf.byteLength,
+                  base64Content: Buffer.from(arrBuf).toString('base64'),
+                };
+              }
+            }
+          }
+        } catch {
+          // Keep inspection result even if raw file download failed
+        }
+      }
+
+      const proof = sqliteStore.recordVucProof(
+        'CAD_URL_INSPECT',
+        `GrabCAD/URL: ${inspection.title} (${inspection.status})`,
+        {
+          url: rawUrl,
+          status: inspection.status,
+          downloaded: Boolean(downloadedFile),
+          formats: inspection.detectedFormats,
+        }
+      );
+
+      return res.json({
+        inspection,
+        downloadedFile,
+        vucProof: proof,
+      });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -2895,23 +3239,53 @@ ${ragBlock}`;
     return res.json({ record: rec });
   });
 
-  app.post('/api/sqlite/chat', (req, res) => {
-    const content = String(req.body?.content || '');
-    const room = String(req.body?.room || 'geral');
+  app.post(['/api/sqlite/chat', '/api/chat/public'], async (req, res) => {
+    const senderId = String(req.body?.senderId || 'anon');
+    const senderEmail = typeof req.body?.senderEmail === 'string' ? req.body.senderEmail : undefined;
+    const isAgent = Boolean(req.body?.isAgent);
+    const offlineMode = Boolean(req.body?.offlineMode);
+    const activeAgentId = typeof req.body?.activeAgentId === 'string' ? req.body.activeAgentId : 'gemini';
+    const check = validatePublicChatMessage({
+      senderId,
+      senderEmail,
+      isAgent,
+      dbRegistered: sqliteStore.isRegisteredUser(senderId, senderEmail),
+      room: String(req.body?.room || req.body?.theme || 'geral'),
+      content: String(req.body?.content || ''),
+    });
+    if (!check.ok) {
+      return res.status(403).json({ error: check.reason, requiresAuth: true });
+    }
+
     const msg = sqliteStore.appendChatMessage({
-      room,
-      senderId: String(req.body?.senderId || 'local-user'),
-      senderName: String(req.body?.senderName || 'Operador'),
+      room: check.room,
+      theme: check.room,
+      senderId,
+      senderEmail,
+      senderName: String(req.body?.senderName || 'Operador Cadastrado'),
       senderRole: (req.body?.senderRole as EcosystemRole) || 'client',
-      isAgent: Boolean(req.body?.isAgent),
-      content,
+      isAgent,
+      content: check.content,
+      processUrl: typeof req.body?.processUrl === 'string' ? req.body.processUrl : undefined,
       lat: typeof req.body?.lat === 'number' ? req.body.lat : undefined,
       lng: typeof req.body?.lng === 'number' ? req.body.lng : undefined,
     });
     broadcastWs('chat:message', msg);
 
     let agentReply: ReturnType<typeof sqliteStore.appendChatMessage> | null = null;
-    if (!req.body?.isAgent && (req.body?.askCamAgent || /@(cam|agente|frostbite|vuc)\b/i.test(content))) {
+    const wantsHermesOrLocal =
+      offlineMode ||
+      activeAgentId === 'local-llm' ||
+      Boolean(req.body?.askLocalAgent) ||
+      /@(hermes|burrinho|openclaw|nanoclaw|picoclaw|qwen|local|search|buscar|grabcad)\b/i.test(check.content) ||
+      /https?:\/\/(?:www\.)?grabcad\.com/i.test(check.content);
+    const wantsAnyAgent =
+      !isAgent &&
+      (wantsHermesOrLocal ||
+        Boolean(req.body?.askCamAgent) ||
+        /@(cam|agente|frostbite|vuc)\b/i.test(check.content));
+
+    if (wantsAnyAgent) {
       const remoteCount = sqliteStore.listRemoteMachines().length;
       const latestCam = sqliteStore.listCamServiceJobs()[0];
       const cadSummary: CamAgentContextSummary = {
@@ -2923,21 +3297,75 @@ ${ragBlock}`;
         cuttingLengthMm: req.body?.cadSummary?.cuttingLengthMm ?? latestCam?.cuttingLengthMm,
         remoteMachinesCount: remoteCount,
       };
-      const replyText = buildDeterministicCamAgentReply({
-        agentId: 'cam-orchestrator',
-        userMessage: content,
-        cadSummary,
-        vucHash: msg.vucHash,
-      });
-      agentReply = sqliteStore.appendChatMessage({
-        room,
-        senderId: 'agent-cam-orchestrator',
-        senderName: 'Agente Orquestrador CAM & VUC',
-        senderRole: 'cam_provider',
-        isAgent: true,
-        content: replyText,
-      });
-      broadcastWs('chat:message', agentReply);
+
+      if (wantsHermesOrLocal) {
+        const specialist = routeQwenSpecialistFunction(check.content);
+        const searchRes = await executeHermesCompactSearch({
+          query: check.content,
+          dynamicDocs: getRegisteredRagDocs(),
+          cadSummary,
+          includeWeb: !offlineMode || /grabcad\.com|https?:\/\//i.test(check.content),
+          maxResults: 3,
+        });
+        let qwenReplyText = '';
+        if (getLocalQwenStatus().installed) {
+          try {
+            const qwenRes = await runLocalQwenInference({
+              query: check.content,
+              cadSummary,
+              maxTokens: 160,
+            });
+            qwenReplyText = qwenRes.reply;
+          } catch {
+            qwenReplyText = '';
+          }
+        }
+        const deterministicLocal = buildDeterministicCamAgentReply({
+          agentId: `hermes+burrinhos/${specialist.modelVariant}`,
+          userMessage: check.content,
+          cadSummary,
+          vucHash: msg.vucHash,
+        });
+        const grabCadNote = searchRes.grabCadInspection
+          ? `\nGrabCAD/URL "${searchRes.grabCadInspection.title}" (${searchRes.grabCadInspection.detectedFormats.join('/') || searchRes.grabCadInspection.status}): ${searchRes.grabCadInspection.diagnosticNote}`
+          : '';
+        const searchHint = searchRes.hits[0]
+          ? `\nSearch [${searchRes.hits[0].source}]: ${searchRes.hits[0].title} — ${searchRes.hits[0].snippet.slice(0, 120)}`
+          : '';
+        const finalText = qwenReplyText
+          ? `[Hermes + Burrinhos · ${specialist.title}]\n${qwenReplyText}${grabCadNote}`
+          : `[Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) · ${specialist.title}]\n${deterministicLocal}${searchHint}${grabCadNote}`;
+
+        agentReply = sqliteStore.appendChatMessage({
+          room: check.room,
+          theme: check.room,
+          senderId: 'agent-hermes-burrinho',
+          senderName: `Hermes + Burrinho (${specialist.id})`,
+          senderRole: 'cam_provider',
+          isAgent: true,
+          content: finalText,
+          processUrl: typeof req.body?.processUrl === 'string' ? req.body.processUrl : undefined,
+        });
+        broadcastWs('chat:message', agentReply);
+      } else {
+        const replyText = buildDeterministicCamAgentReply({
+          agentId: 'cam-orchestrator',
+          userMessage: check.content,
+          cadSummary,
+          vucHash: msg.vucHash,
+        });
+        agentReply = sqliteStore.appendChatMessage({
+          room: check.room,
+          theme: check.room,
+          senderId: 'agent-cam-orchestrator',
+          senderName: 'Agente Orquestrador CAM & VUC',
+          senderRole: 'cam_provider',
+          isAgent: true,
+          content: replyText,
+          processUrl: typeof req.body?.processUrl === 'string' ? req.body.processUrl : undefined,
+        });
+        broadcastWs('chat:message', agentReply);
+      }
     }
 
     return res.json({ message: msg, agentReply });
@@ -2974,6 +3402,10 @@ ${ragBlock}`;
         machineType: (body.machineType as MachineType) || 'cnc-5axis',
         protocol: (body.protocol as RemoteMachineTarget['protocol']) || 'HTTP-Moonraker',
         endpointUrl: String(body.endpointUrl || ''),
+        assignedProgramId:
+          typeof body.assignedProgramId === 'string' && body.assignedProgramId.trim()
+            ? body.assignedProgramId.trim()
+            : undefined,
         mqttEnabled: Boolean(body.mqttEnabled),
         mqttBrokerUrl: String(body.mqttBrokerUrl || ''),
         mqttTopic: String(body.mqttTopic || ''),
@@ -2987,20 +3419,187 @@ ${ragBlock}`;
     }
   });
 
-  app.post('/api/sqlite/remote-machines/:id/mqtt-ping', (req, res) => {
+  async function probeTcpHostPort(host: string, port: number, timeoutMs = 2500): Promise<{
+    reachable: boolean;
+    latencyMs: number;
+    detail: string;
+  }> {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      let settled = false;
+      const socket = net.createConnection({ host, port });
+      const finish = (reachable: boolean, detail: string) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        resolve({ reachable, latencyMs: Math.max(1, Date.now() - started), detail });
+      };
+      socket.setTimeout(timeoutMs);
+      socket.once('connect', () => finish(true, `TCP ${host}:${port} conectado`));
+      socket.once('timeout', () => finish(false, `Timeout TCP após ${timeoutMs}ms em ${host}:${port}`));
+      socket.once('error', (err: NodeJS.ErrnoException) =>
+        finish(false, `Falha TCP (${err.code || 'ERR'}) em ${host}:${port}: ${err.message}`)
+      );
+    });
+  }
+
+  async function probeRealMachineEndpoint(machine: RemoteMachineTarget): Promise<{
+    reachable: boolean;
+    latencyMs: number;
+    status: RemoteMachineTarget['status'];
+    detail: string;
+  }> {
+    const parsed = validateRealMachineEndpoint(machine.endpointUrl, machine.protocol);
+    if (!parsed.valid) {
+      return {
+        reachable: false,
+        latencyMs: 0,
+        status: 'offline',
+        detail: parsed.reason || 'Endpoint inválido.',
+      };
+    }
+    const started = Date.now();
+    if (parsed.transport === 'http') {
+      try {
+        const resp = await fetch(machine.endpointUrl, {
+          method: 'GET',
+          signal: AbortSignal.timeout(2500),
+        });
+        const latencyMs = Math.max(1, Date.now() - started);
+        if (resp.status < 500) {
+          return {
+            reachable: true,
+            latencyMs,
+            status: 'online',
+            detail: `HTTP ${resp.status} em ${parsed.host}:${parsed.port} (${latencyMs} ms)`,
+          };
+        }
+        return {
+          reachable: false,
+          latencyMs,
+          status: 'offline',
+          detail: `Endpoint retornou HTTP ${resp.status} (${parsed.host}:${parsed.port})`,
+        };
+      } catch (err) {
+        const latencyMs = Math.max(1, Date.now() - started);
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          reachable: false,
+          latencyMs,
+          status: 'offline',
+          detail: `Inacessível (${parsed.host}:${parsed.port}): ${msg}`,
+        };
+      }
+    }
+
+    const tcpRes = await probeTcpHostPort(parsed.host, parsed.port, 2500);
+    return {
+      reachable: tcpRes.reachable,
+      latencyMs: tcpRes.latencyMs,
+      status: tcpRes.reachable ? 'online' : 'offline',
+      detail: tcpRes.detail,
+    };
+  }
+
+  async function dispatchGcodeOverNetwork(
+    machine: RemoteMachineTarget,
+    projectName: string,
+    postCode: string
+  ): Promise<{ ok: boolean; latencyMs: number; detail: string }> {
+    const parsed = validateRealMachineEndpoint(machine.endpointUrl, machine.protocol);
+    if (!parsed.valid) {
+      return { ok: false, latencyMs: 0, detail: parsed.reason || 'Endpoint inválido.' };
+    }
+    const started = Date.now();
+    if (parsed.transport === 'http') {
+      try {
+        const resp = await fetch(machine.endpointUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectName, script: postCode }),
+          signal: AbortSignal.timeout(4000),
+        });
+        const latencyMs = Math.max(1, Date.now() - started);
+        if (resp.ok || resp.status < 500) {
+          return {
+            ok: true,
+            latencyMs,
+            detail: `HTTP ${resp.status} POST G-Code (${postCode.split(/\r?\n/).length} linhas) em ${parsed.host}:${parsed.port}`,
+          };
+        }
+        return {
+          ok: false,
+          latencyMs,
+          detail: `Controlador HTTP respondeu erro ${resp.status} em ${parsed.host}:${parsed.port}`,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          latencyMs: Math.max(1, Date.now() - started),
+          detail: `Falha no envio HTTP para ${parsed.host}:${parsed.port}: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    const tcpRes = await probeTcpHostPort(parsed.host, parsed.port, 2500);
+    return {
+      ok: tcpRes.reachable,
+      latencyMs: tcpRes.latencyMs,
+      detail: tcpRes.reachable
+        ? `Socket ${machine.protocol} conectado em ${parsed.host}:${parsed.port} para envio G-Code (${postCode.split(/\r?\n/).length} linhas)`
+        : tcpRes.detail,
+    };
+  }
+
+  app.post('/api/sqlite/remote-machines/:id/probe', async (req, res) => {
+    const target = sqliteStore.listRemoteMachines().find((m) => m.id === req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: 'Máquina remota não encontrada.' });
+    }
+    const probe = await probeRealMachineEndpoint(target);
+    const assignedProgramId =
+      typeof req.body?.assignedProgramId === 'string' && req.body.assignedProgramId.trim()
+        ? req.body.assignedProgramId.trim()
+        : target.assignedProgramId;
+    const updated = sqliteStore.updateRemoteMachineProbe(target.id, {
+      status: probe.status,
+      latencyMs: probe.latencyMs,
+      detail: probe.detail,
+      assignedProgramId,
+    });
+    const proof = sqliteStore.recordVucProof(
+      'REMOTE_MACHINE_PROBE',
+      `Probe real ${target.name}: ${probe.reachable ? 'ONLINE' : 'OFFLINE'} (${probe.detail})`,
+      { machineId: target.id, ...probe }
+    );
+    if (updated) broadcastWs('remote:machine', updated);
+    return res.json({
+      reachable: probe.reachable,
+      latencyMs: probe.latencyMs,
+      detail: probe.detail,
+      machine: updated,
+      vucProof: proof,
+    });
+  });
+
+  app.post('/api/sqlite/remote-machines/:id/mqtt-ping', async (req, res) => {
     const target = sqliteStore.listRemoteMachines().find((m) => m.id === req.params.id);
     if (!target) {
       return res.status(404).json({ error: 'Máquina remota não encontrada.' });
     }
     const timestamp = new Date().toISOString();
-    const topic =
-      target.mqttTopic || `parametrix/machines/${target.id}/telemetry`;
+    const topic = target.mqttTopic || `parametrix/machines/${target.id}/telemetry`;
     const brokerUrl = target.mqttBrokerUrl || 'mqtt://broker.parametrix.local:1883';
     const qos = target.mqttQos ?? 1;
+    const brokerCheck = await probeRealMachineEndpoint({
+      ...target,
+      protocol: 'MQTT',
+      endpointUrl: brokerUrl,
+    });
     const proof = sqliteStore.recordVucProof(
       'REMOTE_MQTT_TELEMETRY',
-      `MQTT Ping -> ${target.name} (${topic})`,
-      { machineId: target.id, brokerUrl, topic, qos, timestamp }
+      `MQTT Probe -> ${target.name} (${topic}) · ${brokerCheck.reachable ? 'CONECTADO' : 'INACESSIVEL'}`,
+      { machineId: target.id, brokerUrl, topic, qos, timestamp, ...brokerCheck }
     );
     const telemetry = {
       id: `mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3009,25 +3608,70 @@ ${ragBlock}`;
       brokerUrl,
       topic,
       qos,
-      payloadSummary: `status=${target.status} · proto=${target.protocol} · qos=${qos} · rx/tx OK`,
+      payloadSummary: `status=${target.status} · broker=${brokerCheck.reachable ? `ONLINE (${brokerCheck.latencyMs}ms)` : `OFFLINE (${brokerCheck.detail})`}`,
       vucHash: proof.vucHash,
       timestamp,
     };
     broadcastWs('remote:mqtt', telemetry);
-    return res.json({ telemetry });
+    return res.json({ telemetry, brokerReachable: brokerCheck.reachable });
   });
 
-  app.post('/api/sqlite/remote-machines/:id/dispatch', (req, res) => {
-    const projectName = String(req.body?.projectName || 'Projeto Parametrix');
-    const postCode = String(req.body?.postCode || '');
-    const updated = sqliteStore.dispatchRemoteMachineJob(
-      req.params.id,
-      projectName,
-      postCode
-    );
-    if (!updated) {
+  app.post('/api/sqlite/remote-machines/:id/dispatch', async (req, res) => {
+    const target = sqliteStore.listRemoteMachines().find((m) => m.id === req.params.id);
+    if (!target) {
       return res.status(404).json({ error: 'Máquina remota não cadastrada.' });
     }
+    const projectName = String(req.body?.projectName || 'Projeto Parametrix');
+    const postCode = String(req.body?.postCode || '');
+    const assoc = resolveMachineProcessAssociation(
+      target,
+      typeof req.body?.assignedProgramId === 'string' ? req.body.assignedProgramId : undefined
+    );
+
+    const dispatchRes = await dispatchGcodeOverNetwork(target, projectName, postCode);
+    if (!dispatchRes.ok) {
+      const failedMachine = sqliteStore.updateRemoteMachineProbe(target.id, {
+        status: 'offline',
+        latencyMs: dispatchRes.latencyMs,
+        detail: dispatchRes.detail,
+        assignedProgramId: assoc.assignedProgram?.id,
+      });
+      const proof = sqliteStore.recordVucProof(
+        'REMOTE_DISPATCH_FAILED',
+        `Despacho recusado (${target.name}): ${dispatchRes.detail}`,
+        { machineId: target.id, projectName, error: dispatchRes.detail }
+      );
+      if (failedMachine) broadcastWs('remote:machine', failedMachine);
+      if (target.mqttEnabled) {
+        broadcastWs('remote:mqtt', {
+          id: `mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          machineId: target.id,
+          machineName: target.name,
+          brokerUrl: target.mqttBrokerUrl || 'mqtt://broker.parametrix.local:1883',
+          topic: target.mqttTopic || `parametrix/machines/${target.id}/telemetry`,
+          qos: target.mqttQos ?? 1,
+          payloadSummary: `ERRO DESPACHO REAL: ${dispatchRes.detail}`,
+          vucHash: proof.vucHash,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      return res.status(502).json({
+        ok: false,
+        dispatched: false,
+        error: dispatchRes.detail,
+        probeDetail: dispatchRes.detail,
+        machine: failedMachine,
+        vucProof: proof,
+      });
+    }
+
+    sqliteStore.updateRemoteMachineProbe(target.id, {
+      status: 'online',
+      latencyMs: dispatchRes.latencyMs,
+      detail: dispatchRes.detail,
+      assignedProgramId: assoc.assignedProgram?.id,
+    });
+    const updated = sqliteStore.dispatchRemoteMachineJob(req.params.id, projectName, postCode)!;
     broadcastWs('remote:machine', updated);
     if (updated.mqttEnabled) {
       const topic = updated.mqttTopic || `parametrix/machines/${updated.id}/telemetry`;
@@ -3039,13 +3683,54 @@ ${ragBlock}`;
         brokerUrl,
         topic,
         qos: updated.mqttQos ?? 1,
-        payloadSummary: `G-Code despachado (${postCode.split(/\r?\n/).length} linhas) · ${projectName}`,
+        payloadSummary: `G-Code real despachado (${postCode.split(/\r?\n/).length} linhas · ${assoc.processLabel}) · ${projectName}`,
         vucHash: updated.lastJobVuc,
         timestamp: updated.updatedAt,
       };
       broadcastWs('remote:mqtt', telemetry);
     }
-    return res.json({ machine: updated });
+    return res.json({
+      ok: true,
+      dispatched: true,
+      latencyMs: dispatchRes.latencyMs,
+      detail: dispatchRes.detail,
+      association: assoc,
+      machine: updated,
+    });
+  });
+
+  app.get('/api/sqlite/session-logs', (_req, res) => {
+    return res.json({ sessionLogs: sqliteStore.listProductionSessionLogs() });
+  });
+
+  app.post('/api/sqlite/session-logs', (req, res) => {
+    const body = req.body as Partial<ProductionSessionLogRecord> | undefined;
+    if (!body || typeof body.sessionId !== 'string' || !body.sessionId.trim()) {
+      return res.status(400).json({ error: 'Campo sessionId é obrigatório para gravar log de sessão.' });
+    }
+    const record: ProductionSessionLogRecord = {
+      id: body.id || `sess-${body.sessionId}`,
+      sessionId: body.sessionId.trim(),
+      userId: String(body.userId || 'local-default-op'),
+      poHumano: String(body.poHumano || 'PO Humano'),
+      llmAgent: String(body.llmAgent || 'gemini'),
+      delegatedByPo: Boolean(body.delegatedByPo),
+      activeTab: body.activeTab || 'viewport',
+      processMachine: body.processMachine || 'cnc-5axis',
+      processUrl: String(body.processUrl || ''),
+      pointerCount: Number(body.pointerCount) || 0,
+      actionCount: Number(body.actionCount) || 0,
+      durationSec: Number(body.durationSec) || 0,
+      hotzoneLabel: String(body.hotzoneLabel || 'Sem movimento'),
+      heatmap: Array.isArray(body.heatmap) ? body.heatmap : [],
+      events: Array.isArray(body.events) ? body.events : [],
+      insights: Array.isArray(body.insights) ? body.insights : [],
+      vucHash: String(body.vucHash || `VUC-${Date.now().toString(16).toUpperCase()}`),
+      createdAt: body.createdAt || new Date().toISOString(),
+    };
+    const saved = sqliteStore.saveProductionSessionLog(record);
+    broadcastWs('session:log', saved);
+    return res.status(201).json({ sessionLog: saved });
   });
 
   app.post('/api/vuc/verify', (req, res) => {

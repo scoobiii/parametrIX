@@ -214,6 +214,7 @@ interface Viewport3DProps {
   onRunQuickFea?: () => FeaResult | void;
   onResetPart?: () => void;
   camVisualState?: CamProcessVisualState | null;
+  onSelectComponentCamProcess?: (machineType: MachineType, comp: CadComponentPart) => void;
 }
 
 const _vec3A = new THREE.Vector3();
@@ -900,6 +901,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   onRunQuickFea,
   onResetPart,
   camVisualState = null,
+  onSelectComponentCamProcess,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -4185,88 +4187,138 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         )}
 
         {selectedComponent && (
-          <div className="flex flex-wrap items-center gap-2 text-[11px] bg-[#111620]/95 border border-sky-400/45 text-slate-200 rounded-lg px-3 py-1.5 shadow-lg">
-            <span
-              className="w-2.5 h-2.5 rounded-sm shrink-0"
-              style={{ backgroundColor: selectedComponent.maskColorHex }}
-            />
-            <div className="min-w-0">
-              <strong className="text-slate-100">{selectedComponent.name}</strong>
-              <span className="text-slate-400 ml-1.5">
-                ({selectedComponent.family} · {selectedComponent.subFamily})
-              </span>
+          <div className="bg-[#111620]/95 border border-sky-400/50 text-slate-200 rounded-xl px-3 py-2.5 shadow-xl space-y-2 text-[11px]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className="w-3 h-3 rounded-sm shrink-0 border border-white/25"
+                  style={{ backgroundColor: selectedComponent.maskColorHex }}
+                />
+                <strong className="text-slate-100 truncate">{selectedComponent.name}</strong>
+                <span className="text-slate-400 truncate">
+                  ({selectedComponent.family} · {selectedComponent.subFamily})
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onUpdateDisplay({ selectedComponentId: null })}
+                className="text-slate-400 hover:text-white cursor-pointer"
+                aria-label="Fechar contexto do componente"
+              >
+                ×
+              </button>
             </div>
-            <select
-              aria-label="Material do componente selecionado"
-              value={
-                display.componentMaterials[selectedComponent.id] ??
-                selectedComponent.inferredMaterial
-              }
-              onChange={(e) =>
-                onUpdateDisplay({
-                  mode: 'component-pbr',
-                  perComponentPbr: true,
-                  componentMaterials: {
-                    ...display.componentMaterials,
-                    [selectedComponent.id]: e.target.value as MaterialFinish,
-                  },
-                })
-              }
-              className="px-2 py-0.5 text-[11px] bg-[#080a0f] border border-white/15 rounded text-slate-100 cursor-pointer"
-            >
-              {FINISH_OPTIONS.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => {
-                const cur = display.componentRotations[selectedComponent.id] ?? [0, 0, 0];
-                onUpdateDisplay({
-                  componentRotations: {
-                    ...display.componentRotations,
-                    [selectedComponent.id]: [cur[0], (cur[1] + 45) % 360, cur[2]],
-                  },
-                });
-              }}
-              className="px-2 py-0.5 bg-[#0c1017] border border-white/12 hover:border-sky-400 rounded text-sky-300 cursor-pointer"
-            >
-              Girar +45°
-            </button>
-            <button
-              type="button"
-              onClick={() => toggleComponentVisibility(selectedComponent.id)}
-              title="Ocultar / Mostrar peça"
-              className="px-1.5 py-0.5 bg-[#0c1017] border border-white/12 hover:border-white/30 rounded text-slate-300 cursor-pointer"
-            >
-              {display.hiddenComponentIds.includes(selectedComponent.id) ? (
-                <Eye className="w-3.5 h-3.5" />
-              ) : (
-                <EyeOff className="w-3.5 h-3.5" />
+
+            {/* CAD / CAE / CAM Context Strip */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 text-[10px]">
+              <div className="p-1.5 rounded bg-[#090d14] border border-white/8">
+                <div className="text-sky-300 font-semibold">CAD & PBR</div>
+                <div className="font-mono-tabular text-slate-300">
+                  {selectedComponent.size[0].toFixed(0)}×{selectedComponent.size[1].toFixed(0)}×{selectedComponent.size[2].toFixed(0)} mm · {selectedComponent.triangleCount} tri
+                </div>
+                <div className="text-slate-500 truncate">Layer: {selectedComponent.sourceLayer}</div>
+              </div>
+              <div className="p-1.5 rounded bg-[#090d14] border border-white/8">
+                <div className="text-amber-300 font-semibold">CAE Estrutural</div>
+                {activeFea ? (
+                  <div className="font-mono-tabular text-slate-300">
+                    FS {activeFea.safetyFactor.toFixed(2)}× · {activeFea.maxStressMpa} MPa ({activeFea.status})
+                  </div>
+                ) : (
+                  <div className="text-slate-400">Execute FEA (⇧F) para tensão local</div>
+                )}
+              </div>
+              <div className="p-1.5 rounded bg-[#090d14] border border-white/8">
+                <div className="text-emerald-300 font-semibold">CAM Processo</div>
+                <div className="text-slate-200 truncate">
+                  {selectedComponent.manufacturingProcess?.processLabel ?? 'Usinagem CNC 5-Eixos'}
+                </div>
+                <div className="font-mono-tabular text-slate-400 truncate">
+                  {selectedComponent.manufacturingProcess?.toleranceSpec ?? 'ISO 2768-f'}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <select
+                aria-label="Material do componente selecionado"
+                value={
+                  display.componentMaterials[selectedComponent.id] ??
+                  selectedComponent.inferredMaterial
+                }
+                onChange={(e) =>
+                  onUpdateDisplay({
+                    mode: 'component-pbr',
+                    perComponentPbr: true,
+                    componentMaterials: {
+                      ...display.componentMaterials,
+                      [selectedComponent.id]: e.target.value as MaterialFinish,
+                    },
+                  })
+                }
+                className="px-2 py-0.5 text-[11px] bg-[#080a0f] border border-white/15 rounded text-slate-100 cursor-pointer"
+              >
+                {FINISH_OPTIONS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+              {selectedComponent.manufacturingProcess && onSelectComponentCamProcess && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSelectComponentCamProcess(
+                      selectedComponent.manufacturingProcess!.machineType,
+                      selectedComponent
+                    )
+                  }
+                  className="px-2 py-0.5 bg-emerald-500/20 border border-emerald-400/50 hover:bg-emerald-500/30 rounded text-emerald-200 font-semibold cursor-pointer"
+                >
+                  Abrir CAM ({selectedComponent.manufacturingProcess.machineType})
+                </button>
               )}
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onUpdateDisplay({
-                  isolationTarget:
-                    display.isolationTarget === selectedComponent.id ? 'all' : selectedComponent.id,
-                  fitViewTrigger: display.fitViewTrigger + 1,
-                })
-              }
-              className="px-2 py-0.5 bg-amber-500/15 border border-amber-400/40 rounded text-amber-200 cursor-pointer"
-            >
-              {display.isolationTarget === selectedComponent.id ? 'Desisolar' : 'Isolar'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onUpdateDisplay({ selectedComponentId: null })}
-              className="text-slate-400 hover:text-white ml-1 cursor-pointer"
-            >
-              ×
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const cur = display.componentRotations[selectedComponent.id] ?? [0, 0, 0];
+                  onUpdateDisplay({
+                    componentRotations: {
+                      ...display.componentRotations,
+                      [selectedComponent.id]: [cur[0], (cur[1] + 45) % 360, cur[2]],
+                    },
+                  });
+                }}
+                className="px-2 py-0.5 bg-[#0c1017] border border-white/12 hover:border-sky-400 rounded text-sky-300 cursor-pointer"
+              >
+                Girar +45°
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleComponentVisibility(selectedComponent.id)}
+                title="Ocultar / Mostrar peça"
+                className="px-1.5 py-0.5 bg-[#0c1017] border border-white/12 hover:border-white/30 rounded text-slate-300 cursor-pointer"
+              >
+                {display.hiddenComponentIds.includes(selectedComponent.id) ? (
+                  <Eye className="w-3.5 h-3.5" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateDisplay({
+                    isolationTarget:
+                      display.isolationTarget === selectedComponent.id ? 'all' : selectedComponent.id,
+                    fitViewTrigger: display.fitViewTrigger + 1,
+                  })
+                }
+                className="px-2 py-0.5 bg-amber-500/15 border border-amber-400/40 rounded text-amber-200 cursor-pointer"
+              >
+                {display.isolationTarget === selectedComponent.id ? 'Desisolar' : 'Isolar'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -4341,7 +4393,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         </div>
       )}
 
-      {/* Bottom-Left Object Mask Family Legend */}
+      {/* Bottom-Left Object Mask Family Legend (interactive click-to-select) */}
       {display.mode === 'object-mask' && (
         <div className="absolute bottom-20 left-3 z-10 w-64 max-h-60 overflow-y-auto bg-[#0e131c]/95 border border-white/12 rounded-xl p-3 space-y-2 hidden sm:block">
           <div className="text-[11px] font-semibold text-slate-100">
@@ -4349,7 +4401,17 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           </div>
           <div className="space-y-1.5">
             {familyLegend.map((fam) => (
-              <div key={fam.family} className="space-y-0.5">
+              <button
+                key={fam.family}
+                type="button"
+                onClick={() => {
+                  const first = components.find((c) => c.family === fam.family);
+                  if (first) {
+                    onUpdateDisplay({ selectedComponentId: first.id });
+                  }
+                }}
+                className="w-full text-left space-y-0.5 p-1 rounded hover:bg-white/5 cursor-pointer"
+              >
                 <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
@@ -4367,7 +4429,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                     {fam.processSummary}
                   </div>
                 )}
-              </div>
+              </button>
             ))}
           </div>
         </div>

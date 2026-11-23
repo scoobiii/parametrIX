@@ -920,11 +920,14 @@ export interface AuthUserProfile {
 export interface EcosystemChatMessage {
   id: string;
   room: string;
+  theme?: string;
   senderId: string;
+  senderEmail?: string;
   senderName: string;
   senderRole: EcosystemRole;
   isAgent: boolean;
   content: string;
+  processUrl?: string;
   lat?: number;
   lng?: number;
   vucHash: string;
@@ -977,8 +980,12 @@ export interface RemoteMachineTarget {
   machineType: MachineType;
   protocol: 'OPC-UA' | 'HTTP-Moonraker' | 'SSH-KUKA-Bridge' | 'GRBL-Serial-WS' | 'MQTT';
   endpointUrl: string;
-  status: 'online' | 'executando' | 'standby';
+  status: 'online' | 'executando' | 'standby' | 'offline';
   lastJobVuc: string;
+  assignedProgramId?: string;
+  lastProbeLatencyMs?: number;
+  lastProbeDetail?: string;
+  lastProbeAt?: string;
   mqttEnabled?: boolean;
   mqttBrokerUrl?: string;
   mqttTopic?: string;
@@ -1152,4 +1159,111 @@ export interface RamdiskMcpStatus {
   workerUrl?: string;
   workerWorkspace?: string;
   colabBridgeUrl?: string;
+}
+
+export type PublicChatThemeId =
+  | 'geral'
+  | 'cad-nurbs'
+  | 'cae-fea'
+  | 'cam-cnc'
+  | 'frostbite-7nm'
+  | 'vuc-devops';
+
+export interface PublicChatTheme {
+  id: PublicChatThemeId;
+  label: string;
+  description: string;
+  recommendedProcess: MachineType;
+}
+
+export interface RtcPeerPresence {
+  peerId: string;
+  room: string;
+  userId: string;
+  displayName: string;
+  role: EcosystemRole;
+  audioEnabled: boolean;
+  videoEnabled: boolean;
+  screenEnabled: boolean;
+  processUrl?: string;
+  joinedAt: string;
+}
+
+export type Gos7ArtifactStatus = 'runtime-sandbox' | 'convergente' | 'aprovado' | 'reprovado';
+
+export interface AgentProvenanceMetadata {
+  fileName: string;
+  responsibility: string;
+  dirOrUrl: string;
+  version: string;
+  poHumanoName: string;
+  poHumanoHandle: string;
+  poHumanoEmail: string;
+  delegatedByPo: boolean;
+  delegationScope: string;
+  llmAgentId: string;
+  llmModel: string;
+  harnessId: string;
+  status: Gos7ArtifactStatus;
+  vucHash: string;
+  createdAt: string;
+}
+
+export type SessionActionKind =
+  | 'pointer-move'
+  | 'tab-switch'
+  | 'camera-preset'
+  | 'cam-restart'
+  | 'component-select'
+  | 'material-change'
+  | 'fea-run'
+  | 'machine-probe'
+  | 'machine-dispatch'
+  | 'export-artifact'
+  | 'chat-send'
+  | 'rtc-media';
+
+export interface SessionInteractionEvent {
+  seq: number;
+  kind: SessionActionKind;
+  timestampMs: number;
+  xPct: number;
+  yPct: number;
+  activeTab: WorkspaceTab;
+  processMachine: MachineType;
+  selectedComponentId?: string | null;
+  detail: string;
+}
+
+export interface SessionRefinementInsight {
+  code: string;
+  severity: 'info' | 'atencao' | 'otimizacao';
+  recommendation: string;
+}
+
+export interface SessionHeatmapCell {
+  col: number;
+  row: number;
+  count: number;
+}
+
+export interface ProductionSessionLogRecord {
+  id: string;
+  sessionId: string;
+  userId: string;
+  poHumano: string;
+  llmAgent: string;
+  delegatedByPo: boolean;
+  activeTab: WorkspaceTab;
+  processMachine: MachineType;
+  processUrl: string;
+  pointerCount: number;
+  actionCount: number;
+  durationSec: number;
+  hotzoneLabel: string;
+  heatmap: SessionHeatmapCell[];
+  events: SessionInteractionEvent[];
+  insights: SessionRefinementInsight[];
+  vucHash: string;
+  createdAt: string;
 }

@@ -43,6 +43,10 @@ const Viewport3D = lazy(() => import('./components/Viewport3D').then(m => ({ def
 const SustainabilityDashboard = lazy(() => import('./components/SustainabilityDashboard').then(m => ({ default: m.SustainabilityDashboard })));
 import { useAuth } from './contexts/AuthContext';
 import {
+  buildAgentProvenanceMetadata,
+  injectGos7ProvenanceIntoTextArtifact,
+} from './kernel/agentProvenanceHeader';
+import {
   buildIsolatedEvaluatedMesh,
   exportAsciiDXF,
   exportBinarySTL,
@@ -60,6 +64,15 @@ import {
   buildParametricComponentParts,
   resolvePartEngineeringProfile,
 } from './kernel/componentClassifier';
+import {
+  buildProcessShareUrl,
+  parseProcessShareUrl,
+} from './kernel/publicChatSignaling';
+import {
+  analyzeSessionRefinement,
+  createSessionEvent,
+  shouldRecordPointerSample,
+} from './kernel/sessionPointerRecorder';
 import { parseRhinoCommandPrompt } from './kernel/rhinoGeometryEngine';
 import { analyzeCurvatureAndOptimizeWeight } from './kernel/curvatureOptimizer';
 import { buildUserProfileWithRole } from './kernel/ecosystemErpLogistics';
@@ -101,6 +114,7 @@ import {
 } from './services/userWorkspaceStore';
 import type {
   AgentChatMessage,
+  AgentProvenanceMetadata,
   AgentProviderId,
   ApplicationSegment,
   AuthProviderKind,
@@ -134,10 +148,14 @@ import type {
   ParametricDesignParams,
   PartEngineeringProfile,
   PostProcessorFormat,
+  ProductionSessionLogRecord,
+  PublicChatThemeId,
   RagSourceDocument,
   RemoteMachineTarget,
   RemoteMqttTelemetryEvent,
+  SessionActionKind,
   SessionDeliverable,
+  SessionInteractionEvent,
   SystemResourceSnapshot,
   ViewportDisplayState,
   VoiceActionIntent,
@@ -234,6 +252,8 @@ export default function App() {
   const [lastVoiceStatus, setLastVoiceStatus] = useState<string | null>(null);
   const [lastServerVucHex, setLastServerVucHex] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<EcosystemChatMessage[]>([]);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [remoteDispatchStatus, setRemoteDispatchStatus] = useState<string | null>(null);
   const [logisticsNodes, setLogisticsNodes] = useState<LogisticsTelemetryNode[]>([]);
   const [computeNodes, setComputeNodes] = useState<ComputeShareNode[]>([]);
   const [erpRecords, setErpRecords] = useState<ErpCrmRecord[]>([]);
@@ -241,6 +261,22 @@ export default function App() {
   const [mqttTelemetryFeed, setMqttTelemetryFeed] = useState<RemoteMqttTelemetryEvent[]>([]);
   const [camServiceJobs, setCamServiceJobs] = useState<CamServiceJob[]>([]);
   const [vucLedger, setVucLedger] = useState<VucLedgerEntry[]>([]);
+  const [savedSessionLogs, setSavedSessionLogs] = useState<ProductionSessionLogRecord[]>([]);
+  const [sessionRecordingEnabled, setSessionRecordingEnabled] = useState(true);
+  const [delegatedByPo, setDelegatedByPo] = useState(true);
+  const [sessionEvents, setSessionEvents] = useState<SessionInteractionEvent[]>([]);
+  const [ecosystemInitialSubTab, setEcosystemInitialSubTab] = useState<
+    'chat' | 'session' | 'logistics' | 'erp' | 'compute' | 'remote'
+  >('chat');
+  const [ecosystemInitialRoom, setEcosystemInitialRoom] = useState<PublicChatThemeId>('geral');
+  const sessionIdRef = useRef<string>(
+    `ps-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  );
+  const sessionSeqRef = useRef(1);
+  const lastPointerSampleRef = useRef<{ timestampMs: number; xPct: number; yPct: number } | null>(
+    null
+  );
+  const prevSelectedComponentRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const pushMcpEyeEventRef = useRef<
     ((
@@ -462,6 +498,132 @@ export default function App() {
       ),
     [effectiveCamSettings, toolpath, simProgress, camRestartCount]
   );
+
+  const activeProcessUrl = useMemo(() => {
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : 'https://parametrix.local';
+    return buildProcessShareUrl({
+      origin,
+      tab: activeTab,
+      subTab: activeTab === 'ecosystem' ? ecosystemInitialSubTab : undefined,
+      room: ecosystemInitialRoom,
+      processMachine: effectiveCamSettings.machineType,
+      displayMode: display.mode,
+      componentId: display.selectedComponentId,
+      sessionId: sessionIdRef.current,
+      sharedBy: sqliteProfile.handleAt,
+    });
+  }, [
+    activeTab,
+    ecosystemInitialSubTab,
+    ecosystemInitialRoom,
+    effectiveCamSettings.machineType,
+    display.mode,
+    display.selectedComponentId,
+    sqliteProfile.handleAt,
+  ]);
+
+  const activeProvenanceMeta = useMemo<AgentProvenanceMetadata>(
+    () =>
+      buildAgentProvenanceMetadata({
+        fileName: `${surface.id}_${effectiveCamSettings.machineType}`,
+        responsibility: `Processo CAM ${effectiveCamSettings.machineType} / ${partProfile.partName}`,
+        dirOrUrl: activeProcessUrl,
+        poHumanoName: user?.displayName || sqliteProfile.displayName,
+        poHumanoHandle: sqliteProfile.handleAt,
+        poHumanoEmail: user?.email || sqliteProfile.email,
+        delegatedByPo,
+        llmAgentId: selectedAgentId,
+        llmModel:
+          localLlmRec?.modelId || sqliteProfile.agentConfig.agentName || 'qwen2.5-coder:0.5b',
+        harnessId: `parametrix-harness-${sqliteProfile.agentConfig.agentName || 'v1'}`,
+        status: 'runtime-sandbox',
+      }),
+    [
+      surface.id,
+      effectiveCamSettings.machineType,
+      partProfile.partName,
+      activeProcessUrl,
+      user?.displayName,
+      user?.email,
+      sqliteProfile.displayName,
+      sqliteProfile.handleAt,
+      sqliteProfile.email,
+      sqliteProfile.agentConfig.agentName,
+      delegatedByPo,
+      selectedAgentId,
+      localLlmRec?.modelId,
+    ]
+  );
+
+  const activeSessionLog = useMemo<ProductionSessionLogRecord>(
+    () =>
+      analyzeSessionRefinement({
+        sessionId: sessionIdRef.current,
+        userId: sqliteProfile.id,
+        poHumano: `${user?.displayName || sqliteProfile.displayName} (${sqliteProfile.handleAt})`,
+        llmAgent: `${selectedAgentId} · ${localLlmRec?.modelId || sqliteProfile.agentConfig.agentName || 'qwen2.5-coder:0.5b'}`,
+        delegatedByPo,
+        activeTab,
+        processMachine: effectiveCamSettings.machineType,
+        processUrl: activeProcessUrl,
+        events: sessionEvents,
+      }),
+    [
+      sqliteProfile.id,
+      sqliteProfile.displayName,
+      sqliteProfile.handleAt,
+      sqliteProfile.agentConfig.agentName,
+      user?.displayName,
+      selectedAgentId,
+      localLlmRec?.modelId,
+      delegatedByPo,
+      activeTab,
+      effectiveCamSettings.machineType,
+      activeProcessUrl,
+      sessionEvents,
+    ]
+  );
+
+  const recordSessionDiscreteAction = (
+    kind: SessionActionKind,
+    detail: string,
+    overrides?: {
+      tab?: WorkspaceTab;
+      machine?: MachineType;
+      componentId?: string | null;
+    }
+  ) => {
+    if (!sessionRecordingEnabled) return;
+    const seq = sessionSeqRef.current++;
+    const evt = createSessionEvent({
+      seq,
+      kind,
+      timestampMs: Date.now(),
+      xPct: lastPointerSampleRef.current?.xPct ?? 50,
+      yPct: lastPointerSampleRef.current?.yPct ?? 50,
+      activeTab: overrides?.tab ?? activeTab,
+      processMachine: overrides?.machine ?? effectiveCamSettings.machineType,
+      selectedComponentId:
+        overrides?.componentId !== undefined
+          ? overrides.componentId
+          : display.selectedComponentId,
+      detail,
+    });
+    setSessionEvents((prev) => [...prev.slice(-199), evt]);
+  };
+
+  useEffect(() => {
+    if (prevSelectedComponentRef.current === display.selectedComponentId) return;
+    prevSelectedComponentRef.current = display.selectedComponentId;
+    if (display.selectedComponentId) {
+      recordSessionDiscreteAction(
+        'component-select',
+        `Componente selecionado: ${display.selectedComponentId}`
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [display.selectedComponentId]);
 
   // 6. Evaluate Structural FEA with Certification Thresholds & Magic Pen Features
   const feaResult = useMemo(
@@ -730,32 +892,81 @@ export default function App() {
     }
   };
 
-  // Deep link: /?preset=preset-gear-m2-z24&mode=solid&finish=clay&view=isometric
-  // abre a peça direto no Editor 3D com o modo de render e o enquadramento pedidos.
+  const applyProcessShareUrl = (searchOrUrl: string) => {
+    const parsed = parseProcessShareUrl(searchOrUrl);
+    if (parsed.room) {
+      setEcosystemInitialRoom(parsed.room);
+    }
+    if (
+      parsed.subTab &&
+      (['chat', 'session', 'logistics', 'erp', 'compute', 'remote'] as const).includes(
+        parsed.subTab as 'chat'
+      )
+    ) {
+      setEcosystemInitialSubTab(
+        parsed.subTab as 'chat' | 'session' | 'logistics' | 'erp' | 'compute' | 'remote'
+      );
+    }
+    if (parsed.processMachine) {
+      const nextMachine = parsed.processMachine;
+      const postMap: Record<MachineType, PostProcessorFormat> = {
+        'powder-metal': 'slm-powder',
+        'resin-sla': 'sla-resin',
+        'robot-weld': 'weld-tig-mig',
+        'laser-cut': 'laser-g',
+        'robot-6axis': 'kuka-krl',
+        manual: 'manual-sheet',
+        'cnc-5axis': 'fanuc-nc',
+        'cnc-3axis': 'fanuc-nc',
+      };
+      setCamSettings((prev) => ({
+        ...prev,
+        machineType: nextMachine,
+        postFormat: postMap[nextMachine],
+      }));
+    }
+    if (parsed.displayMode || parsed.componentId) {
+      setDisplay((current) => ({
+        ...current,
+        ...(parsed.displayMode ? { mode: parsed.displayMode } : {}),
+        ...(parsed.componentId ? { selectedComponentId: parsed.componentId } : {}),
+      }));
+    }
+    if (parsed.tab) {
+      setActiveTab(parsed.tab);
+    }
+  };
+
+  // Deep link: ?preset=..., ?tab=cam&process=powder-metal&mode=component-pbr&part=...
+  // abre o módulo e processo exato da URL compartilhada por sessão de usuário.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const requestedPreset = params.get('preset');
-    if (!requestedPreset) return;
-    const preset = WORKSPACE_PROJECT_PRESETS.find((item) => item.id === requestedPreset);
-    if (preset) {
-      handleApplyFullPreset(preset, true);
+    if (requestedPreset) {
+      const preset = WORKSPACE_PROJECT_PRESETS.find((item) => item.id === requestedPreset);
+      if (preset) {
+        handleApplyFullPreset(preset, true);
+      }
     }
     const requestedMode = params.get('mode');
     const requestedFinish = params.get('finish');
     const requestedView = params.get('view');
-    setDisplay((current) => ({
-      ...current,
-      ...(requestedMode && DISPLAY_MODES.includes(requestedMode as DisplayMode)
-        ? { mode: requestedMode as DisplayMode }
-        : {}),
-      ...(requestedFinish && MATERIAL_FINISHES.includes(requestedFinish as MaterialFinish)
-        ? { materialFinish: requestedFinish as MaterialFinish }
-        : {}),
-      ...(requestedView && CAMERA_PRESETS.includes(requestedView as CameraPreset)
-        ? { cameraPreset: requestedView as CameraPreset, cameraTrigger: current.cameraTrigger + 1 }
-        : {}),
-    }));
-    // Executa apenas na montagem inicial; o preset é um estado inicial, não uma dependência.
+    if (requestedMode || requestedFinish || requestedView) {
+      setDisplay((current) => ({
+        ...current,
+        ...(requestedMode && DISPLAY_MODES.includes(requestedMode as DisplayMode)
+          ? { mode: requestedMode as DisplayMode }
+          : {}),
+        ...(requestedFinish && MATERIAL_FINISHES.includes(requestedFinish as MaterialFinish)
+          ? { materialFinish: requestedFinish as MaterialFinish }
+          : {}),
+        ...(requestedView && CAMERA_PRESETS.includes(requestedView as CameraPreset)
+          ? { cameraPreset: requestedView as CameraPreset, cameraTrigger: current.cameraTrigger + 1 }
+          : {}),
+      }));
+    }
+    applyProcessShareUrl(window.location.search);
+    // Executa apenas na montagem inicial; estado inicial restaurado da URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -950,6 +1161,7 @@ export default function App() {
           remoteMachines?: RemoteMachineTarget[];
           camServiceJobs?: CamServiceJob[];
           vucLedger?: VucLedgerEntry[];
+          sessionLogs?: ProductionSessionLogRecord[];
         };
         if (data.erp) setErpRecords(data.erp);
         if (data.chat) setChatMessages(data.chat);
@@ -958,6 +1170,7 @@ export default function App() {
         if (data.remoteMachines) setRemoteMachines(data.remoteMachines);
         if (data.camServiceJobs) setCamServiceJobs(data.camServiceJobs);
         if (data.vucLedger) setVucLedger(data.vucLedger);
+        if (data.sessionLogs) setSavedSessionLogs(data.sessionLogs);
       } catch {
         // Offline tolerance
       }
@@ -1064,6 +1277,12 @@ export default function App() {
               setMqttTelemetryFeed((prev) =>
                 prev.some((t) => t.id === tel.id) ? prev : [tel, ...prev.slice(0, 29)]
               );
+            } else if (msg.type === 'session:log' && msg.payload) {
+              const slog = msg.payload as ProductionSessionLogRecord;
+              setSavedSessionLogs((prev) => [slog, ...prev.filter((l) => l.id !== slog.id)]);
+            } else if (msg.type === 'chat:error' && msg.payload) {
+              const errObj = msg.payload as { error?: string };
+              if (errObj.error) setChatError(errObj.error);
             } else if (msg.type === 'mcp:rpc_request' && msg.payload) {
               const req = msg.payload as {
                 requestId?: string;
@@ -1258,6 +1477,7 @@ export default function App() {
         stressComparisonView: 'current',
       }));
     }
+    recordSessionDiscreteAction('fea-run', `FEA executado (SF=${evaluatedFea.safetyFactor.toFixed(2)}×)`);
     return evaluatedFea;
   };
 
@@ -1357,10 +1577,9 @@ export default function App() {
       recordDeliverable({
         filename: name,
         kind: '3DM',
-        summary: useIsolated
-          ? `OpenNURBS peça isolada (${display.isolationTarget})`
-          : `OpenNURBS v7 (${surface.uCount}x${surface.vCount} CPs)`,
+        summary: `${useIsolated ? `OpenNURBS peça isolada (${display.isolationTarget})` : `OpenNURBS v7 (${surface.uCount}x${surface.vCount} CPs)`} · GOS7 Agente=${selectedAgentId} PO=${sqliteProfile.handleAt} (${delegatedByPo ? 'Delegado' : 'Direto'})`,
       });
+      recordSessionDiscreteAction('export-artifact', `Export ${name}`);
       return name;
     }
     if (fmt === 'stl') {
@@ -1369,8 +1588,9 @@ export default function App() {
       recordDeliverable({
         filename: name,
         kind: 'STL',
-        summary: `${useIsolated ? `Peça ${display.isolationTarget}` : 'Malha binária'} (${evaluated.triangleCount} triângulos)`,
+        summary: `${useIsolated ? `Peça ${display.isolationTarget}` : 'Malha binária'} (${evaluated.triangleCount} triângulos) · GOS7 Agente=${selectedAgentId} PO=${sqliteProfile.handleAt} (${delegatedByPo ? 'Delegado' : 'Direto'})`,
       });
+      recordSessionDiscreteAction('export-artifact', `Export ${name}`);
       return name;
     }
     if (fmt === 'dxf') {
@@ -1382,19 +1602,28 @@ export default function App() {
       recordDeliverable({
         filename: name,
         kind: 'DXF',
-        summary: useIsolated
-          ? `DXF R2000 peça isolada (${display.isolationTarget})`
-          : `AutoCAD R2000 (3DFACE + Isocurvas + CAM)`,
+        summary: `${useIsolated ? `DXF R2000 peça isolada (${display.isolationTarget})` : `AutoCAD R2000 (3DFACE + Isocurvas + CAM)`} · GOS7 Agente=${selectedAgentId} PO=${sqliteProfile.handleAt}`,
       });
+      recordSessionDiscreteAction('export-artifact', `Export ${name}`);
       return name;
     }
     const name = `${base}_cam.${fmt}`;
-    triggerBlobDownload(new Blob([toolpath.postCode], { type: 'text/plain;charset=utf-8' }), name);
+    const gcodeWithProvenance = injectGos7ProvenanceIntoTextArtifact(
+      toolpath.postCode,
+      {
+        ...activeProvenanceMeta,
+        fileName: name,
+        responsibility: `Código CAM ${effectiveCamSettings.machineType} · ${partProfile.partName}`,
+      },
+      fmt
+    );
+    triggerBlobDownload(new Blob([gcodeWithProvenance], { type: 'text/plain;charset=utf-8' }), name);
     recordDeliverable({
       filename: name,
       kind: fmt === 'src' ? 'SRC' : 'NC',
-      summary: `Código CAM (${toolpath.spindleRpm} RPM, ${toolpath.cuttingLengthMm} mm)`,
+      summary: `Código CAM (${toolpath.spindleRpm} RPM, ${toolpath.cuttingLengthMm} mm) · GOS7 Agente=${selectedAgentId} PO=${sqliteProfile.handleAt}`,
     });
+    recordSessionDiscreteAction('export-artifact', `Export ${name}`);
     return name;
   };
 
@@ -1728,6 +1957,9 @@ export default function App() {
     setSimPlaying(true);
     setCamRestartCount((c) => c + 1);
     setDisplay((d) => ({ ...d, showMachine: true, showToolpath: true }));
+    recordSessionDiscreteAction('cam-restart', `Reinício CAM (${targetMachine})`, {
+      machine: targetMachine,
+    });
     pushMcpEyeEvent(
       'cam-output',
       `CAM.${targetMachine}`,
@@ -1866,12 +2098,25 @@ export default function App() {
       throw new Error(data.error || 'Falha na autenticação SQLite.');
     }
     setSqliteProfile(data.profile);
-    pushMcpEyeEvent(
-      'agent-feedback',
-      `Auth.${payload.provider}`,
-      `Sessão SQLite ativa: ${data.profile.displayName} (${data.profile.role})`,
-      { role: data.profile.role, offlineMode: data.profile.offlineMode }
-    );
+    if (data.profile.offlineMode || payload.offlineMode) {
+      setSelectedAgentId('local-llm');
+      setLastVoiceStatus(
+        'Modo Offline ativo: Mordomo Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) + Qwen 2.5 0.5B RT + Search Local ligados.'
+      );
+      pushMcpEyeEvent(
+        'agent-feedback',
+        'Hermes.Qwen05B.Offline',
+        'Agente Local Hermes + Burrinhos + Qwen 0.5B ativado automaticamente pelo Modo Offline.',
+        { role: data.profile.role, offlineMode: true }
+      );
+    } else {
+      pushMcpEyeEvent(
+        'agent-feedback',
+        `Auth.${payload.provider}`,
+        `Sessão SQLite ativa: ${data.profile.displayName} (${data.profile.role})`,
+        { role: data.profile.role, offlineMode: data.profile.offlineMode }
+      );
+    }
   };
 
   const handleUpdateSqliteProfile = async (patch: Partial<AuthUserProfile>) => {
@@ -1966,18 +2211,40 @@ export default function App() {
     setSqliteProfile(backendProfile);
   }, [backendProfile]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleBrowserOffline = () => {
+      setSelectedAgentId('local-llm');
+      setSqliteProfile((prev) => ({ ...prev, offlineMode: true }));
+      setLastVoiceStatus(
+        'Sem rede: Agente Local Hermes + Burrinhos + Qwen 2.5 0.5B + Search Local ativado.'
+      );
+    };
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      handleBrowserOffline();
+    }
+    window.addEventListener('offline', handleBrowserOffline);
+    return () => window.removeEventListener('offline', handleBrowserOffline);
+  }, []);
+
   const handleSendMultiAgentPrompt = async (
     prompt: string,
     externalEndpoint: string,
     modelId?: string
   ): Promise<string> => {
-    pushMcpEyeEvent('mcp-input', `Agent.${selectedAgentId}`, prompt, { modelId });
+    const activeAgent = sqliteProfile.offlineMode ? 'local-llm' : selectedAgentId;
+    pushMcpEyeEvent('mcp-input', `Agent.${activeAgent}`, prompt, {
+      modelId,
+      offlineMode: sqliteProfile.offlineMode,
+    });
     try {
       const resp = await fetch('/api/agent/multi-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          agentId: selectedAgentId,
+          agentId: activeAgent,
+          offlineMode: sqliteProfile.offlineMode,
+          includeWeb: !sqliteProfile.offlineMode || /https?:\/\/|grabcad/i.test(prompt),
           userMessage: prompt,
           roleLabel: `${sqliteProfile.role} (${sqliteProfile.handleAt})`,
           eyeEvents: mcpEyeEvents.slice(0, 8),
@@ -1994,13 +2261,13 @@ export default function App() {
         error?: string;
       };
       const text = data.reply || data.error || 'Resposta registrada pelo agente.';
-      pushMcpEyeEvent('agent-feedback', `Agent.${selectedAgentId}`, text, {
+      pushMcpEyeEvent('agent-feedback', `Agent.${activeAgent}`, text, {
         vucHash: data.vucHash,
         formalVucId: data.formalVuc?.vuc_id,
       });
       return text;
     } catch {
-      return `[${selectedAgentId}] Bridge offline: Olho MCP observando ${camVisualState.processLabel} · VUC ${camVisualState.vucProof.vucHash.slice(0, 14)}.`;
+      return `[${activeAgent}] Bridge offline: Hermes + Burrinhos observando ${camVisualState.processLabel} · VUC ${camVisualState.vucProof.vucHash.slice(0, 14)}.`;
     }
   };
 
@@ -2095,32 +2362,126 @@ export default function App() {
     }
   };
 
-  const handleDispatchRemoteMachine = async (machineId: string) => {
+  const handleFlushSessionLog = async () => {
     try {
-      const resp = await fetch(`/api/sqlite/remote-machines/${machineId}/dispatch`, {
+      const resp = await fetch('/api/sqlite/session-logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectName: partProfile.partName,
-          postCode: toolpath.postCode,
-        }),
+        body: JSON.stringify(activeSessionLog),
       });
       if (resp.ok) {
-        const data = (await resp.json()) as { machine?: RemoteMachineTarget };
-        if (data.machine) {
-          setRemoteMachines((prev) =>
-            prev.map((m) => (m.id === data.machine!.id ? data.machine! : m))
-          );
+        const data = (await resp.json()) as { sessionLog?: ProductionSessionLogRecord };
+        if (data.sessionLog) {
+          setSavedSessionLogs((prev) => [
+            data.sessionLog!,
+            ...prev.filter((l) => l.id !== data.sessionLog!.id),
+          ]);
           pushMcpEyeEvent(
-            'cam-output',
-            `Remote.${data.machine.protocol}`,
-            `Job enviado para ${data.machine.name} (${data.machine.lastJobVuc})`,
-            data.machine
+            'agent-feedback',
+            'Session.Log.VUC',
+            `Sessão gravada no SQLite (${data.sessionLog.pointerCount} ponteiro / ${data.sessionLog.actionCount} ações · VUC ${data.sessionLog.vucHash.slice(0, 14)})`,
+            data.sessionLog
           );
         }
       }
     } catch {
-      // Ignore offline network errors
+      // Offline tolerance
+    }
+  };
+
+  const handleProbeRemoteMachine = async (machineId: string) => {
+    recordSessionDiscreteAction('machine-probe', `Probe de rede em máquina ${machineId}`);
+    setRemoteDispatchStatus('Testando conectividade TCP/HTTP real na máquina...');
+    try {
+      const resp = await fetch(`/api/sqlite/remote-machines/${encodeURIComponent(machineId)}/probe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = (await resp.json()) as {
+        reachable?: boolean;
+        latencyMs?: number;
+        detail?: string;
+        machine?: RemoteMachineTarget;
+        error?: string;
+      };
+      if (data.machine) {
+        setRemoteMachines((prev) =>
+          [data.machine!, ...prev.filter((m) => m.id !== data.machine!.id)]
+        );
+      }
+      setRemoteDispatchStatus(
+        data.reachable
+          ? `ONLINE (${data.latencyMs ?? 0}ms): ${data.detail ?? 'Endpoint acessível'}`
+          : `OFFLINE: ${data.detail ?? data.error ?? 'Máquina inacessível'}`
+      );
+      pushMcpEyeEvent(
+        'cam-output',
+        'Remote.Probe',
+        data.detail ?? data.error ?? 'Probe de máquina concluído',
+        data
+      );
+    } catch (err) {
+      setRemoteDispatchStatus(
+        `Erro de rede no probe: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  };
+
+  const handleDispatchRemoteMachine = async (machineId: string) => {
+    recordSessionDiscreteAction('machine-dispatch', `Despacho G-Code para ${machineId}`);
+    setRemoteDispatchStatus('Despachando código G para controlador real...');
+    try {
+      const gcodeWithProvenance = injectGos7ProvenanceIntoTextArtifact(
+        toolpath.postCode,
+        activeProvenanceMeta,
+        effectiveCamSettings.postFormat === 'kuka-krl' ? 'src' : 'nc'
+      );
+      const resp = await fetch(`/api/sqlite/remote-machines/${encodeURIComponent(machineId)}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectName: partProfile.partName,
+          postCode: gcodeWithProvenance,
+        }),
+      });
+      const data = (await resp.json()) as {
+        ok?: boolean;
+        latencyMs?: number;
+        detail?: string;
+        error?: string;
+        machine?: RemoteMachineTarget;
+      };
+      if (data.machine) {
+        setRemoteMachines((prev) =>
+          prev.map((m) => (m.id === data.machine!.id ? data.machine! : m))
+        );
+      }
+      if (resp.ok && data.ok && data.machine) {
+        setRemoteDispatchStatus(
+          `EXECUTANDO (${data.latencyMs ?? 0}ms): ${data.detail ?? data.machine.name}`
+        );
+        pushMcpEyeEvent(
+          'cam-output',
+          `Remote.${data.machine.protocol}`,
+          `Job enviado para ${data.machine.name} (${data.machine.lastJobVuc})`,
+          data.machine
+        );
+      } else {
+        setRemoteDispatchStatus(
+          `FALHA REAL (${resp.status}): ${data.error ?? data.detail ?? 'Endpoint recusou ou inacessível'}`
+        );
+        pushMcpEyeEvent(
+          'cam-output',
+          'Remote.Dispatch.Error',
+          data.error ?? 'Falha ao despachar para máquina remota',
+          data
+        );
+      }
+    } catch (err) {
+      setRemoteDispatchStatus(
+        `Erro de rede ao despachar: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   };
 
@@ -2166,15 +2527,25 @@ export default function App() {
     room: string,
     content: string,
     asAgent = false,
-    askCamAgent = false
+    askCamAgent = false,
+    processUrl?: string,
+    askLocalAgent = false
   ) => {
+    recordSessionDiscreteAction('chat-send', `Chat #${room}`);
+    setChatError(null);
     const body = {
       room,
+      theme: room,
       senderId: sqliteProfile.id,
+      senderEmail: user?.email || sqliteProfile.email,
       senderName: asAgent ? sqliteProfile.agentConfig.agentName : sqliteProfile.displayName,
       senderRole: sqliteProfile.role,
       isAgent: asAgent,
       askCamAgent,
+      askLocalAgent,
+      offlineMode: sqliteProfile.offlineMode,
+      activeAgentId: selectedAgentId,
+      processUrl: processUrl || activeProcessUrl,
       cadSummary: buildLiveCamSummary(),
       content,
     };
@@ -2183,22 +2554,25 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (resp.ok) {
-      const data = (await resp.json()) as {
-        message?: EcosystemChatMessage;
-        agentReply?: EcosystemChatMessage | null;
-      };
-      setChatMessages((prev) => {
-        let next = prev;
-        if (data.message && !next.some((m) => m.id === data.message!.id)) {
-          next = [...next, data.message];
-        }
-        if (data.agentReply && !next.some((m) => m.id === data.agentReply!.id)) {
-          next = [...next, data.agentReply];
-        }
-        return next;
-      });
+    const data = (await resp.json()) as {
+      message?: EcosystemChatMessage;
+      agentReply?: EcosystemChatMessage | null;
+      error?: string;
+    };
+    if (!resp.ok) {
+      setChatError(data.error || 'Erro ao enviar mensagem no chat público.');
+      return;
     }
+    setChatMessages((prev) => {
+      let next = prev;
+      if (data.message && !next.some((m) => m.id === data.message!.id)) {
+        next = [...next, data.message];
+      }
+      if (data.agentReply && !next.some((m) => m.id === data.agentReply!.id)) {
+        next = [...next, data.agentReply];
+      }
+      return next;
+    });
   };
 
   const handlePingGpsLocation = async (modal: LogisticsModal, routeLabel: string) => {
@@ -2312,6 +2686,7 @@ export default function App() {
   const handleTabSwitch = (tab: WorkspaceTab) => {
     setActiveTab(tab);
     setMobileMoreOpen(false);
+    recordSessionDiscreteAction('tab-switch', `Navegou para aba ${tab}`, { tab });
     if (tab === 'cam') {
       setDisplay((d) => ({ ...d, showToolpath: true, showMachine: true }));
     }
@@ -2320,7 +2695,39 @@ export default function App() {
   const activeNavLabel = navItems.find((item) => item.id === activeTab)?.label ?? 'Início';
 
   return (
-    <div className="w-full h-full flex flex-col bg-[#0b0e14] text-slate-100 overflow-hidden">
+    <div
+      className="w-full h-full flex flex-col bg-[#0b0e14] text-slate-100 overflow-hidden"
+      onPointerMove={(e) => {
+        if (!sessionRecordingEnabled) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+        const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+        const now = Date.now();
+        if (
+          shouldRecordPointerSample(lastPointerSampleRef.current, {
+            timestampMs: now,
+            xPct,
+            yPct,
+          })
+        ) {
+          lastPointerSampleRef.current = { timestampMs: now, xPct, yPct };
+          const seq = sessionSeqRef.current++;
+          const evt = createSessionEvent({
+            seq,
+            kind: 'pointer-move',
+            timestampMs: now,
+            xPct,
+            yPct,
+            activeTab,
+            processMachine: effectiveCamSettings.machineType,
+            selectedComponentId: display.selectedComponentId,
+            detail: `Ponteiro (${xPct.toFixed(0)}%, ${yPct.toFixed(0)}%) em ${activeTab}`,
+          });
+          setSessionEvents((prev) => [...prev.slice(-199), evt]);
+        }
+      }}
+    >
       {/* Top Navigation Bar (Mobile-First 3-zone header) */}
       <header className="h-12 px-3 sm:px-5 border-b border-white/10 bg-[#0f141d] flex items-center justify-between gap-2 sm:gap-6 shrink-0">
         <div className="flex items-center gap-2 min-w-0 shrink-0">
@@ -2413,6 +2820,7 @@ export default function App() {
       <AgentVoiceCommandBar
         selectedAgentId={selectedAgentId}
         onSelectAgent={setSelectedAgentId}
+        offlineMode={sqliteProfile.offlineMode}
         systemResources={systemResources}
         localLlmRec={localLlmRec}
         localQwenStatus={localQwenStatus}
@@ -2546,6 +2954,11 @@ export default function App() {
                 onOpenHelp={() => setActiveTab('onboarding')}
                 onRunQuickFea={() => handleRunFea(undefined, true)}
                 onResetPart={handleResetPartAndProduction}
+                onSelectComponentCamProcess={(mt, comp) => {
+                  setDisplay((d) => ({ ...d, selectedComponentId: comp.id, showMachine: true, showToolpath: true }));
+                  handleRestartCamProcess(mt);
+                  handleTabSwitch('cam');
+                }}
               />
 
               {/* Left Screen-Edge Touch Handle (appears when menu is tucked away) */}
@@ -2815,6 +3228,9 @@ export default function App() {
                   camVisualState={camVisualState}
                   remoteMachines={remoteMachines}
                   onDispatchRemoteMachine={handleDispatchRemoteMachine}
+                  onProbeRemoteMachine={handleProbeRemoteMachine}
+                  remoteDispatchStatus={remoteDispatchStatus}
+                  provenanceMeta={activeProvenanceMeta}
                   camServiceJobs={camServiceJobs}
                   onLaunchProgram={handleLaunchCamProgram}
                   onSubmitCamService={handleSubmitCamService}
@@ -2857,6 +3273,10 @@ export default function App() {
                   onOpenHelp={() => setActiveTab('onboarding')}
                   onRunQuickFea={() => handleRunFea(undefined, true)}
                   onResetPart={handleResetPartAndProduction}
+                  onSelectComponentCamProcess={(mt, comp) => {
+                    setDisplay((d) => ({ ...d, selectedComponentId: comp.id, showMachine: true, showToolpath: true }));
+                    handleRestartCamProcess(mt);
+                  }}
                 />
               </div>
             </div>
@@ -2886,6 +3306,10 @@ export default function App() {
             onOpenAuthModal={() => setOfflineAuthOpen(true)}
             chatMessages={chatMessages}
             onSendChat={handleSendEcosystemChat}
+            chatError={chatError}
+            activeProcessUrl={activeProcessUrl}
+            onOpenProcessUrl={applyProcessShareUrl}
+            wsRef={wsRef}
             logisticsNodes={logisticsNodes}
             onPingGpsLocation={handlePingGpsLocation}
             computeNodes={computeNodes}
@@ -2893,10 +3317,26 @@ export default function App() {
             onAddErpRecord={handleAddErpRecord}
             remoteMachines={remoteMachines}
             onDispatchRemoteMachine={handleDispatchRemoteMachine}
+            onProbeRemoteMachine={handleProbeRemoteMachine}
+            remoteDispatchStatus={remoteDispatchStatus}
             onSaveRemoteMachine={handleSaveRemoteMachine}
             onPingRemoteMqtt={handlePingRemoteMqtt}
             mqttTelemetryFeed={mqttTelemetryFeed}
             onRunAutonomousProjectWorkflow={handleRunAutonomousProjectWorkflow}
+            activeSessionLog={activeSessionLog}
+            savedSessionLogs={savedSessionLogs}
+            sessionRecordingEnabled={sessionRecordingEnabled}
+            onToggleSessionRecording={() => setSessionRecordingEnabled((v) => !v)}
+            onFlushSessionLog={handleFlushSessionLog}
+            delegatedByPo={delegatedByPo}
+            onToggleDelegatedByPo={() => setDelegatedByPo((v) => !v)}
+            selectedAgentId={selectedAgentId}
+            offlineMode={sqliteProfile.offlineMode}
+            onRecordSessionAction={(detail) =>
+              recordSessionDiscreteAction('rtc-media', detail)
+            }
+            initialSubTab={ecosystemInitialSubTab}
+            initialChatRoom={ecosystemInitialRoom}
           />
         )}
 
@@ -2909,6 +3349,13 @@ export default function App() {
             camSettings={effectiveCamSettings}
             toolpath={toolpath}
             featureOps={featureOps}
+            feaResult={feaResult}
+            feaSettings={feaSettings}
+            partProfile={partProfile}
+            vucLedger={vucLedger}
+            mqttTelemetryFeed={mqttTelemetryFeed}
+            camServiceJobs={camServiceJobs}
+            mcpEyeEvents={mcpEyeEvents}
             onSwitchMachine={(machineType: MachineType) =>
               setCamSettings((prev) => ({
                 ...prev,
@@ -2988,6 +3435,12 @@ export default function App() {
             designParams={designParams}
             camSettings={effectiveCamSettings}
             sessionToken={sessionToken}
+            onApplyProjectSnapshot={(snap) => {
+              if (snap.designParams) setDesignParams(snap.designParams);
+              if (snap.camSettings) setCamSettings(snap.camSettings);
+              setActiveTab('viewport');
+              setLastVoiceStatus(`Projeto "${snap.label ?? 'Drive'}" restaurado do Google Drive.`);
+            }}
           />
         )}
       </main>

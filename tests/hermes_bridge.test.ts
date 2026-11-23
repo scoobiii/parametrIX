@@ -7,11 +7,13 @@ import {
   buildClawFamilyBundle,
   buildHermesAgentBundle,
   executeHermesCompactSearch,
+  inspectGrabCadOrCadUrl,
+  isDisallowedExternalHost,
 } from '../src/server/hermesBridge';
 import { resolveLocalQwenPaths } from '../src/server/localQwenRunner';
 import { verifyFormalVucCertificate } from '../src/server/vucFormalProof';
 
-describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Coverage)', () => {
+describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (100% Coverage)', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -22,7 +24,6 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     expect(relay.getTotalConnectedCount()).toBe(0);
     expect(relay.getReadyBridgeCount()).toBe(0);
 
-    // No ready bridge yet -> rejects with actionable message
     await expect(relay.dispatchBrowserTool('cad_rhino_command', { command: 'Box 10,10,10' })).rejects.toThrow(
       'Nenhuma aba ativa'
     );
@@ -40,15 +41,12 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     expect(relay.getTotalConnectedCount()).toBe(2);
     expect(relay.getReadyBridgeCount()).toBe(0);
 
-    // Missing client id is safe no-op
     relay.markBridgeReady('tab-missing', true);
     relay.markBridgeReady('tab-1', true);
     expect(relay.getReadyBridgeCount()).toBe(1);
 
-    // Unknown requestId returns false
     expect(relay.handleRpcResponse({ requestId: 'unknown-req', ok: false })).toBe(false);
 
-    // Successful round-trip
     const promise = relay.dispatchBrowserTool('cad_rhino_command', { command: 'Gear 24' }, 2000);
     expect(sentFrames).toHaveLength(1);
     const frame = JSON.parse(sentFrames[0]) as {
@@ -73,7 +71,6 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     vi.useFakeTimers();
     const relay = new WebSocketBrowserMcpRelay();
 
-    // Sync throw Error object
     relay.registerClient(
       'tab-err',
       {
@@ -87,7 +84,6 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
       'socket write failed'
     );
 
-    // Sync throw non-Error primitive
     relay.registerClient(
       'tab-err',
       {
@@ -101,28 +97,22 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
       'raw-string-error'
     );
 
-    // Timeout expiration
     relay.registerClient('tab-timeout', { send: () => {} }, true);
-    // Replace tab-err so only tab-timeout is ready
     relay.unregisterClient('tab-err');
     const timeoutPromise = relay.dispatchBrowserTool('cad_magic_pen_feature', {}, 500);
     const timeoutExpect = expect(timeoutPromise).rejects.toThrow('Timeout (500ms)');
     await vi.advanceTimersByTimeAsync(501);
     await timeoutExpect;
 
-    // Two ready tabs -> disconnecting target tab rejects its pending call immediately even while another tab remains ready
     relay.registerClient('tab-timeout', { send: () => {} }, true);
     relay.registerClient('tab-2', { send: () => {} }, true);
     const pendingTwo = relay.dispatchBrowserTool('cad_reset_part_baseline', {}, 5000);
     expect(relay.getPendingCount()).toBe(1);
 
-    // Register a new RPC on tab-2, wait: dispatch picks last ready client ('tab-2')
-    // Disconnecting tab-timeout leaves tab-2's pending call intact because tab-timeout wasn't the target
     relay.unregisterClient('tab-timeout');
     expect(relay.getReadyBridgeCount()).toBe(1);
     expect(relay.getPendingCount()).toBe(1);
 
-    // Disconnecting tab-2 (the actual target of pendingTwo) rejects immediately even if another tab is connected!
     relay.registerClient('tab-3', { send: () => {} }, true);
     const pendingExpect = expect(pendingTwo).rejects.toThrow('Aba do navegador desconectada');
     relay.unregisterClient('tab-2');
@@ -130,15 +120,189 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     expect(relay.getPendingCount()).toBe(0);
     await pendingExpect;
 
-    // Disconnecting last tab rejects any remaining pending calls
     relay.unregisterClient('tab-3');
     expect(relay.getReadyBridgeCount()).toBe(0);
-    // Disconnecting when no pending calls remain is safe
     relay.unregisterClient('non-existent');
   });
 
-  it('executes compact RAG + optional DuckDuckGo web search with VUC Ed25519 verification', async () => {
-    // 1. Empty query + disabled web + live state summary & dynamic docs
+  it('blocks SSRF internal hosts and inspects GrabCAD / public CAD URLs accurately', async () => {
+    expect(isDisallowedExternalHost('localhost')).toBe(true);
+    expect(isDisallowedExternalHost('0.0.0.0')).toBe(true);
+    expect(isDisallowedExternalHost('::1')).toBe(true);
+    expect(isDisallowedExternalHost('printer.local')).toBe(true);
+    expect(isDisallowedExternalHost('meta.internal')).toBe(true);
+    expect(isDisallowedExternalHost('10.0.0.5')).toBe(true);
+    expect(isDisallowedExternalHost('127.0.0.1')).toBe(true);
+    expect(isDisallowedExternalHost('169.254.169.254')).toBe(true);
+    expect(isDisallowedExternalHost('172.16.0.1')).toBe(true);
+    expect(isDisallowedExternalHost('192.168.1.50')).toBe(true);
+    expect(isDisallowedExternalHost('172.32.0.1')).toBe(false);
+    expect(isDisallowedExternalHost('grabcad.com')).toBe(false);
+
+    const invalid = await inspectGrabCadOrCadUrl({ url: 'not a url' });
+    expect(invalid.status).toBe('invalid-url');
+    expect(verifyFormalVucCertificate(invalid.vucCertificate).valid).toBe(true);
+
+    const ftpBlocked = await inspectGrabCadOrCadUrl({ url: 'ftp://example.org/gear.stl' });
+    expect(ftpBlocked.status).toBe('invalid-url');
+
+    const localBlocked = await inspectGrabCadOrCadUrl({ url: 'http://127.0.0.1:3000/secret.stl' });
+    expect(localBlocked.status).toBe('invalid-url');
+
+    // HTTP 403 on GrabCAD (.step suffix in slug) -> blocked-or-auth-required
+    const http403 = await inspectGrabCadOrCadUrl({
+      url: 'https://grabcad.com/library/spur-gear.step',
+      fetcher: async () => ({
+        ok: false,
+        status: 403,
+        json: async () => ({}),
+        text: async () => 'Forbidden',
+      }),
+    });
+    expect(http403.status).toBe('blocked-or-auth-required');
+    expect(http403.detectedFormats).toEqual(['STEP']);
+
+    // HTTP 401 & 429 & generic 500 without resp.status or resp.text
+    const http401 = await inspectGrabCadOrCadUrl({
+      url: 'https://example.org/model-one',
+      fetcher: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({}),
+      }),
+    });
+    expect(http401.status).toBe('blocked-or-auth-required');
+    expect(http401.httpStatus).toBe(401);
+
+    const http500 = await inspectGrabCadOrCadUrl({
+      url: 'https://example.org/broken',
+      fetcher: async () => ({
+        ok: false,
+        json: async () => ({}),
+      }),
+    });
+    expect(http500.status).toBe('blocked-or-auth-required');
+    expect(http500.httpStatus).toBe(500);
+
+    // GrabCAD Cloudflare interstitial
+    const cfBlock = await inspectGrabCadOrCadUrl({
+      url: 'https://grabcad.com/library/robot-arm-1',
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'text/html' },
+        json: async () => ({}),
+        text: async () => '<html><body>Just a moment... Sign in to GrabCAD</body></html>',
+      }),
+    });
+    expect(cfBlock.status).toBe('blocked-or-auth-required');
+
+    // Direct CAD file (.stl)
+    const directCad = await inspectGrabCadOrCadUrl({
+      url: 'https://cdn.example.org/models/flange.stl',
+      fetcher: async () => ({
+        ok: true,
+        headers: { get: () => 'application/sla' },
+        json: async () => ({}),
+        text: async () => 'solid flange\nendsolid flange',
+      }),
+    });
+    expect(directCad.status).toBe('direct-cad');
+    expect(directCad.httpStatus).toBe(200);
+    expect(directCad.detectedFormats).toEqual(['STL']);
+
+    // GrabCAD HTML with OpenGraph metadata + format tags + no direct download link
+    const grabCadHtml = await inspectGrabCadOrCadUrl({
+      url: 'https://grabcad.com/library/planetary-gearbox-1',
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'text/html; charset=utf-8' },
+        json: async () => ({}),
+        text: async () =>
+          '<html><head>' +
+          '<meta property="og:title" content="Planetary Gearbox &amp; Carrier"/>' +
+          '<meta property="og:description" content="STEP &amp; STL assembly."/>' +
+          '<meta property="og:image" content="https://cdn.example.org/gear.png"/>' +
+          '</head><body>Download STEP or STL</body></html>',
+      }),
+    });
+    expect(grabCadHtml.status).toBe('ok');
+    expect(grabCadHtml.isGrabCad).toBe(true);
+    expect(grabCadHtml.title).toBe('Planetary Gearbox & Carrier');
+    expect(grabCadHtml.detectedFormats).toEqual(['STEP', 'STL']);
+    expect(grabCadHtml.previewImageUrl).toBe('https://cdn.example.org/gear.png');
+
+    // Non-GrabCAD HTML with <title>, meta description fallback, and direct href link
+    const publicHtmlWithHref = await inspectGrabCadOrCadUrl({
+      url: 'https://cadrepo.example.org/part-99/',
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+        text: async () =>
+          '<html><head><title>Bracket &#39;A&#39;</title><meta name="description" content="Alloy bracket"/></head>' +
+          '<body><a href="https://cadrepo.example.org/files/bracket.stl">STL</a></body></html>',
+      }),
+    });
+    expect(publicHtmlWithHref.status).toBe('ok');
+    expect(publicHtmlWithHref.directCadUrl).toBe('https://cadrepo.example.org/files/bracket.stl');
+
+    // Minimal public URL without og tags or meta description, using fallback global fetch
+    const globalSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/html' }),
+      text: async () => '<html><body>Simple page</body></html>',
+      json: async () => ({}),
+    } as Response);
+    const minimalHtml = await inspectGrabCadOrCadUrl({
+      url: 'https://cadrepo.example.org/',
+    });
+    expect(globalSpy).toHaveBeenCalledTimes(1);
+    expect(minimalHtml.status).toBe('ok');
+    expect(minimalHtml.description).toContain('Página CAD');
+
+    // Network errors (Error instance & primitive string, with & without directExtMatch)
+    const netErr = await inspectGrabCadOrCadUrl({
+      url: 'https://example.org/part.step',
+      fetcher: async () => {
+        throw new Error('ECONNRESET');
+      },
+    });
+    expect(netErr.status).toBe('network-error');
+    expect(netErr.detectedFormats).toEqual(['STEP']);
+
+    const netStrErr = await inspectGrabCadOrCadUrl({
+      url: 'https://example.org/page',
+      fetcher: async () => {
+        throw 'timeout-raw';
+      },
+    });
+    expect(netStrErr.status).toBe('network-error');
+    expect(netStrErr.detectedFormats).toEqual([]);
+
+    // Timeout aborts cleanly
+    vi.useFakeTimers();
+    let aborted = false;
+    const timeoutInspect = inspectGrabCadOrCadUrl({
+      url: 'https://example.org/slow',
+      fetcher: (_u, init) =>
+        new Promise((_res, rej) => {
+          init?.signal?.addEventListener('abort', () => {
+            aborted = true;
+            rej(new Error('timeout-abort'));
+          });
+        }),
+    });
+    await vi.advanceTimersByTimeAsync(5001);
+    const timeoutRes = await timeoutInspect;
+    expect(aborted).toBe(true);
+    expect(timeoutRes.status).toBe('network-error');
+    vi.useRealTimers();
+  });
+
+  it('executes compact RAG + GrabCAD / DuckDuckGo search with VUC Ed25519 verification', async () => {
     const emptyRes = await executeHermesCompactSearch({
       query: '   ',
       dynamicDocs: [
@@ -174,39 +338,66 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     expect(emptyRes.approxTokens).toBeLessThan(600);
     expect(verifyFormalVucCertificate(emptyRes.vucCertificate).valid).toBe(true);
 
-    // 2. Empty query + includeWeb: true -> still skipped (web disabled)
     const emptyWeb = await executeHermesCompactSearch({
       query: '',
       includeWeb: true,
     });
     expect(emptyWeb.webStatus).toBe('disabled');
 
-    // 3. Web search enabled with DuckDuckGo AbstractText & RelatedTopics (including blanks & URLs)
-    const webOk = await executeHermesCompactSearch({
-      query: 'engrenagem M2 SAE 4340 CNC',
-      maxResults: 1,
+    // URL inspection inside executeHermesCompactSearch (GrabCAD ok & network-error -> unavailable)
+    const grabCadUrlHit = await executeHermesCompactSearch({
+      query: 'importe https://grabcad.com/library/cycloidal-drive-1',
       includeWeb: true,
       fetcher: async () => ({
         ok: true,
-        json: async () => ({
-          Heading: 'Spur Gear DIN 867',
-          AbstractText: 'Involute spur gear module 2.0mm pitch diameter 48mm.',
-          AbstractURL: 'https://example.org/gear',
-          RelatedTopics: [
-            { Text: 'Topic 1 - Pitch circle', FirstURL: 'https://example.org/t1' },
-            { Text: '   ' },
-            { Text: 'Topic 2 - Tooth depth' },
-            { Text: 'Topic 3 - Ignored after 3 hits', FirstURL: 'https://example.org/t3' },
-          ],
-        }),
+        status: 200,
+        headers: { get: () => 'text/html' },
+        json: async () => ({}),
+        text: async () => '<html><title>Cycloidal Drive</title></html>',
       }),
     });
-    expect(webOk.webStatus).toBe('ok');
-    expect(webOk.hits.some((h) => h.id === 'ddg-abstract' && h.title === 'Spur Gear DIN 867')).toBe(true);
-    expect(webOk.hits.some((h) => h.id === 'ddg-topic-1' && h.url === 'https://example.org/t1')).toBe(true);
-    expect(verifyFormalVucCertificate(webOk.vucCertificate).valid).toBe(true);
+    expect(grabCadUrlHit.webStatus).toBe('ok');
+    expect(grabCadUrlHit.grabCadInspection?.isGrabCad).toBe(true);
+    expect(grabCadUrlHit.hits[0].source).toBe('grabcad-url');
 
-    // 3b. Topics without AbstractText and without FirstURL
+    const nonGrabCadUrlFail = await executeHermesCompactSearch({
+      query: 'abra https://cadrepo.example.org/housing.stl',
+      includeWeb: true,
+      fetcher: async () => {
+        throw new Error('dns failed');
+      },
+    });
+    expect(nonGrabCadUrlFail.webStatus).toBe('unavailable');
+    expect(nonGrabCadUrlFail.grabCadInspection?.status).toBe('network-error');
+
+    // GrabCAD keyword rewrites DuckDuckGo query to site:grabcad.com/library
+    let capturedUrl = '';
+    const grabCadKeywordRes = await executeHermesCompactSearch({
+      query: 'grabcad planetary gearbox',
+      maxResults: 1,
+      includeWeb: true,
+      fetcher: async (u) => {
+        capturedUrl = u;
+        return {
+          ok: true,
+          json: async () => ({
+            Heading: 'Planetary Gearbox',
+            AbstractText: 'Compact planetary gearset.',
+            AbstractURL: 'https://grabcad.com/library/planetary',
+            RelatedTopics: [
+              { Text: 'Topic 1 - Pitch circle', FirstURL: 'https://example.org/t1' },
+              { Text: '   ' },
+              { Text: 'Topic 2 - Tooth depth' },
+              { Text: 'Topic 3 - Ignored after 3 hits', FirstURL: 'https://example.org/t3' },
+            ],
+          }),
+        };
+      },
+    });
+    expect(capturedUrl).toContain('site%3Agrabcad.com%2Flibrary');
+    expect(grabCadKeywordRes.webStatus).toBe('ok');
+    expect(verifyFormalVucCertificate(grabCadKeywordRes.vucCertificate).valid).toBe(true);
+
     const webTopicsOnly = await executeHermesCompactSearch({
       query: 'engrenagem DIN 867',
       maxResults: 2,
@@ -224,7 +415,6 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     expect(webTopicsOnly.hits.some((h) => h.id === 'ddg-topic-1' && h.url === undefined)).toBe(true);
     expect(webTopicsOnly.hits.some((h) => h.id === 'ddg-topic-2' && h.url === 'https://example.org/tb')).toBe(true);
 
-    // 4. Web search fallback when Heading/AbstractText/AbstractURL/RelatedTopics omitted & using global fetch
     const globalFetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -239,7 +429,6 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     expect(webDefaultFetcher.webStatus).toBe('ok');
     expect(webDefaultFetcher.hits.some((h) => h.title === 'vuc ed25519' && h.url === undefined)).toBe(true);
 
-    // 5. Web search HTTP error (!resp.ok) -> unavailable gracefully
     const webHttpErr = await executeHermesCompactSearch({
       query: 'hermes',
       includeWeb: true,
@@ -250,7 +439,6 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     });
     expect(webHttpErr.webStatus).toBe('unavailable');
 
-    // 6. Web search network exception -> unavailable gracefully
     const webThrow = await executeHermesCompactSearch({
       query: 'hermes',
       includeWeb: true,
@@ -260,7 +448,6 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     });
     expect(webThrow.webStatus).toBe('unavailable');
 
-    // 7. Web search timeout aborts AbortController cleanly
     vi.useFakeTimers();
     let signalAborted = false;
     const abortPromise = executeHermesCompactSearch({
@@ -346,16 +533,28 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + VUC (100% Covera
     expect(verifyFormalVucCertificate(clawCustom.vucCertificate).valid).toBe(true);
   });
 
-  it('detects coder GGUF variant in resolveLocalQwenPaths when present on disk', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parametrix-qwen-coder-'));
+  it('detects coder and instruct GGUF variants in resolveLocalQwenPaths', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parametrix-qwen-dual-'));
     try {
       const coderRel = 'models/qwen/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf';
+      const instructRel = 'models/qwen/qwen2.5-0.5b-instruct-q4_k_m.gguf';
       const coderFull = path.join(tmpDir, coderRel);
+      const instructFull = path.join(tmpDir, instructRel);
       fs.mkdirSync(path.dirname(coderFull), { recursive: true });
       fs.writeFileSync(coderFull, 'GGUF');
       fs.truncateSync(coderFull, 100_000_001);
-      const resolved = resolveLocalQwenPaths(tmpDir);
-      expect(resolved.modelPath).toBe(coderFull);
+
+      expect(resolveLocalQwenPaths(tmpDir, 'qwen2.5-coder-0.5b-instruct-q4').modelPath).toBe(
+        coderFull
+      );
+      // Falls back to coder when instruct is preferred but only coder exists
+      expect(resolveLocalQwenPaths(tmpDir, 'qwen2.5-0.5b-instruct-q4').modelPath).toBe(coderFull);
+
+      fs.writeFileSync(instructFull, 'GGUF');
+      fs.truncateSync(instructFull, 100_000_001);
+      expect(resolveLocalQwenPaths(tmpDir, 'qwen2.5-0.5b-instruct-q4').modelPath).toBe(
+        instructFull
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

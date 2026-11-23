@@ -5,15 +5,18 @@ import {
   Copy,
   Cpu,
   Download,
+  ExternalLink,
   Eye,
   FileCode2,
   FolderOpen,
+  Globe,
   HardDrive,
   Layers,
   Loader2,
   Play,
   RefreshCw,
   Save,
+  Search,
   Square,
   Trash2,
 } from 'lucide-react';
@@ -36,7 +39,9 @@ import {
 import { convertImageToCadModel, isRasterImageFilename } from '../kernel/imageToCad';
 import {
   deleteDriveFile,
+  downloadDriveFileContent,
   ensureUserDriveProjectFolder,
+  listDriveCadFiles,
   listDriveProjectFiles,
   saveFileToDriveFolder,
 } from '../services/googleDriveProjects';
@@ -69,6 +74,25 @@ interface CadFilesPanelProps {
   designParams?: ParametricDesignParams;
   camSettings?: CamSettings;
   sessionToken?: string | null;
+  onApplyProjectSnapshot?: (snapshot: {
+    designParams?: ParametricDesignParams;
+    camSettings?: CamSettings;
+    label?: string;
+  }) => void;
+}
+
+interface UrlImportInspection {
+  url: string;
+  isGrabCad: boolean;
+  status: string;
+  httpStatus?: number;
+  title: string;
+  description: string;
+  detectedFormats: string[];
+  previewImageUrl?: string;
+  directCadUrl?: string;
+  diagnosticNote: string;
+  vucCertificate?: { vuc_id?: string };
 }
 
 type ConfirmActionState =
@@ -97,6 +121,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
   designParams,
   camSettings,
   sessionToken = null,
+  onApplyProjectSnapshot,
 }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -111,8 +136,14 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
 
   const [driveFolder, setDriveFolder] = useState<GoogleDriveFolderInfo | null>(null);
   const [driveFiles, setDriveFiles] = useState<GoogleDriveFolderFile[]>([]);
+  const [driveCadMatches, setDriveCadMatches] = useState<GoogleDriveFolderFile[]>([]);
+  const [driveSearchTerm, setDriveSearchTerm] = useState('');
   const [driveBusy, setDriveBusy] = useState(false);
   const [confirmModal, setConfirmModal] = useState<ConfirmActionState>(null);
+
+  const [cadUrlInput, setCadUrlInput] = useState('');
+  const [urlBusy, setUrlBusy] = useState(false);
+  const [urlInspection, setUrlInspection] = useState<UrlImportInspection | null>(null);
 
   const [ramdiskStatus, setRamdiskStatus] = useState<RamdiskMcpStatus | null>(null);
   const [ramdiskBusy, setRamdiskBusy] = useState(false);
@@ -169,8 +200,12 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
     try {
       const folder = await ensureUserDriveProjectFolder(googleAccessToken, localSlug || userSlug);
       setDriveFolder(folder);
-      const files = await listDriveProjectFiles(googleAccessToken, folder.folderId);
+      const [files, cadMatches] = await Promise.all([
+        listDriveProjectFiles(googleAccessToken, folder.folderId),
+        listDriveCadFiles(googleAccessToken),
+      ]);
       setDriveFiles(files);
+      setDriveCadMatches(cadMatches);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Falha ao acessar Google Drive.');
     } finally {
@@ -184,6 +219,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
     } else {
       setDriveFolder(null);
       setDriveFiles([]);
+      setDriveCadMatches([]);
     }
   }, [googleAccessToken, refreshDriveFolder]);
 
@@ -297,6 +333,112 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
       } finally {
         setFolderBusy(false);
       }
+    }
+  };
+
+  const handleSearchDriveCadFiles = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!googleAccessToken) return;
+    setDriveBusy(true);
+    setErrorMsg(null);
+    try {
+      const files = await listDriveCadFiles(googleAccessToken, driveSearchTerm);
+      setDriveCadMatches(files);
+      setStatusMsg(`${files.length} arquivo(s) encontrados no seu Google Drive.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleOpenDriveFile = async (df: GoogleDriveFolderFile) => {
+    if (!googleAccessToken) return;
+    setDriveBusy(true);
+    setErrorMsg(null);
+    try {
+      const { arrayBuffer, mimeType } = await downloadDriveFileContent(
+        googleAccessToken,
+        df.id,
+        df.name
+      );
+      if (df.name.toLowerCase().endsWith('.parametrix.json')) {
+        const text = new TextDecoder().decode(arrayBuffer);
+        const parsed = JSON.parse(text) as {
+          surfaceName?: string;
+          designParams?: ParametricDesignParams;
+          camSettings?: CamSettings;
+        };
+        if (onApplyProjectSnapshot) {
+          onApplyProjectSnapshot({
+            designParams: parsed.designParams,
+            camSettings: parsed.camSettings,
+            label: parsed.surfaceName || df.name,
+          });
+        }
+        setStatusMsg(`Snapshot "${df.name}" restaurado direto do Google Drive.`);
+      } else {
+        const file = new File([arrayBuffer], df.name, { type: mimeType });
+        await handleFileImport(file);
+        setStatusMsg(`Arquivo CAD "${df.name}" importado do Google Drive para a Viewport 3D.`);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleImportFromUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetUrl = cadUrlInput.trim();
+    if (!targetUrl) return;
+    setUrlBusy(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const resp = await fetch('/api/cad/import-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl }),
+      });
+      const data = (await resp.json()) as {
+        inspection?: UrlImportInspection;
+        downloadedFile?: {
+          filename: string;
+          mimeType: string;
+          byteSize: number;
+          base64Content: string;
+        };
+        vucProof?: { vucHash?: string };
+        error?: string;
+      };
+      if (data.inspection) {
+        setUrlInspection(data.inspection);
+      }
+      if (!resp.ok) {
+        throw new Error(data.error || 'Falha ao consultar URL CAD / GrabCAD.');
+      }
+      if (data.downloadedFile?.base64Content) {
+        const binary = atob(data.downloadedFile.base64Content);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const importedFile = new File([bytes], data.downloadedFile.filename, {
+          type: data.downloadedFile.mimeType || 'application/octet-stream',
+        });
+        await handleFileImport(importedFile);
+        setStatusMsg(
+          `Arquivo "${data.downloadedFile.filename}" (${data.downloadedFile.byteSize} B) importado via URL · VUC ${data.vucProof?.vucHash?.slice(0, 14) ?? 'OK'}.`
+        );
+      } else if (data.inspection) {
+        setStatusMsg(data.inspection.diagnosticNote);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUrlBusy(false);
     }
   };
 
@@ -542,6 +684,60 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
                 className="hidden"
               />
             </label>
+
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-slate-400">
+                Importar via URL Pública / GrabCAD Library (Hermes Search + VUC)
+              </div>
+              <form onSubmit={handleImportFromUrl} className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="url"
+                  value={cadUrlInput}
+                  onChange={(e) => setCadUrlInput(e.target.value)}
+                  placeholder="https://grabcad.com/library/... ou link direto .stl/.step/.dxf/.3dm"
+                  className="flex-1 px-3 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 font-mono-tabular outline-none focus:border-sky-400"
+                />
+                <button
+                  type="submit"
+                  disabled={urlBusy}
+                  className="px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  {urlBusy ? 'Consultando...' : 'Inspecionar / Importar URL'}
+                </button>
+              </form>
+              {urlInspection && (
+                <div className="p-3 bg-[#090d14] border border-sky-400/25 rounded-lg text-[11px] space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-sky-200 truncate">{urlInspection.title}</span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded bg-[#141a24] text-emerald-300 shrink-0">
+                      {urlInspection.status}
+                    </span>
+                  </div>
+                  <div className="text-slate-300">{urlInspection.diagnosticNote}</div>
+                  {urlInspection.detectedFormats.length > 0 && (
+                    <div className="font-mono-tabular text-[10px] text-slate-400">
+                      Formatos detectados: {urlInspection.detectedFormats.join(' · ')}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono-tabular text-slate-400">
+                    {urlInspection.vucCertificate?.vuc_id && (
+                      <span>VUC: {urlInspection.vucCertificate.vuc_id}</span>
+                    )}
+                    {/^https?:\/\//i.test(urlInspection.directCadUrl || urlInspection.url) && (
+                      <a
+                        href={urlInspection.directCadUrl || urlInspection.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sky-300 hover:underline inline-flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3 h-3" /> Abrir página fonte
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="space-y-2">
               <div className="text-xs font-medium text-slate-400">
@@ -808,42 +1004,98 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
 
               {!googleAccessToken ? (
                 <p className="text-[11px] text-slate-400">
-                  Conecte sua conta Google com permissão Drive para sincronizar sua pasta pessoal na nuvem.
-                </p>
-              ) : driveFiles.length === 0 ? (
-                <p className="text-[11px] text-slate-500">
-                  {driveBusy ? 'Carregando pasta no Google Drive...' : 'Pasta criada no Drive. Salve o projeto atual acima.'}
+                  Conecte sua conta Google com permissão Drive para abrir arquivos CAD do seu Drive e sincronizar sua pasta na nuvem.
                 </p>
               ) : (
-                <div className="space-y-1.5 max-h-44 overflow-y-auto">
-                  {driveFiles.map((df) => (
-                    <div
-                      key={df.id}
-                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-[#111620] border border-white/8 rounded text-[11px]"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-slate-100 truncate font-medium">{df.name}</div>
-                        <div className="text-[10px] text-slate-500 font-mono-tabular">
-                          {df.size ? `${df.size} B` : 'Drive'}
+                <div className="space-y-2.5">
+                  {driveFiles.length === 0 ? (
+                    <p className="text-[11px] text-slate-500">
+                      {driveBusy ? 'Carregando pasta no Google Drive...' : 'Pasta criada no Drive. Salve o projeto atual acima ou pesquise CADs abaixo.'}
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                      {driveFiles.map((df) => (
+                        <div
+                          key={df.id}
+                          className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-[#111620] border border-white/8 rounded text-[11px]"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-slate-100 truncate font-medium">{df.name}</div>
+                            <div className="text-[10px] text-slate-500 font-mono-tabular">
+                              {df.size ? `${df.size} B` : 'Drive'}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              disabled={driveBusy}
+                              onClick={() => void handleOpenDriveFile(df)}
+                              className="px-2 py-0.5 text-[10px] font-semibold bg-sky-500/20 border border-sky-400/40 text-sky-200 rounded hover:bg-sky-500/30 cursor-pointer"
+                              title="Abrir / importar arquivo do Google Drive"
+                            >
+                              Abrir
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setConfirmModal({
+                                  kind: 'delete-drive',
+                                  filename: df.name,
+                                  driveFileId: df.id,
+                                  message: `Excluir "${df.name}" da sua pasta no Google Drive?`,
+                                })
+                              }
+                              className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
+                              title="Excluir do Google Drive"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setConfirmModal({
-                            kind: 'delete-drive',
-                            filename: df.name,
-                            driveFileId: df.id,
-                            message: `Excluir "${df.name}" da sua pasta no Google Drive?`,
-                          })
-                        }
-                        className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
-                        title="Excluir do Google Drive"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      ))}
                     </div>
-                  ))}
+                  )}
+
+                  {/* Search & Import existing CAD files anywhere in logged-in Google Drive */}
+                  <div className="pt-2 border-t border-white/8 space-y-2">
+                    <form onSubmit={handleSearchDriveCadFiles} className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={driveSearchTerm}
+                        onChange={(e) => setDriveSearchTerm(e.target.value)}
+                        placeholder="Buscar .step, .stl, .ipt, .dxf no Meu Drive..."
+                        className="flex-1 px-2.5 py-1 text-[11px] bg-[#111620] border border-white/12 rounded text-slate-100 outline-none focus:border-sky-400"
+                      />
+                      <button
+                        type="submit"
+                        disabled={driveBusy}
+                        className="px-2.5 py-1 text-[11px] font-semibold bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 rounded hover:bg-emerald-500/30 flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        <Search className="w-3 h-3" />
+                        Buscar Drive
+                      </button>
+                    </form>
+                    {driveCadMatches.length > 0 && (
+                      <div className="space-y-1 max-h-32 overflow-y-auto">
+                        {driveCadMatches.map((cf) => (
+                          <div
+                            key={`match-${cf.id}`}
+                            className="flex items-center justify-between gap-2 px-2 py-1 bg-[#111620]/70 border border-white/6 rounded text-[11px]"
+                          >
+                            <span className="text-slate-200 truncate">{cf.name}</span>
+                            <button
+                              type="button"
+                              disabled={driveBusy}
+                              onClick={() => void handleOpenDriveFile(cf)}
+                              className="px-2 py-0.5 text-[10px] font-semibold bg-emerald-500 text-slate-950 rounded hover:bg-emerald-400 cursor-pointer shrink-0"
+                            >
+                              Importar 3D
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

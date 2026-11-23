@@ -33,9 +33,10 @@ function createFirestoreInstance(): Firestore {
 export const db = createFirestoreInstance();
 export const auth = getAuth(app);
 
-// End-user Sign-In Providers + Authorized Google Drive app-created file scope
+// End-user Sign-In Providers + Authorized Google Drive read & app-created file scopes
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
+googleProvider.addScope('https://www.googleapis.com/auth/drive.readonly');
 googleProvider.setCustomParameters({
   prompt: 'select_account',
 });

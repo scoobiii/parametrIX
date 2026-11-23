@@ -1,6 +1,10 @@
 import crypto from 'node:crypto';
 import type { CamAgentContextSummary } from '../kernel/camAgentSystemInstruction';
-import { buildFullProjectKnowledgeCorpus } from '../kernel/qwenProjectRagFinetune';
+import {
+  type QwenSpecialistProfile,
+  buildFullProjectKnowledgeCorpus,
+  routeQwenSpecialistFunction,
+} from '../kernel/qwenProjectRagFinetune';
 import type { FormalVucCertificate, RagSourceDocument } from '../types/cad';
 import { createFormalVucCertificate } from './vucFormalProof';
 
@@ -128,7 +132,7 @@ export class WebSocketBrowserMcpRelay {
 
 export interface HermesSearchHit {
   id: string;
-  source: 'local-rag' | 'web-duckduckgo';
+  source: 'local-rag' | 'web-duckduckgo' | 'grabcad-url';
   domain: string;
   title: string;
   snippet: string;
@@ -136,10 +140,26 @@ export interface HermesSearchHit {
   url?: string;
 }
 
+export interface GrabCadUrlInspectionResult {
+  url: string;
+  isGrabCad: boolean;
+  status: 'ok' | 'direct-cad' | 'blocked-or-auth-required' | 'invalid-url' | 'network-error';
+  httpStatus?: number;
+  title: string;
+  description: string;
+  detectedFormats: string[];
+  previewImageUrl?: string;
+  directCadUrl?: string;
+  diagnosticNote: string;
+  vucCertificate: FormalVucCertificate;
+}
+
 export interface HermesSearchResult {
   query: string;
+  specialistProfile: QwenSpecialistProfile;
   hits: HermesSearchHit[];
   webStatus: 'disabled' | 'ok' | 'unavailable';
+  grabCadInspection?: GrabCadUrlInspectionResult;
   compactSummaryText: string;
   approxTokens: number;
   vucCertificate: FormalVucCertificate;
@@ -148,7 +168,227 @@ export interface HermesSearchResult {
 export type FetchLike = (
   input: string,
   init?: { signal?: AbortSignal; headers?: Record<string, string> }
-) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
+) => Promise<{
+  ok: boolean;
+  status?: number;
+  headers?: { get: (name: string) => string | null };
+  json: () => Promise<unknown>;
+  text?: () => Promise<string>;
+}>;
+
+export function isDisallowedExternalHost(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  if (
+    lower === 'localhost' ||
+    lower === '0.0.0.0' ||
+    lower === '::1' ||
+    lower.endsWith('.local') ||
+    lower.endsWith('.internal')
+  ) {
+    return true;
+  }
+  const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(lower);
+  if (ipv4Match) {
+    const a = Number(ipv4Match[1]);
+    const b = Number(ipv4Match[2]);
+    if (a === 10 || a === 127 || a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+  }
+  return false;
+}
+
+function decodeHtmlEntities(raw: string): string {
+  return raw
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export async function inspectGrabCadOrCadUrl(params: {
+  url: string;
+  fetcher?: FetchLike;
+}): Promise<GrabCadUrlInspectionResult> {
+  const startedAt = Date.now();
+  const rawUrl = params.url.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return {
+      url: rawUrl,
+      isGrabCad: false,
+      status: 'invalid-url',
+      title: 'URL inválida',
+      description: 'URL fornecida não pôde ser interpretada.',
+      detectedFormats: [],
+      diagnosticNote: 'Informe uma URL HTTP/HTTPS pública válida (ex: https://grabcad.com/library/...).',
+      vucCertificate: createFormalVucCertificate({
+        domain: 'GRABCAD_URL_INSPECT',
+        status: 'FAIL',
+        inputPayload: { url: rawUrl },
+        outputPayload: { reason: 'invalid-url' },
+        durationMs: Math.max(1, Date.now() - startedAt),
+      }),
+    };
+  }
+
+  const isGrabCad = /(^|\.)grabcad\.com$/i.test(parsed.hostname);
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || isDisallowedExternalHost(parsed.hostname)) {
+    return {
+      url: rawUrl,
+      isGrabCad,
+      status: 'invalid-url',
+      title: 'Host bloqueado por política SSRF',
+      description: 'Apenas URLs públicas HTTP/HTTPS são permitidas.',
+      detectedFormats: [],
+      diagnosticNote: 'Endereços locais ou privados foram bloqueados por segurança.',
+      vucCertificate: createFormalVucCertificate({
+        domain: 'GRABCAD_URL_INSPECT',
+        status: 'FAIL',
+        inputPayload: { url: rawUrl },
+        outputPayload: { reason: 'ssrf-blocked' },
+        durationMs: Math.max(1, Date.now() - startedAt),
+      }),
+    };
+  }
+
+  const slugName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || parsed.hostname);
+  const directExtMatch = /\.(stl|step|stp|dxf|obj|3dm|ifc|svg|ipt)$/i.exec(parsed.pathname);
+  const fetchImpl: FetchLike = params.fetcher ?? (fetch as unknown as FetchLike);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const resp = await fetchImpl(parsed.toString(), {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'ParametrixHermesCadSearch/1.0',
+        Accept: 'text/html,application/xhtml+xml,application/octet-stream,*/*',
+      },
+    });
+    const httpStatus = resp.status ?? (resp.ok ? 200 : 500);
+    const bodyText = resp.text ? await resp.text() : '';
+    const contentType = resp.headers?.get('content-type')?.toLowerCase() ?? '';
+
+    if (!resp.ok || (isGrabCad && /cf-browser-verification|Just a moment|Sign in to GrabCAD/i.test(bodyText) && !/<meta[^>]+og:title/i.test(bodyText))) {
+      const note =
+        httpStatus === 401 || httpStatus === 403 || httpStatus === 429
+          ? `O servidor retornou HTTP ${httpStatus} (proteção/login GrabCAD). Faça download autenticado no navegador ou via sua conta Google Drive e importe o arquivo real .STEP/.STL/.IPT na aba Arquivos CAD.`
+          : `Falha HTTP ${httpStatus} ao consultar ${parsed.hostname}. Não foi possível baixar geometria real.`;
+      return {
+        url: parsed.toString(),
+        isGrabCad,
+        status: 'blocked-or-auth-required',
+        httpStatus,
+        title: slugName.replace(/[-_]+/g, ' '),
+        description: note,
+        detectedFormats: directExtMatch ? [directExtMatch[1].toUpperCase()] : [],
+        diagnosticNote: note,
+        vucCertificate: createFormalVucCertificate({
+          domain: 'GRABCAD_URL_INSPECT',
+          status: 'PASS',
+          inputPayload: { url: parsed.toString() },
+          outputPayload: { status: 'blocked-or-auth-required', httpStatus },
+          durationMs: Math.max(1, Date.now() - startedAt),
+        }),
+      };
+    }
+
+    if (directExtMatch && !contentType.includes('text/html')) {
+      const fmt = directExtMatch[1].toUpperCase();
+      const note = `Arquivo CAD direto acessível (${fmt}, ${bodyText.length} caracteres recebidos). Pronto para importação real na Viewport 3D.`;
+      return {
+        url: parsed.toString(),
+        isGrabCad,
+        status: 'direct-cad',
+        httpStatus,
+        title: slugName,
+        description: note,
+        detectedFormats: [fmt],
+        directCadUrl: parsed.toString(),
+        diagnosticNote: note,
+        vucCertificate: createFormalVucCertificate({
+          domain: 'GRABCAD_URL_INSPECT',
+          status: 'PASS',
+          inputPayload: { url: parsed.toString() },
+          outputPayload: { status: 'direct-cad', format: fmt },
+          durationMs: Math.max(1, Date.now() - startedAt),
+        }),
+      };
+    }
+
+    const ogTitle =
+      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(bodyText)?.[1] ||
+      /<title[^>]*>([^<]+)<\/title>/i.exec(bodyText)?.[1] ||
+      slugName.replace(/[-_]+/g, ' ');
+    const ogDesc =
+      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i.exec(bodyText)?.[1] ||
+      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i.exec(bodyText)?.[1] ||
+      `Página CAD ${parsed.hostname} consultada.`;
+    const ogImg =
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i.exec(bodyText)?.[1];
+
+    const knownFormats = ['STEP', 'STP', 'IGES', 'STL', 'OBJ', 'DXF', '3DM', 'IPT', 'SOLIDWORKS', 'FUSION'];
+    const detectedFormats = knownFormats.filter((fmt) =>
+      new RegExp(`\\b${fmt}\\b`, 'i').test(bodyText)
+    );
+    const directHref = /href=["'](https?:\/\/[^"']+\.(?:stl|step|stp|dxf|obj|3dm|svg))["']/i.exec(
+      bodyText
+    )?.[1];
+
+    const diagnosticNote = directHref
+      ? `Link CAD público direto encontrado (${directHref}).`
+      : isGrabCad
+        ? 'Metadados públicos GrabCAD extraídos. Os binários de download exigem sessão autenticada no GrabCAD; baixe o .STEP/.STL e importe em Arquivos CAD ou via Google Drive.'
+        : 'Metadados públicos extraídos. Use link direto .STL/.STEP/.DXF/.OBJ/.3DM/.SVG para tesselação automática.';
+
+    return {
+      url: parsed.toString(),
+      isGrabCad,
+      status: 'ok',
+      httpStatus,
+      title: decodeHtmlEntities(ogTitle).slice(0, 140),
+      description: decodeHtmlEntities(ogDesc).slice(0, 260),
+      detectedFormats,
+      previewImageUrl: ogImg,
+      directCadUrl: directHref,
+      diagnosticNote,
+      vucCertificate: createFormalVucCertificate({
+        domain: 'GRABCAD_URL_INSPECT',
+        status: 'PASS',
+        inputPayload: { url: parsed.toString() },
+        outputPayload: { status: 'ok', detectedFormats, directCadUrl: directHref ?? null },
+        durationMs: Math.max(1, Date.now() - startedAt),
+      }),
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      url: parsed.toString(),
+      isGrabCad,
+      status: 'network-error',
+      title: slugName.replace(/[-_]+/g, ' '),
+      description: `Erro de rede ao consultar ${parsed.hostname}: ${msg}`,
+      detectedFormats: directExtMatch ? [directExtMatch[1].toUpperCase()] : [],
+      diagnosticNote: `Sem conectividade para ${parsed.hostname} (${msg}). Operando 100% no cache RAG local.`,
+      vucCertificate: createFormalVucCertificate({
+        domain: 'GRABCAD_URL_INSPECT',
+        status: 'PASS',
+        inputPayload: { url: parsed.toString() },
+        outputPayload: { status: 'network-error', reason: msg },
+        durationMs: Math.max(1, Date.now() - startedAt),
+      }),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function executeHermesCompactSearch(params: {
   query: string;
@@ -161,6 +401,7 @@ export async function executeHermesCompactSearch(params: {
   const startedAt = Date.now();
   const query = params.query.trim();
   const maxResults = Math.max(1, Math.min(10, params.maxResults ?? 5));
+  const specialistProfile = routeQwenSpecialistFunction(query);
   const corpus = buildFullProjectKnowledgeCorpus(params.dynamicDocs ?? [], params.cadSummary);
 
   const tokens = query
@@ -171,7 +412,9 @@ export async function executeHermesCompactSearch(params: {
   const localHits: HermesSearchHit[] = corpus
     .map((entry) => {
       const haystack = `${entry.title} ${entry.domain} ${entry.content}`.toLowerCase();
-      let score = entry.domain === 'LIVE_STATE' ? 1.5 : 0;
+      let score =
+        (entry.domain === 'LIVE_STATE' ? 1.5 : 0) +
+        (specialistProfile.targetDomains.includes(entry.domain) ? 2.5 : 0);
       for (const tok of tokens) {
         if (haystack.includes(tok)) {
           score += 2 + Math.min(3, haystack.split(tok).length - 1);
@@ -192,64 +435,90 @@ export async function executeHermesCompactSearch(params: {
 
   let webStatus: HermesSearchResult['webStatus'] = 'disabled';
   const webHits: HermesSearchHit[] = [];
+  let grabCadInspection: GrabCadUrlInspectionResult | undefined;
 
+  const urlMatch = /https?:\/\/[^\s"'<>]+/i.exec(query);
   if (params.includeWeb && query.length > 0) {
     const fetchImpl: FetchLike = params.fetcher ?? (fetch as unknown as FetchLike);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    try {
-      const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const resp = await fetchImpl(ddgUrl, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'ParametrixHermesSearch/1.0' },
+
+    if (urlMatch) {
+      grabCadInspection = await inspectGrabCadOrCadUrl({
+        url: urlMatch[0],
+        fetcher: fetchImpl,
       });
-      if (resp.ok) {
-        const data = (await resp.json()) as {
-          AbstractText?: string;
-          AbstractURL?: string;
-          Heading?: string;
-          RelatedTopics?: { Text?: string; FirstURL?: string }[];
-        };
-        if (data.AbstractText) {
-          webHits.push({
-            id: 'ddg-abstract',
-            source: 'web-duckduckgo',
-            domain: 'WEB_SEARCH',
-            title: data.Heading || query,
-            snippet: data.AbstractText.slice(0, 240),
-            score: 8.5,
-            url: data.AbstractURL || undefined,
-          });
-        }
-        const topics = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
-        for (let i = 0; i < topics.length && webHits.length < 3; i += 1) {
-          const item = topics[i];
-          if (item && typeof item.Text === 'string' && item.Text.trim()) {
+      webHits.push({
+        id: 'url-cad-inspect',
+        source: 'grabcad-url',
+        domain: grabCadInspection.isGrabCad ? 'GRABCAD_LIBRARY' : 'PUBLIC_CAD_URL',
+        title: grabCadInspection.title,
+        snippet: `${grabCadInspection.description} Formatos: ${grabCadInspection.detectedFormats.join(', ') || 'não listados'}. ${grabCadInspection.diagnosticNote}`.slice(
+          0,
+          260
+        ),
+        score: 9.5,
+        url: grabCadInspection.directCadUrl || grabCadInspection.url,
+      });
+      webStatus = grabCadInspection.status === 'network-error' ? 'unavailable' : 'ok';
+    } else {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3500);
+      try {
+        const ddgQuery = /\bgrabcad\b/i.test(query)
+          ? `site:grabcad.com/library ${query.replace(/grabcad/gi, '').trim()}`
+          : query;
+        const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(ddgQuery)}&format=json&no_html=1&skip_disambig=1`;
+        const resp = await fetchImpl(ddgUrl, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'ParametrixHermesSearch/1.0' },
+        });
+        if (resp.ok) {
+          const data = (await resp.json()) as {
+            AbstractText?: string;
+            AbstractURL?: string;
+            Heading?: string;
+            RelatedTopics?: { Text?: string; FirstURL?: string }[];
+          };
+          if (data.AbstractText) {
             webHits.push({
-              id: `ddg-topic-${i + 1}`,
+              id: 'ddg-abstract',
               source: 'web-duckduckgo',
               domain: 'WEB_SEARCH',
-              title: item.Text.split(' - ')[0].slice(0, 80),
-              snippet: item.Text.slice(0, 220),
-              score: Number((6 - i * 0.5).toFixed(2)),
-              url: item.FirstURL || undefined,
+              title: data.Heading || query,
+              snippet: data.AbstractText.slice(0, 240),
+              score: 8.5,
+              url: data.AbstractURL || undefined,
             });
           }
+          const topics = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
+          for (let i = 0; i < topics.length && webHits.length < 3; i += 1) {
+            const item = topics[i];
+            if (item && typeof item.Text === 'string' && item.Text.trim()) {
+              webHits.push({
+                id: `ddg-topic-${i + 1}`,
+                source: 'web-duckduckgo',
+                domain: 'WEB_SEARCH',
+                title: item.Text.split(' - ')[0].slice(0, 80),
+                snippet: item.Text.slice(0, 220),
+                score: Number((6 - i * 0.5).toFixed(2)),
+                url: item.FirstURL || undefined,
+              });
+            }
+          }
+          webStatus = 'ok';
+        } else {
+          webStatus = 'unavailable';
         }
-        webStatus = 'ok';
-      } else {
+      } catch {
         webStatus = 'unavailable';
+      } finally {
+        clearTimeout(timer);
       }
-    } catch {
-      webStatus = 'unavailable';
-    } finally {
-      clearTimeout(timer);
     }
   }
 
-  const hits = [...localHits, ...webHits].slice(0, maxResults + 2);
+  const hits = [...webHits, ...localHits].slice(0, maxResults + 2);
   const compactSummaryText = [
-    `[Parametrix Search · query="${query || 'status'}" · web=${webStatus}]`,
+    `[Hermes Search · RT=${specialistProfile.id} (${specialistProfile.modelVariant}) · query="${query || 'status'}" · web=${webStatus}]`,
     ...hits.map(
       (h, idx) =>
         `${idx + 1}. (${h.source}/${h.domain}) ${h.title}: ${h.snippet.replace(/\s+/g, ' ').trim()}`
@@ -262,19 +531,27 @@ export async function executeHermesCompactSearch(params: {
   const vucCertificate = createFormalVucCertificate({
     domain: 'HERMES_SEARCH_VUC',
     status: 'PASS',
-    inputPayload: { query, includeWeb: Boolean(params.includeWeb), maxResults },
+    inputPayload: {
+      query,
+      includeWeb: Boolean(params.includeWeb),
+      maxResults,
+      specialistId: specialistProfile.id,
+    },
     outputPayload: {
       hitIds: hits.map((h) => h.id),
       webStatus,
       approxTokens,
+      grabCadStatus: grabCadInspection?.status ?? null,
     },
     durationMs: Math.max(1, Date.now() - startedAt),
   });
 
   return {
     query,
+    specialistProfile,
     hits,
     webStatus,
+    ...(grabCadInspection ? { grabCadInspection } : {}),
     compactSummaryText,
     approxTokens,
     vucCertificate,
@@ -338,7 +615,7 @@ export function buildHermesAgentBundle(options: {
     '3. Bounding box e métricas em mm: `cad_get_bbox` ou `cad_evaluate_nurbs_metrics`.',
     '4. FEA estrutural / Curvatura / Prova VUC: `cad_run_structural_fea`, `cad_optimize_surface_curvature`, `cad_get_scoobiii_vuc_proof`.',
     '5. Cena 3D aberta no navegador (via relay `/ws`): `cad_rhino_command`, `cad_magic_pen_feature`, `cad_generate_cam_toolpath`, `cad_export_deliverable`, `cad_reset_part_baseline`.',
-    `6. Busca + RAG com VUC (<600 tokens): \`hermes_search\` ou \`POST ${baseUrl}/api/hermes/search\`.`,
+    `6. Busca + RAG + GrabCAD com VUC (<600 tokens): \`hermes_search\` ou \`POST ${baseUrl}/api/hermes/search\`.`,
     '7. Reprodução da engrenagem M2 Z24: `npm run cad:gear` (requer FreeCAD + matplotlib) e validação `POST /api/vuc/formal-verify`.',
     '',
   ].join('\n');
@@ -584,4 +861,3 @@ export function buildClawFamilyBundle(options: {
     vucCertificate,
   };
 }
-

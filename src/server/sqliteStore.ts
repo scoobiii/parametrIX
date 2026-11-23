@@ -23,6 +23,7 @@ import type {
   LogisticsTelemetryNode,
   MachineType,
   PostProcessorFormat,
+  ProductionSessionLogRecord,
   RemoteMachineTarget,
   VucLedgerEntry,
 } from '../types/cad';
@@ -111,11 +112,14 @@ export class ParametrixSqliteStore {
       CREATE TABLE IF NOT EXISTS chat_messages (
         id TEXT PRIMARY KEY,
         room TEXT NOT NULL,
+        theme TEXT NOT NULL DEFAULT 'geral',
         sender_id TEXT NOT NULL,
+        sender_email TEXT NOT NULL DEFAULT '',
         sender_name TEXT NOT NULL,
         sender_role TEXT NOT NULL,
         is_agent INTEGER NOT NULL DEFAULT 0,
         content TEXT NOT NULL,
+        process_url TEXT NOT NULL DEFAULT '',
         lat REAL,
         lng REAL,
         vuc_hash TEXT NOT NULL,
@@ -193,6 +197,24 @@ export class ParametrixSqliteStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS production_session_logs (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        po_humano TEXT NOT NULL,
+        llm_agent TEXT NOT NULL,
+        delegated_by_po INTEGER NOT NULL DEFAULT 0,
+        active_tab TEXT NOT NULL,
+        process_machine TEXT NOT NULL,
+        process_url TEXT NOT NULL,
+        pointer_count INTEGER NOT NULL DEFAULT 0,
+        action_count INTEGER NOT NULL DEFAULT 0,
+        duration_sec REAL NOT NULL DEFAULT 0,
+        hotzone_label TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        vuc_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
 
     const remoteCols = (
@@ -204,6 +226,25 @@ export class ParametrixSqliteStore {
         ALTER TABLE remote_machines ADD COLUMN mqtt_broker_url TEXT NOT NULL DEFAULT '';
         ALTER TABLE remote_machines ADD COLUMN mqtt_topic TEXT NOT NULL DEFAULT '';
         ALTER TABLE remote_machines ADD COLUMN mqtt_qos INTEGER NOT NULL DEFAULT 1;
+      `);
+    }
+    if (!remoteCols.includes('assigned_program_id')) {
+      this.db.exec(`
+        ALTER TABLE remote_machines ADD COLUMN assigned_program_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE remote_machines ADD COLUMN last_probe_latency_ms INTEGER;
+        ALTER TABLE remote_machines ADD COLUMN last_probe_detail TEXT NOT NULL DEFAULT '';
+        ALTER TABLE remote_machines ADD COLUMN last_probe_at TEXT NOT NULL DEFAULT '';
+      `);
+    }
+
+    const chatCols = (
+      this.db.prepare('PRAGMA table_info(chat_messages)').all() as { name: string }[]
+    ).map((c) => c.name);
+    if (!chatCols.includes('theme')) {
+      this.db.exec(`
+        ALTER TABLE chat_messages ADD COLUMN theme TEXT NOT NULL DEFAULT 'geral';
+        ALTER TABLE chat_messages ADD COLUMN sender_email TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chat_messages ADD COLUMN process_url TEXT NOT NULL DEFAULT '';
       `);
     }
   }
@@ -867,36 +908,63 @@ export class ParametrixSqliteStore {
     return { ...input, id, vucHash, updatedAt };
   }
 
+  public isRegisteredUser(userId?: string, email?: string): boolean {
+    const cleanId = (userId ?? '').trim();
+    const cleanEmail = (email ?? '').trim().toLowerCase();
+    if (cleanId) {
+      const byId = this.db.prepare('SELECT id FROM users WHERE id = ?').get(cleanId) as
+        | { id: string }
+        | undefined;
+      if (byId) return true;
+    }
+    if (cleanEmail) {
+      const byEmail = this.db.prepare('SELECT id FROM users WHERE email = ?').get(cleanEmail) as
+        | { id: string }
+        | undefined;
+      if (byEmail) return true;
+    }
+    return false;
+  }
+
   public appendChatMessage(
     input: Omit<EcosystemChatMessage, 'id' | 'vucHash' | 'createdAt'>
   ): EcosystemChatMessage {
     const id = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const createdAt = new Date().toISOString();
+    const theme = input.theme ?? input.room;
+    const senderEmail = input.senderEmail ?? '';
+    const processUrl = input.processUrl ?? '';
     const vucHash = computeDeterministicVucHash('ECOSYSTEM_CHAT', {
       room: input.room,
+      theme,
       senderId: input.senderId,
       content: input.content,
       createdAt,
     });
     this.db
       .prepare(
-        `INSERT INTO chat_messages (id, room, sender_id, sender_name, sender_role, is_agent, content, lat, lng, vuc_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO chat_messages (
+          id, room, theme, sender_id, sender_email, sender_name, sender_role,
+          is_agent, content, process_url, lat, lng, vuc_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
         input.room,
+        theme,
         input.senderId,
+        senderEmail,
         input.senderName,
         input.senderRole,
         input.isAgent ? 1 : 0,
         input.content,
+        processUrl,
         input.lat ?? null,
         input.lng ?? null,
         vucHash,
         createdAt
       );
-    return { ...input, id, vucHash, createdAt };
+    return { ...input, theme, senderEmail, processUrl, id, vucHash, createdAt };
   }
 
   public listChatMessages(room?: string): EcosystemChatMessage[] {
@@ -910,11 +978,14 @@ export class ParametrixSqliteStore {
     return rows.reverse().map((r) => ({
       id: String(r.id),
       room: String(r.room),
+      theme: String(r.theme || r.room),
       senderId: String(r.sender_id),
+      senderEmail: r.sender_email ? String(r.sender_email) : undefined,
       senderName: String(r.sender_name),
       senderRole: r.sender_role as EcosystemRole,
       isAgent: Boolean(r.is_agent),
       content: String(r.content),
+      processUrl: r.process_url ? String(r.process_url) : undefined,
       lat: r.lat !== null && r.lat !== undefined ? Number(r.lat) : undefined,
       lng: r.lng !== null && r.lng !== undefined ? Number(r.lng) : undefined,
       vucHash: String(r.vuc_hash),
@@ -1021,6 +1092,13 @@ export class ParametrixSqliteStore {
       endpointUrl: String(r.endpoint_url),
       status: r.status as RemoteMachineTarget['status'],
       lastJobVuc: String(r.last_job_vuc),
+      assignedProgramId: r.assigned_program_id ? String(r.assigned_program_id) : undefined,
+      lastProbeLatencyMs:
+        r.last_probe_latency_ms !== null && r.last_probe_latency_ms !== undefined
+          ? Number(r.last_probe_latency_ms)
+          : undefined,
+      lastProbeDetail: r.last_probe_detail ? String(r.last_probe_detail) : undefined,
+      lastProbeAt: r.last_probe_at ? String(r.last_probe_at) : undefined,
       mqttEnabled: Boolean(r.mqtt_enabled),
       mqttBrokerUrl: String(r.mqtt_broker_url),
       mqttTopic: String(r.mqtt_topic),
@@ -1042,6 +1120,7 @@ export class ParametrixSqliteStore {
     machineType: MachineType;
     protocol: RemoteMachineTarget['protocol'];
     endpointUrl: string;
+    assignedProgramId?: string;
     mqttEnabled?: boolean;
     mqttBrokerUrl?: string;
     mqttTopic?: string;
@@ -1058,12 +1137,14 @@ export class ParametrixSqliteStore {
     const mqttEnabled = Boolean(input.mqttEnabled);
     const mqttBrokerUrl = (input.mqttBrokerUrl ?? '').trim();
     const mqttTopic = (input.mqttTopic ?? '').trim();
+    const assignedProgramId = (input.assignedProgramId ?? '').trim();
     const mqttQos: 0 | 1 | 2 = input.mqttQos === 0 || input.mqttQos === 2 ? input.mqttQos : 1;
     const vucHash = computeDeterministicVucHash('REMOTE_MACHINE_CONFIG', {
       id,
       name: cleanName,
       protocol: input.protocol,
       endpointUrl: cleanUrl,
+      assignedProgramId,
       mqttEnabled,
       mqttBrokerUrl,
       mqttTopic,
@@ -1074,13 +1155,14 @@ export class ParametrixSqliteStore {
       .prepare(
         `INSERT INTO remote_machines (
           id, name, machine_type, protocol, endpoint_url, status, last_job_vuc,
-          mqtt_enabled, mqtt_broker_url, mqtt_topic, mqtt_qos, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?)
+          assigned_program_id, mqtt_enabled, mqtt_broker_url, mqtt_topic, mqtt_qos, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'standby', ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           machine_type = excluded.machine_type,
           protocol = excluded.protocol,
           endpoint_url = excluded.endpoint_url,
+          assigned_program_id = excluded.assigned_program_id,
           mqtt_enabled = excluded.mqtt_enabled,
           mqtt_broker_url = excluded.mqtt_broker_url,
           mqtt_topic = excluded.mqtt_topic,
@@ -1095,6 +1177,7 @@ export class ParametrixSqliteStore {
         input.protocol,
         cleanUrl,
         vucHash,
+        assignedProgramId,
         mqttEnabled ? 1 : 0,
         mqttBrokerUrl,
         mqttTopic,
@@ -1105,13 +1188,43 @@ export class ParametrixSqliteStore {
     this.recordVucProof(
       'REMOTE_MACHINE_CONFIG',
       `Endpoint remoto salvo: ${cleanName} (${input.protocol})`,
-      { id, endpointUrl: cleanUrl, mqttEnabled, mqttTopic, vucHash }
+      { id, endpointUrl: cleanUrl, assignedProgramId, mqttEnabled, mqttTopic, vucHash }
     );
 
     const saved = this.db
       .prepare('SELECT * FROM remote_machines WHERE id = ?')
       .get(id) as Record<string, unknown>;
     return this.mapRemoteMachineRow(saved);
+  }
+
+  public updateRemoteMachineProbe(
+    machineId: string,
+    probe: {
+      status: RemoteMachineTarget['status'];
+      latencyMs: number;
+      detail: string;
+      assignedProgramId?: string;
+    }
+  ): RemoteMachineTarget | null {
+    const row = this.db
+      .prepare('SELECT * FROM remote_machines WHERE id = ?')
+      .get(machineId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+
+    const now = new Date().toISOString();
+    const programId = probe.assignedProgramId ?? String(row.assigned_program_id || '');
+    this.db
+      .prepare(
+        `UPDATE remote_machines
+         SET status = ?, last_probe_latency_ms = ?, last_probe_detail = ?, last_probe_at = ?, assigned_program_id = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(probe.status, probe.latencyMs, probe.detail, now, programId, now, machineId);
+
+    const updated = this.db
+      .prepare('SELECT * FROM remote_machines WHERE id = ?')
+      .get(machineId) as Record<string, unknown>;
+    return this.mapRemoteMachineRow(updated);
   }
 
   public dispatchRemoteMachineJob(
@@ -1140,13 +1253,53 @@ export class ParametrixSqliteStore {
       vucHash,
     });
 
-    const mapped = this.mapRemoteMachineRow(row);
-    return {
-      ...mapped,
-      status: 'executando',
-      lastJobVuc: vucHash,
-      updatedAt: now,
-    };
+    const updated = this.db
+      .prepare('SELECT * FROM remote_machines WHERE id = ?')
+      .get(machineId) as Record<string, unknown>;
+    return this.mapRemoteMachineRow(updated);
+  }
+
+  public saveProductionSessionLog(record: ProductionSessionLogRecord): ProductionSessionLogRecord {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO production_session_logs (
+          id, session_id, user_id, po_humano, llm_agent, delegated_by_po,
+          active_tab, process_machine, process_url, pointer_count, action_count,
+          duration_sec, hotzone_label, payload_json, vuc_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.id,
+        record.sessionId,
+        record.userId,
+        record.poHumano,
+        record.llmAgent,
+        record.delegatedByPo ? 1 : 0,
+        record.activeTab,
+        record.processMachine,
+        record.processUrl,
+        record.pointerCount,
+        record.actionCount,
+        record.durationSec,
+        record.hotzoneLabel,
+        JSON.stringify(record),
+        record.vucHash,
+        record.createdAt
+      );
+    this.recordVucProof('SESSION_PRODUCTION_LOG', `Sessão ${record.sessionId} (${record.hotzoneLabel})`, {
+      sessionId: record.sessionId,
+      pointerCount: record.pointerCount,
+      actionCount: record.actionCount,
+      vucHash: record.vucHash,
+    });
+    return record;
+  }
+
+  public listProductionSessionLogs(limit = 25): ProductionSessionLogRecord[] {
+    const rows = this.db
+      .prepare('SELECT payload_json FROM production_session_logs ORDER BY created_at DESC LIMIT ?')
+      .all(limit) as { payload_json: string }[];
+    return rows.map((r) => JSON.parse(r.payload_json) as ProductionSessionLogRecord);
   }
 
   public recordVucProof(domain: string, summary: string, payload: unknown): VucLedgerEntry {

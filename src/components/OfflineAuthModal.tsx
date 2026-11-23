@@ -311,6 +311,14 @@ export const OfflineAuthModal: React.FC<OfflineAuthModalProps> = ({
             </button>
           </div>
 
+          {offlineMode && (
+            <div className="p-2.5 bg-emerald-500/10 border border-emerald-400/35 rounded-lg text-[11px] text-emerald-200 leading-relaxed">
+              <strong>Agente Local Automático:</strong> ao entrar em Modo Offline, o Parametrix ativa o{' '}
+              <strong>Mordomo Hermes + Burrinhos (OpenClaw / NanoClaw / PicoClaw) + Qwen 2.5 0.5B RT Super-RAG + Search Local</strong>{' '}
+              nos comandos de processo e nos chats.
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <label className="block text-slate-400 font-medium">
               Perfil no Ecossistema Parametrix

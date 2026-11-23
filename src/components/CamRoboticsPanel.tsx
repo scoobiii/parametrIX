@@ -14,11 +14,13 @@ import {
   Upload,
   Wrench,
 } from 'lucide-react';
+import { injectGos7ProvenanceIntoTextArtifact } from '../kernel/agentProvenanceHeader';
 import { triggerBlobDownload } from '../kernel/cadFormats';
 import { listCamProductionPrograms } from '../kernel/camProcessEngine';
 import { CAM_TOOLS, getDefaultAdditiveSettings } from '../kernel/camRobotics';
 import { AdditiveCamConfigPanel } from './AdditiveCamConfigPanel';
 import type {
+  AgentProvenanceMetadata,
   CamProcessVisualState,
   CamProgramTargetCategory,
   CamServiceJob,
@@ -59,6 +61,9 @@ interface CamRoboticsPanelProps {
   camVisualState: CamProcessVisualState;
   remoteMachines?: RemoteMachineTarget[];
   onDispatchRemoteMachine?: (machineId: string) => Promise<void>;
+  onProbeRemoteMachine?: (machineId: string) => Promise<void>;
+  remoteDispatchStatus?: string | null;
+  provenanceMeta?: AgentProvenanceMetadata;
   camServiceJobs?: CamServiceJob[];
   onLaunchProgram?: (programId: string) => void;
   onSubmitCamService?: (payload: CamServiceSubmissionInput) => Promise<void>;
@@ -97,6 +102,9 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
   camVisualState,
   remoteMachines = [],
   onDispatchRemoteMachine,
+  onProbeRemoteMachine,
+  remoteDispatchStatus = null,
+  provenanceMeta,
   camServiceJobs = [],
   onLaunchProgram,
   onSubmitCamService,
@@ -178,8 +186,17 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
       'weld-tig-mig': 'weld.src',
       'laser-g': 'laser.nc',
     };
-    const blob = new Blob([toolpath.postCode], { type: 'text/plain;charset=utf-8' });
-    triggerBlobDownload(blob, `parametrix_cam.${extMap[settings.postFormat]}`);
+    const ext = extMap[settings.postFormat];
+    const headerExt: 'nc' | 'src' | 'mod' = ext.includes('src')
+      ? 'src'
+      : ext === 'mod'
+        ? 'mod'
+        : 'nc';
+    const contentToSave = provenanceMeta
+      ? injectGos7ProvenanceIntoTextArtifact(toolpath.postCode, provenanceMeta, headerExt)
+      : toolpath.postCode;
+    const blob = new Blob([contentToSave], { type: 'text/plain;charset=utf-8' });
+    triggerBlobDownload(blob, `parametrix_cam.${ext}`);
   };
 
   return (
@@ -673,28 +690,53 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
         {remoteMachines.length > 0 && onDispatchRemoteMachine && (
           <section className="space-y-2 pt-3 border-t border-white/8">
             <div className="text-xs font-medium text-slate-400">
-              Execução em Máquina Remota (OPC-UA / KUKA / Moonraker)
+              Execução Real em Máquina Remota (OPC-UA / KUKA / Moonraker)
             </div>
+            {remoteDispatchStatus && (
+              <div className="p-2 rounded bg-[#090c11] border border-amber-400/40 text-[11px] font-mono-tabular text-amber-200">
+                {remoteDispatchStatus}
+              </div>
+            )}
             <div className="space-y-1.5">
-              {remoteMachines.slice(0, 3).map((m) => (
+              {remoteMachines.slice(0, 4).map((m) => (
                 <div
                   key={m.id}
                   className="p-2.5 bg-[#0c1017] border border-white/10 rounded-lg flex items-center justify-between gap-2 text-xs"
                 >
                   <div className="min-w-0">
                     <div className="font-semibold text-slate-100 truncate">{m.name}</div>
-                    <div className="text-[10px] font-mono-tabular text-slate-400 truncate">
-                      {m.protocol} · {m.status}
+                    <div
+                      className={`text-[10px] font-mono-tabular truncate ${
+                        m.status === 'offline'
+                          ? 'text-rose-400'
+                          : m.status === 'online'
+                            ? 'text-emerald-400'
+                            : 'text-slate-400'
+                      }`}
+                    >
+                      {m.protocol} · {m.status.toUpperCase()}
+                      {m.lastProbeDetail ? ` · ${m.lastProbeDetail}` : ''}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void onDispatchRemoteMachine(m.id)}
-                    className="px-2.5 py-1 text-[11px] font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded flex items-center gap-1 shrink-0 cursor-pointer"
-                  >
-                    <Send className="w-3 h-3" />
-                    Enviar
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {onProbeRemoteMachine && (
+                      <button
+                        type="button"
+                        onClick={() => void onProbeRemoteMachine(m.id)}
+                        className="px-2 py-1 text-[11px] font-medium bg-[#141a24] border border-white/15 text-slate-200 hover:border-sky-400 rounded cursor-pointer"
+                      >
+                        Testar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void onDispatchRemoteMachine(m.id)}
+                      className="px-2.5 py-1 text-[11px] font-semibold bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded flex items-center gap-1 cursor-pointer"
+                    >
+                      <Send className="w-3 h-3" />
+                      Enviar
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
