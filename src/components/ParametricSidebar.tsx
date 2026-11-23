@@ -83,6 +83,10 @@ interface ParametricSidebarProps {
   layerComplianceReport: LayerToleranceComplianceReport;
   onRefineNurbsForTolerances: () => void;
   onResetPartAndProduction?: () => void;
+  onNewCadProject?: () => void;
+  onResetCadArea?: () => void;
+  onNewCaeStudy?: () => void;
+  onResetCaeArea?: () => void;
 }
 
 const PRESET_OPTIONS: { id: PresetId; label: string; subtitle: string }[] = [
@@ -139,6 +143,10 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
   layerComplianceReport,
   onRefineNurbsForTolerances,
   onResetPartAndProduction,
+  onNewCadProject,
+  onResetCadArea,
+  onNewCaeStudy,
+  onResetCaeArea,
 }) => {
   const [expandedLayerName, setExpandedLayerName] = useState<string | null>(null);
 
@@ -285,16 +293,28 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
             Sincronizar Carga & Critérios com FEA
           </button>
 
-          {onResetPartAndProduction && (
-            <button
-              type="button"
-              onClick={onResetPartAndProduction}
-              className="w-full py-1.5 text-[11px] font-medium bg-rose-500/15 border border-rose-400/40 text-rose-200 hover:bg-rose-500/25 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Resetar Peça & Limpar Base de Produção
-            </button>
-          )}
+          <div className="grid grid-cols-2 gap-1.5">
+            {onNewCadProject && (
+              <button
+                type="button"
+                onClick={onNewCadProject}
+                className="py-1.5 text-[11px] font-medium bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded-lg flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Sparkles className="w-3 h-3" />
+                Novo CAD
+              </button>
+            )}
+            {(onResetCadArea || onResetPartAndProduction) && (
+              <button
+                type="button"
+                onClick={onResetCadArea ?? onResetPartAndProduction}
+                className="py-1.5 text-[11px] font-medium bg-amber-500/15 border border-amber-400/40 text-amber-200 hover:bg-amber-500/25 rounded-lg flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Reiniciar CAD
+              </button>
+            )}
+          </div>
         </section>
 
         {/* IX Assembly Tree, Explode, Rotate, Object Mask & Per-Component Materials */}
@@ -530,15 +550,37 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
 
         {/* Structural FEA & Generative Optimization */}
         <section className="space-y-3 pt-3 border-t border-white/8">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5 text-xs font-medium text-slate-300">
               <Activity className="w-3.5 h-3.5 text-rose-400" />
-              Resistência Estrutural FEA
+              Resistência Estrutural FEA (CAE)
             </span>
             <span className={`text-[11px] font-mono-tabular uppercase font-semibold ${statusColor}`}>
               SF {feaResult.safetyFactor} · {feaResult.status}
             </span>
           </div>
+          {(onNewCaeStudy || onResetCaeArea) && (
+            <div className="grid grid-cols-2 gap-1.5">
+              {onNewCaeStudy && (
+                <button
+                  type="button"
+                  onClick={onNewCaeStudy}
+                  className="py-1 text-[10px] font-medium bg-sky-500/15 border border-sky-400/40 text-sky-200 hover:bg-sky-500/25 rounded-md cursor-pointer"
+                >
+                  Novo Estudo CAE
+                </button>
+              )}
+              {onResetCaeArea && (
+                <button
+                  type="button"
+                  onClick={onResetCaeArea}
+                  className="py-1 text-[10px] font-medium bg-amber-500/15 border border-amber-400/40 text-amber-200 hover:bg-amber-500/25 rounded-md cursor-pointer"
+                >
+                  Reiniciar CAE
+                </button>
+              )}
+            </div>
+          )}
 
           {feaResult.complianceNote && (
             <div className="p-2 bg-[#0c1017] border border-white/10 rounded-lg text-[10px] text-slate-300 leading-snug">

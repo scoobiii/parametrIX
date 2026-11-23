@@ -11,6 +11,7 @@ import {
   History,
   Leaf,
   Recycle,
+  RotateCcw,
   ShieldCheck,
   Sparkles,
   Wrench,
@@ -61,6 +62,8 @@ interface SustainabilityDashboardProps {
   onSwitchMachine: (machineType: MachineType) => void;
   onChangeMaterial: (material: MaterialFinish) => void;
   onNavigate: (tab: WorkspaceTab) => void;
+  onNewCaeStudy?: () => void;
+  onResetCaeArea?: () => void;
 }
 
 const GRID_PROFILES: { id: string; label: string; factor: number }[] = [
@@ -107,6 +110,8 @@ export const SustainabilityDashboard: React.FC<SustainabilityDashboardProps> = (
   onSwitchMachine,
   onChangeMaterial,
   onNavigate,
+  onNewCaeStudy,
+  onResetCaeArea,
 }) => {
   const [activeView, setActiveView] = useState<SustainabilityViewMode>('lca');
   const [gridId, setGridId] = useState<string>('br-sin');
@@ -292,6 +297,34 @@ export const SustainabilityDashboard: React.FC<SustainabilityDashboardProps> = (
                     <option value="1.5">1.50× (Choque Cíclico)</option>
                   </select>
                 </div>
+              </div>
+            )}
+            {(onNewCaeStudy || onResetCaeArea) && (
+              <div className="flex items-center gap-1.5">
+                {onNewCaeStudy && (
+                  <button
+                    type="button"
+                    onClick={onNewCaeStudy}
+                    className="min-h-[34px] px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-sky-400/50 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Novo CAE
+                  </button>
+                )}
+                {onResetCaeArea && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoadRatio(0);
+                      setDynamicLoadFactor(1.0);
+                      onResetCaeArea();
+                    }}
+                    className="min-h-[34px] px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-amber-400/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reiniciar CAE
+                  </button>
+                )}
               </div>
             )}
           </div>

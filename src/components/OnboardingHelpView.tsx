@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
+  BookOpen,
+  Briefcase,
   Calendar,
   Cloud,
   Cpu,
@@ -29,6 +31,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { triggerBlobDownload } from '../kernel/cadFormats';
 import { buildLocalIcsCalendarBlob } from '../kernel/mcpServer';
+import type { OpenErpWorkspaceSnapshot } from '../kernel/openErpEngine';
 import {
   ACCEPTED_CAD_EXTENSIONS,
   type FullWorkspacePreset,
@@ -59,6 +62,9 @@ interface OnboardingHelpViewProps {
   onUploadFile: (file: File) => Promise<void>;
   onApplyPreset: (preset: FullWorkspacePreset, openEditor?: boolean) => void;
   scoobiiiProof: ScoobiiiVucProofReport;
+  liveErpSnapshot?: OpenErpWorkspaceSnapshot;
+  activeUserLabel?: string;
+  onOpenErpEntry?: () => void;
 }
 
 interface VoiceGuideTopic {
@@ -150,6 +156,9 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
   onUploadFile,
   onApplyPreset,
   scoobiiiProof,
+  liveErpSnapshot,
+  activeUserLabel,
+  onOpenErpEntry,
 }) => {
   const { user, authReady, authBusy, authError, signInWithGoogle, logout, clearAuthError } =
     useAuth();
@@ -372,6 +381,84 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
               {uploadError}
             </div>
           )}
+        </section>
+
+        {/* Entrada Parametrix ERP Open & Biblioteca por Categoria */}
+        <section className="p-4 sm:p-5 bg-[#111620] border border-sky-500/30 rounded-xl space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-sm sm:text-base font-semibold text-slate-100 flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-sky-400 shrink-0" />
+                Entrada Parametrix ERP Open + Biblioteca por Categoria
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Sessão ativa: <strong className="text-slate-200">{activeUserLabel || user?.email || 'Operador Local'}</strong>
+                {liveErpSnapshot && (
+                  <>
+                    {' · '}
+                    <span>Prontidão BI: {liveErpSnapshot.biSummary.techReadinessPct}%</span>
+                  </>
+                )}
+              </p>
+            </div>
+            {liveErpSnapshot && (
+              <div className="text-[11px] font-mono-tabular px-2.5 py-1 rounded-lg bg-[#0c1017] border border-white/10 text-slate-200">
+                {liveErpSnapshot.pricingAndRoi.commercialDisclosureBlocked ? (
+                  <span className="text-amber-300">
+                    Frostbite 7nm CMOS Pré-Silício · Sem divulgação comercial pública
+                  </span>
+                ) : (
+                  <span>
+                    Custo R$ {liveErpSnapshot.pricingAndRoi.totalCostUnitBrl.toFixed(2)} · Preço Parametrix{' '}
+                    <strong className="text-emerald-300">
+                      R$ {liveErpSnapshot.pricingAndRoi.parametrixPriceUnitBrl.toFixed(2)}
+                    </strong>{' '}
+                    · ROI <strong className="text-sky-300">{(liveErpSnapshot.pricingAndRoi.roiPct ?? 0).toFixed(1)}%</strong> ({liveErpSnapshot.taxBreakdown.regime.toUpperCase()})
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => (onOpenErpEntry ? onOpenErpEntry() : onNavigate('ecosystem'))}
+              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-lg flex items-center gap-1.5 cursor-pointer"
+            >
+              <Briefcase className="w-3.5 h-3.5" />
+              ERP Open & BI/CRM
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('library')}
+              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 hover:border-emerald-400 rounded-lg flex items-center gap-1.5 cursor-pointer"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              Lib / Biblioteca
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('viewport')}
+              className="min-h-[38px] px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg cursor-pointer"
+            >
+              CAD 3D
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('sustainability')}
+              className="min-h-[38px] px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-emerald-400/50 rounded-lg cursor-pointer"
+            >
+              CAE / Fadiga
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('cam')}
+              className="min-h-[38px] px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-amber-400/50 rounded-lg cursor-pointer"
+            >
+              CAM & Robô
+            </button>
+          </div>
         </section>
 
         {/* Quick Full-Workspace Preset Auto-Fill Section */}

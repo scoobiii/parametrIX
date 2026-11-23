@@ -45,6 +45,10 @@ import {
 import { resolveMachineProcessAssociation } from '../kernel/realMachineConnector';
 import { HEATMAP_COLS, HEATMAP_ROWS } from '../kernel/sessionPointerRecorder';
 import type {
+  ErpTaxRegime,
+  OpenErpWorkspaceSnapshot,
+} from '../kernel/openErpEngine';
+import type {
   AuthUserProfile,
   ComputeShareNode,
   EcosystemChatMessage,
@@ -57,6 +61,7 @@ import type {
   PublicChatThemeId,
   RemoteMachineTarget,
   RemoteMqttTelemetryEvent,
+  WorkspaceTab,
 } from '../types/cad';
 
 export interface RemoteMachineConfigInput {
@@ -151,9 +156,25 @@ interface EcosystemHubPanelProps {
   onRecordSessionAction?: (detail: string) => void;
   initialSubTab?: EcosystemSubTab;
   initialChatRoom?: PublicChatThemeId;
+  liveErpSnapshot?: OpenErpWorkspaceSnapshot;
+  erpBatchQty?: number;
+  onChangeErpBatchQty?: (qty: number) => void;
+  erpMarginPct?: number;
+  onChangeErpMarginPct?: (pct: number) => void;
+  erpTaxRegime?: ErpTaxRegime;
+  onChangeErpTaxRegime?: (regime: ErpTaxRegime) => void;
+  erpLogisticsModal?: LogisticsModal;
+  onChangeErpLogisticsModal?: (modal: LogisticsModal) => void;
+  erpDistanceKm?: number;
+  onChangeErpDistanceKm?: (km: number) => void;
+  googleUserEmail?: string | null;
+  googleAccessToken?: string | null;
+  onSaveErpSnapshotToDrive?: (snapshot: OpenErpWorkspaceSnapshot) => Promise<void>;
+  onNavigateTab?: (tab: WorkspaceTab) => void;
 }
 
 type EcosystemSubTab = 'chat' | 'session' | 'logistics' | 'erp' | 'compute' | 'remote';
+type ErpInternalSection = 'overview' | 'bom' | 'finance' | 'crm' | 'ledger';
 
 export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   profile,
@@ -190,9 +211,30 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   onRecordSessionAction,
   initialSubTab = 'chat',
   initialChatRoom = 'geral',
+  liveErpSnapshot,
+  erpBatchQty = 10,
+  onChangeErpBatchQty,
+  erpMarginPct = 28,
+  onChangeErpMarginPct,
+  erpTaxRegime = 'presumido',
+  onChangeErpTaxRegime,
+  erpLogisticsModal,
+  onChangeErpLogisticsModal,
+  erpDistanceKm = 220,
+  onChangeErpDistanceKm,
+  googleUserEmail = null,
+  googleAccessToken = null,
+  onSaveErpSnapshotToDrive,
+  onNavigateTab,
 }) => {
   const [subTab, setSubTab] = useState<EcosystemSubTab>(initialSubTab);
+  const [erpSection, setErpSection] = useState<ErpInternalSection>('overview');
+  const [erpDriveBusy, setErpDriveBusy] = useState(false);
+  const [erpActionStatus, setErpActionStatus] = useState<string | null>(null);
   const [chatRoom, setChatRoom] = useState<PublicChatThemeId>(normalizeChatRoomTheme(initialChatRoom));
+  useEffect(() => {
+    setSubTab(initialSubTab);
+  }, [initialSubTab]);
   const [chatDraft, setChatDraft] = useState('');
   const [rulesOpen, setRulesOpen] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
@@ -1126,113 +1168,603 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
           </div>
         )}
 
-        {/* 3. Open Free ERP & CRM */}
+        {/* 3. Open-Source Manufacturing ERP + Real-Time CAD/CAE/CAM + BI & CRM */}
         {subTab === 'erp' && (
-          <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-4">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
-                <div className="text-slate-500">Pipeline ERP Total</div>
-                <div className="font-mono-tabular text-base font-bold text-emerald-300">
-                  R$ {erpStats.totalPipelineBrl.toLocaleString('pt-BR')}
+          <div className="space-y-4">
+            {/* ERP Executive Header + User Session Sync */}
+            <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/10 pb-3">
+                <div>
+                  <div className="text-[11px] font-mono-tabular text-sky-400 font-semibold">
+                    ERP OPEN MANUFACTURA (ERPNext/Odoo Pattern) · SINCRONIA REAL-TIME CAD/CAE/CAM
+                  </div>
+                  <h2 className="font-display text-base font-bold text-slate-100">
+                    {liveErpSnapshot ? liveErpSnapshot.partName : 'Cockpit ERP & BI/CRM Parametrix'}
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Conta vinculada:{' '}
+                    <strong className="text-emerald-300">
+                      {googleUserEmail || profile.email}
+                    </strong>{' '}
+                    ({profile.handleAt} · {ECOSYSTEM_ROLE_DEFINITIONS[profile.role].shortTag})
+                    {liveErpSnapshot && ` · VUC ${liveErpSnapshot.vucHash.slice(0, 14)}`}
+                  </p>
                 </div>
-              </div>
-              <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
-                <div className="text-slate-500">Ordens Abertas</div>
-                <div className="font-mono-tabular text-base font-bold text-sky-300">
-                  {erpStats.openOrders}
-                </div>
-              </div>
-              <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
-                <div className="text-slate-500">Entregadores Ativos</div>
-                <div className="font-mono-tabular text-base font-bold text-amber-300">
-                  {erpStats.activeCouriers}
-                </div>
-              </div>
-              <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
-                <div className="text-slate-500">Licença ERP / CRM</div>
-                <div className="font-mono-tabular text-base font-bold text-slate-100">
-                  Open / Free
-                </div>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-              <select
-                value={erpKind}
-                onChange={(e) => setErpKind(e.target.value as ErpCrmRecord['kind'])}
-                className="px-2.5 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100"
-              >
-                <option value="order">Ordem CAM</option>
-                <option value="lead">Lead CRM</option>
-                <option value="inventory">Insumo / Estoque</option>
-                <option value="shipment">Frete Hub</option>
-                <option value="invoice">Fatura VUC</option>
-              </select>
-              <input
-                type="text"
-                placeholder="Descrição da ordem / insumo..."
-                value={erpTitle}
-                onChange={(e) => setErpTitle(e.target.value)}
-                className="md:col-span-2 px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100"
-              />
-              <input
-                type="text"
-                placeholder="Parceiro / Cliente / Foxconn..."
-                value={erpParty}
-                onChange={(e) => setErpParty(e.target.value)}
-                className="px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100"
-              />
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!erpTitle.trim()) return;
-                  await onAddErpRecord({
-                    kind: erpKind,
-                    title: erpTitle.trim(),
-                    status: 'aberto',
-                    partyName: erpParty.trim() || profile.displayName,
-                    segment: 'industrial-cnc',
-                    amountBrl: erpAmount,
-                    modal: routeModal,
-                    ownerRole: profile.role,
-                  });
-                  setErpTitle('');
-                  setErpParty('');
-                  setErpAmount((v) => v + 500);
-                }}
-                className="px-3 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg cursor-pointer"
-              >
-                + Lançar no SQLite
-              </button>
-            </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onNavigateTab && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('library')}
+                      className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/15 text-slate-200 hover:border-sky-400/50 rounded-lg cursor-pointer"
+                    >
+                      Abrir Lib / Biblioteca
+                    </button>
+                  )}
+                  {liveErpSnapshot && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await onAddErpRecord({
+                          kind: 'order',
+                          title: `[Auto CAD/CAM] ${liveErpSnapshot.partName} (${liveErpSnapshot.pricingAndRoi.batchQty} un · ${liveErpSnapshot.taxBreakdown.regime.toUpperCase()})`,
+                          status: 'aberto',
+                          partyName: googleUserEmail || profile.displayName,
+                          segment: liveErpSnapshot.segment,
+                          amountBrl: liveErpSnapshot.pricingAndRoi.parametrixBatchTotalBrl,
+                          modal: liveErpSnapshot.logistics.modal,
+                          ownerRole: profile.role,
+                        });
+                        setErpActionStatus(
+                          `Ordem ERP de R$ ${liveErpSnapshot.pricingAndRoi.parametrixBatchTotalBrl.toLocaleString('pt-BR')} gravada no SQLite com prova VUC.`
+                        );
+                      }}
+                      className="px-3 py-1.5 text-xs font-semibold bg-emerald-500 text-slate-950 hover:bg-emerald-400 rounded-lg cursor-pointer"
+                    >
+                      + Registrar Lote Real-Time no SQLite
+                    </button>
+                  )}
+                  {liveErpSnapshot && googleAccessToken && onSaveErpSnapshotToDrive && (
+                    <button
+                      type="button"
+                      disabled={erpDriveBusy}
+                      onClick={async () => {
+                        setErpDriveBusy(true);
+                        try {
+                          await onSaveErpSnapshotToDrive(liveErpSnapshot);
+                          setErpActionStatus('Cotação ERP + BOM salva no seu Google Drive.');
+                        } finally {
+                          setErpDriveBusy(false);
+                        }
+                      }}
+                      className="px-3 py-1.5 text-xs font-semibold bg-sky-500/20 border border-sky-400/50 text-sky-200 hover:bg-sky-500/30 rounded-lg cursor-pointer"
+                    >
+                      {erpDriveBusy ? 'Enviando Drive...' : 'Salvar Proposta no Drive'}
+                    </button>
+                  )}
+                </div>
+              </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-white/10 text-slate-400">
-                  <tr>
-                    <th className="py-2 pr-3">Tipo</th>
-                    <th className="py-2 pr-3">Descrição</th>
-                    <th className="py-2 pr-3">Parceiro</th>
-                    <th className="py-2 pr-3">Valor</th>
-                    <th className="py-2">Prova VUC</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/8">
-                  {erpRecords.map((r) => (
-                    <tr key={r.id}>
-                      <td className="py-2 pr-3 font-mono-tabular uppercase text-sky-300">{r.kind}</td>
-                      <td className="py-2 pr-3 text-slate-100">{r.title}</td>
-                      <td className="py-2 pr-3 text-slate-400">{r.partyName}</td>
-                      <td className="py-2 pr-3 font-mono-tabular text-emerald-300">
-                        R$ {r.amountBrl.toLocaleString('pt-BR')}
-                      </td>
-                      <td className="py-2 font-mono-tabular text-[11px] text-slate-400">
-                        {r.vucHash.slice(0, 18)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {erpActionStatus && (
+                <div className="p-2.5 bg-emerald-500/10 border border-emerald-400/40 rounded-lg text-xs text-emerald-200">
+                  {erpActionStatus}
+                </div>
+              )}
+
+              {liveErpSnapshot?.pricingAndRoi.frostbiteNotice && (
+                <div className="p-3 bg-amber-500/10 border border-amber-400/40 rounded-lg text-xs text-amber-200">
+                  <strong>Aviso Pré-Silício FrostbiteEngine:</strong>{' '}
+                  {liveErpSnapshot.pricingAndRoi.frostbiteNotice}
+                </div>
+              )}
+
+              {/* Internal Open-Source ERP Sub-Module Switcher */}
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { id: 'overview', label: 'Entrada & Sincronia CAD/CAE/CAM' },
+                    { id: 'bom', label: 'BOM, Insumos & Roteiro CAM' },
+                    { id: 'finance', label: 'Preços, Impostos, Logística & ROI' },
+                    { id: 'crm', label: 'BI & CRM (Potenciais Clientes)' },
+                    { id: 'ledger', label: `Lançamentos SQLite (${erpRecords.length})` },
+                  ] as const
+                ).map((sec) => (
+                  <button
+                    key={sec.id}
+                    type="button"
+                    onClick={() => setErpSection(sec.id)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border cursor-pointer transition-colors ${
+                      erpSection === sec.id
+                        ? 'border-sky-400 bg-sky-500/20 text-sky-200'
+                        : 'border-white/10 bg-[#0c1017] text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {sec.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Top KPI Strip */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                  <div className="text-slate-500">Custo Unit. Direto</div>
+                  <div className="font-mono-tabular text-base font-bold text-slate-100">
+                    R${' '}
+                    {(liveErpSnapshot?.pricingAndRoi.totalCostUnitBrl ?? 0).toLocaleString('pt-BR')}
+                  </div>
+                </div>
+                <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                  <div className="text-slate-500">Preço Final Parametrix</div>
+                  <div className="font-mono-tabular text-base font-bold text-sky-300">
+                    R${' '}
+                    {(liveErpSnapshot?.pricingAndRoi.parametrixPriceUnitBrl ?? 0).toLocaleString(
+                      'pt-BR'
+                    )}
+                    /un
+                  </div>
+                </div>
+                <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                  <div className="text-slate-500">Preço Mercado Trad.</div>
+                  <div className="font-mono-tabular text-base font-bold text-amber-300">
+                    {liveErpSnapshot?.pricingAndRoi.marketPriceUnitBrl !== null &&
+                    liveErpSnapshot?.pricingAndRoi.marketPriceUnitBrl !== undefined
+                      ? `R$ ${liveErpSnapshot.pricingAndRoi.marketPriceUnitBrl.toLocaleString('pt-BR')}`
+                      : 'Interno 7nm'}
+                  </div>
+                </div>
+                <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                  <div className="text-slate-500">ROI Projetado / Econ.</div>
+                  <div className="font-mono-tabular text-base font-bold text-emerald-300">
+                    {liveErpSnapshot?.pricingAndRoi.roiPct !== null &&
+                    liveErpSnapshot?.pricingAndRoi.roiPct !== undefined
+                      ? `ROI ${liveErpSnapshot.pricingAndRoi.roiPct}% (-${liveErpSnapshot.pricingAndRoi.savingsVsMarketPct}%)`
+                      : 'Sem ROI público'}
+                  </div>
+                </div>
+                <div className="p-3 bg-[#0c1017] border border-white/8 rounded-lg">
+                  <div className="text-slate-500">Pipeline SQLite + BI</div>
+                  <div className="font-mono-tabular text-base font-bold text-emerald-300">
+                    R${' '}
+                    {(
+                      erpStats.totalPipelineBrl +
+                      (liveErpSnapshot?.biSummary.weightedCrmValueBrl ?? 0)
+                    ).toLocaleString('pt-BR')}
+                  </div>
+                </div>
+              </div>
+
+              {/* Parameter Interactive Bar (always accessible to re-compute in real time) */}
+              {liveErpSnapshot && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-3 bg-[#0c1017] border border-white/8 rounded-xl text-xs">
+                  <div>
+                    <div className="flex justify-between text-slate-400 mb-1">
+                      <span>Tamanho do Lote</span>
+                      <span className="font-mono-tabular text-slate-100">{erpBatchQty} un</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="cad-slider w-full"
+                      min={1}
+                      max={100}
+                      step={1}
+                      value={erpBatchQty}
+                      onChange={(e) => onChangeErpBatchQty?.(parseInt(e.target.value, 10))}
+                    />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-slate-400 mb-1">
+                      <span>Margem Líquida Alvo</span>
+                      <span className="font-mono-tabular text-emerald-300">{erpMarginPct}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="cad-slider w-full"
+                      min={10}
+                      max={55}
+                      step={1}
+                      value={erpMarginPct}
+                      onChange={(e) => onChangeErpMarginPct?.(parseInt(e.target.value, 10))}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1">Regime Tributário (BR)</label>
+                    <select
+                      value={erpTaxRegime}
+                      onChange={(e) => onChangeErpTaxRegime?.(e.target.value as ErpTaxRegime)}
+                      className="w-full px-2.5 py-1.5 text-xs bg-[#111620] border border-white/12 rounded-lg text-slate-100"
+                    >
+                      <option value="simples">Simples Nacional (Anexo II)</option>
+                      <option value="presumido">Lucro Presumido</option>
+                      <option value="real">Lucro Real (Créditos)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-slate-400 mb-1">
+                      <span>Frete Multimodal ({(erpLogisticsModal ?? routeModal).toUpperCase()})</span>
+                      <span className="font-mono-tabular text-sky-300">{erpDistanceKm} km</span>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <select
+                        value={erpLogisticsModal ?? routeModal}
+                        onChange={(e) => {
+                          const m = e.target.value as LogisticsModal;
+                          setRouteModal(m);
+                          onChangeErpLogisticsModal?.(m);
+                        }}
+                        className="px-2 py-1 text-xs bg-[#111620] border border-white/12 rounded-lg text-slate-100"
+                      >
+                        <option value="road">Rodo</option>
+                        <option value="rail">Ferro</option>
+                        <option value="air">Aéreo</option>
+                        <option value="river">Fluvial</option>
+                      </select>
+                      <input
+                        type="range"
+                        className="cad-slider flex-1"
+                        min={20}
+                        max={2500}
+                        step={20}
+                        value={erpDistanceKm}
+                        onChange={(e) => onChangeErpDistanceKm?.(parseInt(e.target.value, 10))}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-view 1: Real-Time CAD/CAE/CAM Correlation */}
+              {erpSection === 'overview' && liveErpSnapshot && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {liveErpSnapshot.correlatedAreas.map((corr) => (
+                      <div
+                        key={corr.area}
+                        className="p-3.5 bg-[#0c1017] border border-white/10 rounded-xl space-y-1.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between font-mono-tabular">
+                          <span className="font-bold text-sky-300">
+                            {corr.area} → {corr.erpModule}
+                          </span>
+                          <span
+                            className={
+                              corr.status === 'sincronizado'
+                                ? 'text-emerald-400'
+                                : 'text-amber-300'
+                            }
+                          >
+                            {corr.status.toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="font-semibold text-slate-100">{corr.headline}</div>
+                        <div className="text-[11px] font-mono-tabular text-slate-400">
+                          {corr.metricsSummary}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs p-3 bg-[#090d14] border border-white/8 rounded-xl">
+                    <div>
+                      <div className="text-slate-500">Lote Parametrix Total</div>
+                      <div className="font-mono-tabular font-bold text-sky-300">
+                        R${' '}
+                        {liveErpSnapshot.pricingAndRoi.parametrixBatchTotalBrl.toLocaleString(
+                          'pt-BR'
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Carga Tributária ({liveErpSnapshot.taxBreakdown.effectiveRatePct}%)</div>
+                      <div className="font-mono-tabular font-bold text-amber-300">
+                        R$ {liveErpSnapshot.taxBreakdown.totalTaxBrl.toLocaleString('pt-BR')}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Frete ({liveErpSnapshot.logistics.cargoMassKg} kg)</div>
+                      <div className="font-mono-tabular font-bold text-slate-100">
+                        R$ {liveErpSnapshot.logistics.totalFreightBrl.toLocaleString('pt-BR')}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Prontidão Técnica BI</div>
+                      <div className="font-mono-tabular font-bold text-emerald-300">
+                        {liveErpSnapshot.biSummary.techReadinessPct}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-view 2: BOM, Insumos & Roteiro CAM */}
+              {erpSection === 'bom' && liveErpSnapshot && (
+                <div className="space-y-3">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-b border-white/10 text-slate-400">
+                        <tr>
+                          <th className="py-2 pr-3">SKU</th>
+                          <th className="py-2 pr-3">Insumo / Recurso</th>
+                          <th className="py-2 pr-3">Origem</th>
+                          <th className="py-2 pr-3">Qtd Lote</th>
+                          <th className="py-2 pr-3">Unit.</th>
+                          <th className="py-2 text-right">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/8 font-mono-tabular">
+                        {liveErpSnapshot.bomLines.map((line) => (
+                          <tr key={line.sku}>
+                            <td className="py-2 pr-3 text-sky-300">{line.sku}</td>
+                            <td className="py-2 pr-3 font-sans text-slate-100">{line.name}</td>
+                            <td className="py-2 pr-3 text-slate-400">{line.sourceArea}</td>
+                            <td className="py-2 pr-3 text-slate-200">
+                              {line.quantity} {line.unit}
+                            </td>
+                            <td className="py-2 pr-3 text-slate-400">
+                              R$ {line.unitCostBrl.toLocaleString('pt-BR')}
+                            </td>
+                            <td
+                              className={`py-2 text-right font-semibold ${
+                                line.subtotalBrl < 0 ? 'text-emerald-400' : 'text-slate-100'
+                              }`}
+                            >
+                              R$ {line.subtotalBrl.toLocaleString('pt-BR')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="p-3 bg-[#0c1017] border border-white/10 rounded-lg grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono-tabular">
+                    <div>
+                      <div className="text-slate-500">Máquina CAM</div>
+                      <div className="text-slate-100 font-semibold">
+                        {liveErpSnapshot.routingCost.machineType} (R${' '}
+                        {liveErpSnapshot.routingCost.machineHourlyRateBrl}/h)
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Ciclo / Setup Lote</div>
+                      <div className="text-slate-100">
+                        {liveErpSnapshot.routingCost.cycleMinutesPerUnit} min/un · Setup R${' '}
+                        {liveErpSnapshot.routingCost.setupCostBatchBrl}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Metrologia + VUC</div>
+                      <div className="text-sky-300">
+                        R$ {liveErpSnapshot.routingCost.qaAndVucFeeBatchBrl}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Total Operação CAM</div>
+                      <div className="text-emerald-300 font-bold">
+                        R${' '}
+                        {liveErpSnapshot.routingCost.machiningTotalBatchBrl.toLocaleString('pt-BR')}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-view 3: Pricing, Brazilian Taxes, Logistics & ROI */}
+              {erpSection === 'finance' && liveErpSnapshot && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="p-3.5 bg-[#0c1017] border border-white/10 rounded-xl space-y-2">
+                    <div className="font-semibold text-slate-100">
+                      Composição Tributária ({liveErpSnapshot.taxBreakdown.regimeLabel})
+                    </div>
+                    <div className="space-y-1 font-mono-tabular">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">ICMS Estadual</span>
+                        <span>R$ {liveErpSnapshot.taxBreakdown.icmsBrl.toLocaleString('pt-BR')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">IPI Industrial</span>
+                        <span>R$ {liveErpSnapshot.taxBreakdown.ipiBrl.toLocaleString('pt-BR')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">PIS / COFINS / DAS</span>
+                        <span>
+                          R$ {liveErpSnapshot.taxBreakdown.pisCofinsOrDasBrl.toLocaleString('pt-BR')}
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-t border-white/10 pt-1 text-amber-300 font-bold">
+                        <span>
+                          Total Impostos ({liveErpSnapshot.taxBreakdown.effectiveRatePct}%)
+                        </span>
+                        <span>
+                          R$ {liveErpSnapshot.taxBreakdown.totalTaxBrl.toLocaleString('pt-BR')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-[#0c1017] border border-white/10 rounded-xl space-y-2">
+                    <div className="font-semibold text-slate-100">
+                      Logística Multimodal & Retorno Financeiro
+                    </div>
+                    <div className="space-y-1 font-mono-tabular">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Modal & Rota</span>
+                        <span className="text-sky-300">
+                          {liveErpSnapshot.logistics.modal.toUpperCase()} ·{' '}
+                          {liveErpSnapshot.logistics.distanceKm} km (ETA{' '}
+                          {liveErpSnapshot.logistics.estimatedHours} h)
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Frete + CO₂ Logístico</span>
+                        <span>
+                          R$ {liveErpSnapshot.logistics.totalFreightBrl.toLocaleString('pt-BR')} ·{' '}
+                          {liveErpSnapshot.logistics.co2Kg} kgCO₂
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Payback Lote / Economia</span>
+                        <span className="text-emerald-300">
+                          {liveErpSnapshot.pricingAndRoi.paybackBatches !== null
+                            ? `${liveErpSnapshot.pricingAndRoi.paybackBatches} lote(s) · -${liveErpSnapshot.pricingAndRoi.savingsVsMarketPct}% vs mercado`
+                            : 'Pré-silício interno'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-t border-white/10 pt-1 text-sky-300 font-bold">
+                        <span>Total Lote ({liveErpSnapshot.pricingAndRoi.batchQty} un)</span>
+                        <span>
+                          R${' '}
+                          {liveErpSnapshot.pricingAndRoi.parametrixBatchTotalBrl.toLocaleString(
+                            'pt-BR'
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-view 4: BI & CRM Potential Customers */}
+              {erpSection === 'crm' && liveErpSnapshot && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-300 font-semibold">
+                      BI & CRM — Potenciais Compradores / Segmentos Qualificados em Tempo Real
+                    </span>
+                    <span className="font-mono-tabular text-emerald-300">
+                      Valor Ponderado CRM: R${' '}
+                      {liveErpSnapshot.biSummary.weightedCrmValueBrl.toLocaleString('pt-BR')}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {liveErpSnapshot.crmLeads.map((lead) => (
+                      <div
+                        key={lead.id}
+                        className="p-3.5 bg-[#0c1017] border border-white/10 rounded-xl space-y-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between gap-2 font-mono-tabular">
+                          <span className="text-sky-300 uppercase">{lead.stage}</span>
+                          <span className="text-emerald-300 font-semibold">
+                            Fit {lead.qualificationScorePct}% · {lead.estimatedOrderQty} un
+                          </span>
+                        </div>
+                        <div className="font-semibold text-slate-100">{lead.companySegment}</div>
+                        <div className="text-[11px] text-slate-400">
+                          Decisor: {lead.contactRole} · Ticket est.{' '}
+                          <strong className="text-slate-200 font-mono-tabular">
+                            R$ {lead.estimatedTicketBrl.toLocaleString('pt-BR')}
+                          </strong>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">{lead.rationale}</p>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await onAddErpRecord({
+                              kind: 'lead',
+                              title: `CRM ${lead.companySegment} · ${liveErpSnapshot.partName}`,
+                              status: 'aberto',
+                              partyName: lead.contactRole,
+                              segment: lead.vertical,
+                              amountBrl: lead.estimatedTicketBrl,
+                              modal: liveErpSnapshot.logistics.modal,
+                              ownerRole: profile.role,
+                            });
+                            setErpActionStatus(
+                              `Lead CRM "${lead.companySegment}" registrado no SQLite.`
+                            );
+                          }}
+                          className="px-2.5 py-1 text-[11px] font-semibold bg-sky-500/20 border border-sky-400/50 text-sky-200 hover:bg-sky-500/30 rounded-md cursor-pointer"
+                        >
+                          Converter Lead → SQLite CRM
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-view 5: Persisted SQLite ERP/CRM Ledger */}
+              {erpSection === 'ledger' && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                    <select
+                      value={erpKind}
+                      onChange={(e) => setErpKind(e.target.value as ErpCrmRecord['kind'])}
+                      className="px-2.5 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100"
+                    >
+                      <option value="order">Ordem CAM</option>
+                      <option value="lead">Lead CRM</option>
+                      <option value="inventory">Insumo / Estoque</option>
+                      <option value="shipment">Frete Hub</option>
+                      <option value="invoice">Fatura VUC</option>
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="Descrição da ordem / insumo..."
+                      value={erpTitle}
+                      onChange={(e) => setErpTitle(e.target.value)}
+                      className="md:col-span-2 px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Parceiro / Cliente..."
+                      value={erpParty}
+                      onChange={(e) => setErpParty(e.target.value)}
+                      className="px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!erpTitle.trim()) return;
+                        await onAddErpRecord({
+                          kind: erpKind,
+                          title: erpTitle.trim(),
+                          status: 'aberto',
+                          partyName: erpParty.trim() || profile.displayName,
+                          segment: liveErpSnapshot?.segment ?? 'industrial-cnc',
+                          amountBrl: erpAmount,
+                          modal: routeModal,
+                          ownerRole: profile.role,
+                        });
+                        setErpTitle('');
+                        setErpParty('');
+                        setErpAmount((v) => v + 500);
+                      }}
+                      className="px-3 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg cursor-pointer"
+                    >
+                      + Lançar no SQLite
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-b border-white/10 text-slate-400">
+                        <tr>
+                          <th className="py-2 pr-3">Tipo</th>
+                          <th className="py-2 pr-3">Descrição</th>
+                          <th className="py-2 pr-3">Parceiro</th>
+                          <th className="py-2 pr-3">Valor</th>
+                          <th className="py-2">Prova VUC</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/8">
+                        {erpRecords.map((r) => (
+                          <tr key={r.id}>
+                            <td className="py-2 pr-3 font-mono-tabular uppercase text-sky-300">
+                              {r.kind}
+                            </td>
+                            <td className="py-2 pr-3 text-slate-100">{r.title}</td>
+                            <td className="py-2 pr-3 text-slate-400">{r.partyName}</td>
+                            <td className="py-2 pr-3 font-mono-tabular text-emerald-300">
+                              R$ {r.amountBrl.toLocaleString('pt-BR')}
+                            </td>
+                            <td className="py-2 font-mono-tabular text-[11px] text-slate-400">
+                              {r.vucHash.slice(0, 18)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

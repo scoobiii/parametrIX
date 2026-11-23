@@ -46,6 +46,8 @@ export default defineConfig({
         'src/kernel/agentProvenanceHeader.ts',
         'src/kernel/sessionPointerRecorder.ts',
         'src/kernel/realMachineConnector.ts',
+        'src/kernel/libraryCatalog.ts',
+        'src/kernel/openErpEngine.ts',
         'src/server/hermesBridge.ts',
         'src/server/oauthAuthHandler.ts',
         'src/server/projectWorkspaceManager.ts',

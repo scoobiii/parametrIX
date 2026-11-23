@@ -3077,6 +3077,15 @@ ${ragBlock}`;
       if (Array.isArray(req.body?.ragDocs)) {
         setRegisteredRagDocs(req.body.ragDocs);
       }
+      const rawSessionToken = extractSessionTokenFromHeaders(
+        req.headers.authorization,
+        req.headers.cookie
+      );
+      const sessionClaims = rawSessionToken ? verifySessionToken(rawSessionToken) : null;
+      const googleUserEmail =
+        typeof req.body?.googleUserEmail === 'string' && req.body.googleUserEmail.trim()
+          ? req.body.googleUserEmail.trim()
+          : sessionClaims?.email ?? null;
       const result = await executeHermesCompactSearch({
         query: queryText,
         dynamicDocs: getRegisteredRagDocs(),
@@ -3088,8 +3097,17 @@ ${ragBlock}`;
         vucId: result.vucCertificate.vuc_id,
         webStatus: result.webStatus,
         specialistId: result.specialistProfile.id,
+        sessionEmail: googleUserEmail,
+        googleDriveActive: Boolean(req.body?.googleDriveActive),
       });
-      return res.json(result);
+      return res.json({
+        ...result,
+        sessionContext: {
+          email: googleUserEmail,
+          provider: sessionClaims?.provider ?? (googleUserEmail ? 'google' : 'local'),
+          googleDriveActive: Boolean(req.body?.googleDriveActive),
+        },
+      });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -3101,6 +3119,15 @@ ${ragBlock}`;
       if (!rawUrl) {
         return res.status(400).json({ error: 'Campo "url" é obrigatório.' });
       }
+      const rawSessionToken = extractSessionTokenFromHeaders(
+        req.headers.authorization,
+        req.headers.cookie
+      );
+      const sessionClaims = rawSessionToken ? verifySessionToken(rawSessionToken) : null;
+      const googleUserEmail =
+        typeof req.body?.googleUserEmail === 'string' && req.body.googleUserEmail.trim()
+          ? req.body.googleUserEmail.trim()
+          : sessionClaims?.email ?? null;
       const inspection = await inspectGrabCadOrCadUrl({ url: rawUrl });
       if (inspection.status === 'invalid-url') {
         return res.status(400).json({ error: inspection.diagnosticNote, inspection });
@@ -3146,6 +3173,7 @@ ${ragBlock}`;
           status: inspection.status,
           downloaded: Boolean(downloadedFile),
           formats: inspection.detectedFormats,
+          sessionEmail: googleUserEmail,
         }
       );
 

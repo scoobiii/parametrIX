@@ -3,6 +3,7 @@ import {
   Bot,
   ChevronDown,
   ChevronUp,
+  Cloud,
   Cpu,
   Eye,
   KeyRound,
@@ -16,8 +17,11 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { AGENT_PROVIDER_CATALOG } from '../kernel/llmBootstrap';
+import { listDriveCadFiles } from '../services/googleDriveProjects';
 import type {
   AgentProviderId,
+  EngineeringArea,
+  GoogleDriveFolderFile,
   LocalLlmRecommendation,
   McpEyeEvent,
   SystemResourceSnapshot,
@@ -51,6 +55,11 @@ interface AgentVoiceCommandBarProps {
   selectedAgentId: AgentProviderId;
   onSelectAgent: (id: AgentProviderId) => void;
   offlineMode?: boolean;
+  googleUserEmail?: string | null;
+  googleAccessToken?: string | null;
+  sessionToken?: string | null;
+  onConnectGoogleDrive?: () => Promise<string | null | void>;
+  onOpenDriveMatch?: (file: GoogleDriveFolderFile) => Promise<void>;
   systemResources: SystemResourceSnapshot | null;
   localLlmRec: LocalLlmRecommendation | null;
   localQwenStatus?: {
@@ -63,8 +72,13 @@ interface AgentVoiceCommandBarProps {
   mcpEyeEvents: McpEyeEvent[];
   onSendAgentPrompt: (prompt: string, externalEndpoint: string, modelId?: string) => Promise<string>;
   onVoiceTranscript: (transcript: string) => VoiceActionIntent;
-  onOpenWizard: () => void;
+  activeArea: EngineeringArea;
+  onOpenWizard: (area: EngineeringArea) => void;
+  onResetCadArea: () => void;
+  onResetCaeArea: () => void;
   onRestartCam: () => void;
+  cadResetCount: number;
+  caeResetCount: number;
   camRestartCount: number;
   lastVoiceStatus: string | null;
 }
@@ -73,6 +87,11 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
   selectedAgentId,
   onSelectAgent,
   offlineMode = false,
+  googleUserEmail = null,
+  googleAccessToken = null,
+  sessionToken = null,
+  onConnectGoogleDrive,
+  onOpenDriveMatch,
   systemResources,
   localLlmRec,
   localQwenStatus,
@@ -80,8 +99,13 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
   mcpEyeEvents,
   onSendAgentPrompt,
   onVoiceTranscript,
+  activeArea,
   onOpenWizard,
+  onResetCadArea,
+  onResetCaeArea,
   onRestartCam,
+  cadResetCount,
+  caeResetCount,
   camRestartCount,
   lastVoiceStatus,
 }) => {
@@ -94,6 +118,8 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
   const [agentReply, setAgentReply] = useState<string | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
   const [ragSyncBusy, setRagSyncBusy] = useState(false);
+  const [driveSearchHits, setDriveSearchHits] = useState<GoogleDriveFolderFile[]>([]);
+  const [driveOpeningId, setDriveOpeningId] = useState<string | null>(null);
   const [agentCredentials, setAgentCredentials] = useState<
     Record<string, { loginEmail: string; endpointUrl: string }>
   >({});
@@ -190,29 +216,50 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
 
   const handleSearchHermes = async (rawQuery?: string) => {
     const query = (rawQuery ?? promptDraft).trim() || 'status cam qwen 0.5b vuc';
+    setBarExpanded(true);
     setAgentBusy(true);
     try {
-      const resp = await fetch('/api/hermes/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query,
-          includeWeb: !offlineMode || /https?:\/\/|grabcad/i.test(query),
-          maxResults: 4,
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionToken) {
+        headers.Authorization = `Bearer ${sessionToken}`;
+      }
+      const [resp, driveMatches] = await Promise.all([
+        fetch('/api/hermes/search', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+          body: JSON.stringify({
+            query,
+            includeWeb: !offlineMode || /https?:\/\/|grabcad/i.test(query),
+            maxResults: 4,
+            googleUserEmail: googleUserEmail || undefined,
+            googleDriveActive: Boolean(googleAccessToken),
+          }),
         }),
-      });
+        googleAccessToken
+          ? listDriveCadFiles(googleAccessToken, query).catch(() => [] as GoogleDriveFolderFile[])
+          : Promise.resolve([] as GoogleDriveFolderFile[]),
+      ]);
+      setDriveSearchHits(driveMatches.slice(0, 5));
       const data = (await resp.json()) as {
         compactSummaryText?: string;
         specialistProfile?: { title?: string; modelVariant?: string };
         vucCertificate?: { vuc_id?: string };
+        sessionContext?: { email?: string | null; googleDriveActive?: boolean };
         error?: string;
       };
+      const sessionSuffix = data.sessionContext?.email
+        ? ` · Sessão: ${data.sessionContext.email}`
+        : '';
+      const driveSuffix =
+        driveMatches.length > 0 ? ` · ${driveMatches.length} arquivo(s) no seu Google Drive` : '';
       const summary = data.compactSummaryText
-        ? `[Hermes Search · ${data.specialistProfile?.title ?? 'Qwen 0.5B RT'} · VUC ${data.vucCertificate?.vuc_id ?? ''}] ${data.compactSummaryText.replace(/\n+/g, ' | ')}`
+        ? `[Hermes Search · ${data.specialistProfile?.title ?? 'Qwen 0.5B RT'} · VUC ${data.vucCertificate?.vuc_id ?? ''}${sessionSuffix}${driveSuffix}] ${data.compactSummaryText.replace(/\n+/g, ' | ')}`
         : data.error || 'Busca Hermes executada no RAG local.';
       setAgentReply(summary);
       speakFeedback(summary.slice(0, 220));
     } catch {
+      setDriveSearchHits([]);
       setAgentReply('Busca Hermes indisponível no momento; usando estado local do processo.');
     } finally {
       setAgentBusy(false);
@@ -282,6 +329,33 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
             </div>
           )}
 
+          {googleUserEmail && (
+            <div
+              className={`flex items-center gap-1.5 px-2 py-1 border rounded text-[11px] font-mono-tabular ${
+                googleAccessToken
+                  ? 'border-sky-400/45 bg-sky-500/15 text-sky-200'
+                  : 'border-amber-400/35 bg-amber-500/10 text-amber-200'
+              }`}
+              title={`Sessão Google ativa: ${googleUserEmail}${googleAccessToken ? ' (Google Drive OAuth ativo)' : ' (Autorize token Drive para buscar arquivos CAD no Meu Drive)'}`}
+            >
+              <Cloud className="w-3 h-3 shrink-0" />
+              <span className="max-w-[140px] sm:max-w-[200px] truncate">{googleUserEmail}</span>
+              {googleAccessToken ? (
+                <span className="text-[10px] text-emerald-300 font-semibold">Drive OK</span>
+              ) : (
+                onConnectGoogleDrive && (
+                  <button
+                    type="button"
+                    onClick={() => void onConnectGoogleDrive()}
+                    className="px-1.5 py-0.5 text-[10px] font-semibold bg-sky-500 text-slate-950 rounded hover:bg-sky-400 cursor-pointer"
+                  >
+                    Ativar Drive
+                  </button>
+                )
+              )}
+            </div>
+          )}
+
           {localLlmRec && systemResources && (
             <div
               className="hidden xl:flex items-center gap-1.5 px-2 py-1 border border-emerald-500/25 bg-emerald-500/5 rounded text-[11px] font-mono-tabular text-emerald-300"
@@ -343,22 +417,51 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
 
           <button
             type="button"
-            onClick={onOpenWizard}
+            onClick={() => onOpenWizard(activeArea)}
             className="px-2.5 py-1 text-[11px] font-semibold rounded border border-sky-400/50 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 flex items-center gap-1 cursor-pointer"
+            title={`Abrir assistente de novo projeto específico para a área ${activeArea.toUpperCase()}`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Novo do Zero</span>
+            <span className="hidden md:inline">
+              {activeArea === 'cad'
+                ? 'Novo CAD'
+                : activeArea === 'cae'
+                  ? 'Novo CAE'
+                  : 'Novo CAM'}
+            </span>
           </button>
 
           <button
             type="button"
-            onClick={onRestartCam}
+            onClick={() => {
+              if (activeArea === 'cad') {
+                onResetCadArea();
+              } else if (activeArea === 'cae') {
+                onResetCaeArea();
+              } else {
+                onRestartCam();
+              }
+            }}
             className="px-2.5 py-1 text-[11px] font-semibold rounded border border-amber-400/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 flex items-center gap-1 cursor-pointer font-mono-tabular"
-            title="Reiniciar processo produtivo CAM do zero com prova VUC"
+            title={
+              activeArea === 'cad'
+                ? 'Reiniciar apenas geometria CAD e features (sem zerar CAM/CAE)'
+                : activeArea === 'cae'
+                  ? 'Reiniciar apenas estudo estrutural CAE/FEA/GD&T com prova VUC'
+                  : 'Reiniciar processo produtivo CAM do zero com prova VUC'
+            }
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Reiniciar CAM</span>
-            {camRestartCount > 0 && <span>#{camRestartCount}</span>}
+            <span className="hidden md:inline">
+              {activeArea === 'cad'
+                ? 'Reiniciar CAD'
+                : activeArea === 'cae'
+                  ? 'Reiniciar CAE'
+                  : 'Reiniciar CAM'}
+            </span>
+            {activeArea === 'cad' && cadResetCount > 0 && <span>#{cadResetCount}</span>}
+            {activeArea === 'cae' && caeResetCount > 0 && <span>#{caeResetCount}</span>}
+            {activeArea === 'cam' && camRestartCount > 0 && <span>#{camRestartCount}</span>}
           </button>
 
           <button
@@ -453,6 +556,37 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
               >
                 limpar
               </button>
+            </div>
+          )}
+          {driveSearchHits.length > 0 && (
+            <div className="p-2 bg-[#090c11] border border-sky-400/25 rounded flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="text-sky-300 font-semibold flex items-center gap-1 mr-1">
+                <Cloud className="w-3 h-3" />
+                Google Drive ({googleUserEmail || 'sessão ativa'}):
+              </span>
+              {driveSearchHits.map((df) => (
+                <button
+                  key={df.id}
+                  type="button"
+                  disabled={driveOpeningId === df.id}
+                  onClick={() => {
+                    if (!onOpenDriveMatch) return;
+                    setDriveOpeningId(df.id);
+                    void onOpenDriveMatch(df)
+                      .then(() => {
+                        setAgentReply(`Arquivo "${df.name}" importado da sessão Google Drive ativa.`);
+                      })
+                      .catch((err) => {
+                        setAgentReply(err instanceof Error ? err.message : String(err));
+                      })
+                      .finally(() => setDriveOpeningId(null));
+                  }}
+                  className="px-2 py-0.5 bg-[#141a24] border border-sky-400/40 text-sky-200 hover:bg-sky-500/20 rounded font-mono-tabular text-[10px] cursor-pointer disabled:opacity-50"
+                  title={`Importar ${df.name} do Google Drive para a Viewport 3D`}
+                >
+                  {driveOpeningId === df.id ? 'Importando...' : `Importar 3D: ${df.name}`}
+                </button>
+              ))}
             </div>
           )}
         </div>

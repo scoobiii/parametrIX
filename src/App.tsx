@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BookOpen,
   Boxes,
   Cpu,
   ExternalLink,
@@ -32,12 +33,13 @@ const EcosystemHubPanel = lazy(() => import('./components/EcosystemHubPanel').th
 import type { RemoteMachineConfigInput } from './components/EcosystemHubPanel';
 const FrostbiteRackDashboard = lazy(() => import('./components/FrostbiteRackDashboard').then(m => ({ default: m.FrostbiteRackDashboard })));
 const GrasshopperCanvas = lazy(() => import('./components/GrasshopperCanvas').then(m => ({ default: m.GrasshopperCanvas })));
+const LibraryCatalogPanel = lazy(() => import('./components/LibraryCatalogPanel').then(m => ({ default: m.LibraryCatalogPanel })));
 const McpToolsPanel = lazy(() => import('./components/McpToolsPanel').then(m => ({ default: m.McpToolsPanel })));
 import { OfflineAuthModal } from './components/OfflineAuthModal';
 import { OnboardingHelpView } from './components/OnboardingHelpView';
 import { ParametricSidebar } from './components/ParametricSidebar';
 const PluginsSdkPanel = lazy(() => import('./components/PluginsSdkPanel').then(m => ({ default: m.PluginsSdkPanel })));
-import { ProjectWizardModal } from './components/ProjectWizardModal';
+import { type AreaWizardSubmission, ProjectWizardModal } from './components/ProjectWizardModal';
 import { ScoobiiiVucModal } from './components/ScoobiiiVucModal';
 const Viewport3D = lazy(() => import('./components/Viewport3D').then(m => ({ default: m.Viewport3D })));
 const SustainabilityDashboard = lazy(() => import('./components/SustainabilityDashboard').then(m => ({ default: m.SustainabilityDashboard })));
@@ -100,10 +102,20 @@ import {
 } from './kernel/structuralFea';
 import { parseVoiceCommand } from './kernel/voiceCommandParser';
 import {
+  type ErpTaxRegime,
+  type OpenErpWorkspaceSnapshot,
+  buildLiveErpWorkspaceSnapshot,
+} from './kernel/openErpEngine';
+import {
   type FullWorkspacePreset,
   WORKSPACE_PROJECT_PRESETS,
   parseUploadedCadOrImageFile,
 } from './kernel/workspacePresets';
+import {
+  downloadDriveFileContent,
+  ensureUserDriveProjectFolder,
+  saveFileToDriveFolder,
+} from './services/googleDriveProjects';
 import {
   type SavedCadProject,
   deleteUserCadProject,
@@ -130,10 +142,12 @@ import type {
   ControlPoint4D,
   EcosystemChatMessage,
   EcosystemRole,
+  EngineeringArea,
   ErpCrmRecord,
   FeaComparisonReport,
   FeaResult,
   FeaSettings,
+  GoogleDriveFolderFile,
   GraphNode,
   GraphWire,
   ImportedCadModel,
@@ -215,6 +229,15 @@ export default function App() {
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [offlineAuthOpen, setOfflineAuthOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardArea, setWizardArea] = useState<EngineeringArea>('cad');
+  const [cadResetCount, setCadResetCount] = useState(0);
+  const [caeResetCount, setCaeResetCount] = useState(0);
+  const [activePresetId, setActivePresetId] = useState<string | undefined>(undefined);
+  const [erpBatchQty, setErpBatchQty] = useState<number>(10);
+  const [erpMarginPct, setErpMarginPct] = useState<number>(28);
+  const [erpTaxRegime, setErpTaxRegime] = useState<ErpTaxRegime>('presumido');
+  const [erpLogisticsModal, setErpLogisticsModal] = useState<LogisticsModal>('road');
+  const [erpDistanceKm, setErpDistanceKm] = useState<number>(220);
   const [scoobiiiModalOpen, setScoobiiiModalOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [mobileCamPane, setMobileCamPane] = useState<'viewport' | 'panel'>('viewport');
@@ -744,6 +767,66 @@ export default function App() {
     [meshData, importedModel, display.materialFinish, effectiveCamSettings, toolpath, featureOps]
   );
 
+  const activeEngineeringArea: EngineeringArea =
+    activeTab === 'cam' || activeTab === 'frostbite'
+      ? 'cam'
+      : activeTab === 'sustainability' || (activeTab === 'viewport' && display.mode === 'stress-heatmap')
+        ? 'cae'
+        : 'cad';
+
+  const liveErpSnapshot = useMemo<OpenErpWorkspaceSnapshot>(
+    () =>
+      buildLiveErpWorkspaceSnapshot({
+        surface,
+        meshData,
+        importedModel,
+        featureOps,
+        materialFinish: display.materialFinish,
+        partProfile,
+        feaResult,
+        feaSettings,
+        layerComplianceReport,
+        carbonReport,
+        camSettings: effectiveCamSettings,
+        toolpath,
+        camServiceJobs,
+        remoteMachines,
+        batchQty: erpBatchQty,
+        targetMarginPct: erpMarginPct,
+        taxRegime: erpTaxRegime,
+        logisticsModal: erpLogisticsModal,
+        distanceKm: erpDistanceKm,
+        activeOperatorEmail: user?.email || sqliteProfile.email,
+        activeOperatorHandle: sqliteProfile.handleAt,
+        presetId: activePresetId,
+      }),
+    [
+      surface,
+      meshData,
+      importedModel,
+      featureOps,
+      display.materialFinish,
+      partProfile,
+      feaResult,
+      feaSettings,
+      layerComplianceReport,
+      carbonReport,
+      effectiveCamSettings,
+      toolpath,
+      camServiceJobs,
+      remoteMachines,
+      erpBatchQty,
+      erpMarginPct,
+      erpTaxRegime,
+      erpLogisticsModal,
+      erpDistanceKm,
+      user?.email,
+      sqliteProfile.email,
+      sqliteProfile.handleAt,
+      activePresetId,
+    ]
+  );
+
   const scoobiiiTelemetry = useMemo(() => {
     if (!scoobiiiModalOpen) return null;
     return buildScoobiiiFullTelemetry({
@@ -796,6 +879,7 @@ export default function App() {
   // Automatically opens the 3D Viewer & Editor, frames the geometry, and sets context!
   const handleLoadImportedModel = (model: ImportedCadModel | null) => {
     setImportedModel(model);
+    setActivePresetId(undefined);
     setPartProfileOverride({});
     setFeaBaseline(null);
     setFeaComparison(null);
@@ -851,6 +935,7 @@ export default function App() {
   };
 
   const handleApplyFullPreset = (preset: FullWorkspacePreset, openEditor = true) => {
+    setActivePresetId(preset.id);
     setDesignParams({ ...preset.designParams });
     setActiveSegment(preset.segment);
     setPartProfileOverride(preset.partProfileOverride ?? {});
@@ -1395,6 +1480,8 @@ export default function App() {
   const recordDeliverable = (d: Omit<SessionDeliverable, 'id' | 'timestamp'>) => {
     const nextItem: SessionDeliverable = {
       ...d,
+      filename: d.filename.slice(0, 160),
+      summary: d.summary.slice(0, 240),
       id: `deliv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       timestamp: new Date().toLocaleTimeString('pt-BR'),
     };
@@ -1625,6 +1712,84 @@ export default function App() {
     });
     recordSessionDiscreteAction('export-artifact', `Export ${name}`);
     return name;
+  };
+
+  const handleResetCadArea = () => {
+    setImportedModel(null);
+    setActivePresetId(undefined);
+    setFeatureOps([]);
+    setCpOverrides({});
+    setSelectedControlPoint(null);
+    setPartProfileOverride({});
+    setDisplay((d) => ({
+      ...d,
+      mode: 'component-pbr',
+      explodeFactor: 0,
+      assemblyRotationDeg: [0, 0, 0],
+      componentMaterials: {},
+      componentRotations: {},
+      isolationTarget: 'all',
+      selectedComponentId: null,
+      hiddenComponentIds: [],
+      fitViewTrigger: d.fitViewTrigger + 1,
+    }));
+    setCadResetCount((c) => c + 1);
+    setLastVoiceStatus(`Área CAD reiniciada (#${cadResetCount + 1}) para geometria paramétrica limpa.`);
+    recordSessionDiscreteAction('cad-reset', `Reinício CAD #${cadResetCount + 1}`);
+    pushMcpEyeEvent(
+      'cam-output',
+      'CAD.AreaReset',
+      `Área CAD "${partProfile.partName}" reiniciada isoladamente sem afetar fila CAM.`,
+      { partName: partProfile.partName, cadResetCount: cadResetCount + 1 }
+    );
+  };
+
+  const handleResetCaeArea = () => {
+    setFeaBaseline(null);
+    setFeaComparison(null);
+    setLayerToleranceOverrides({});
+    setFeaSettings({
+      loadNewtons: partProfile.safetyCriteria.recommendedLoadN,
+      supportMode: partProfile.safetyCriteria.supportMode,
+      loadPattern: partProfile.safetyCriteria.loadPattern,
+      targetSafetyFactor: partProfile.safetyCriteria.minSafetyFactor,
+    });
+    setDisplay((d) => ({
+      ...d,
+      mode: d.mode === 'stress-heatmap' ? 'component-pbr' : d.mode,
+      stressComparisonView: 'current',
+    }));
+    setCaeResetCount((c) => c + 1);
+    setLastVoiceStatus(`Área CAE / FEA reiniciada (#${caeResetCount + 1}) para os critérios da norma.`);
+    recordSessionDiscreteAction('cae-reset', `Reinício CAE #${caeResetCount + 1}`);
+    pushMcpEyeEvent(
+      'cam-output',
+      'CAE.AreaReset',
+      `Estudo CAE / Fadiga / GD&T reiniciado para baseline da norma ${partProfile.certifications.join(', ')}.`,
+      { caeResetCount: caeResetCount + 1, targetSafetyFactor: partProfile.safetyCriteria.minSafetyFactor }
+    );
+  };
+
+  const handleSaveErpSnapshotToDrive = async (snapshot: OpenErpWorkspaceSnapshot) => {
+    if (!googleAccessToken) {
+      throw new Error('Conecte o Google Drive na sessão ativa para exportar a cotação ERP.');
+    }
+    const slug = (user?.email?.split('@')[0] || sqliteProfile.email.split('@')[0] || 'operador').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const folder = await ensureUserDriveProjectFolder(googleAccessToken, slug);
+    const filename = `erp_open_${snapshot.partName.toLowerCase().replace(/[^a-z0-9_-]+/g, '_')}_${Date.now()}.parametrix-erp.json`;
+    await saveFileToDriveFolder(
+      googleAccessToken,
+      folder.folderId,
+      filename,
+      JSON.stringify(snapshot, null, 2),
+      'application/json'
+    );
+    recordDeliverable({
+      filename,
+      kind: 'REPORT',
+      summary: `Cotação ERP Open (${snapshot.pricingAndRoi.batchQty} un. · ROI ${(snapshot.pricingAndRoi.roiPct ?? 0).toFixed(1)}%) salva no Google Drive`,
+    });
+    setLastVoiceStatus(`Cotação ERP "${filename}" salva na pasta ${folder.folderName} do Google Drive.`);
   };
 
   const handleResetPartAndProduction = () => {
@@ -2212,6 +2377,34 @@ export default function App() {
   }, [backendProfile]);
 
   useEffect(() => {
+    if (!user?.email) return;
+    setSqliteProfile((prev) => {
+      const sameEmail = prev.email.toLowerCase() === user.email!.toLowerCase();
+      if (sameEmail && prev.provider === 'google' && !prev.offlineMode) return prev;
+      if (prev.id === 'local-default-op' || sameEmail) {
+        return {
+          ...buildUserProfileWithRole(
+            {
+              id: user.uid,
+              email: user.email!,
+              displayName: user.displayName || prev.displayName,
+              provider: 'google',
+              offlineMode: false,
+            },
+            prev.role,
+            prev.agentConfig
+          ),
+          handleAt: prev.handleAt,
+          phone: prev.phone,
+          address: prev.address,
+          computeSharePct: prev.computeSharePct,
+        };
+      }
+      return prev;
+    });
+  }, [user]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleBrowserOffline = () => {
       setSelectedAgentId('local-llm');
@@ -2316,6 +2509,7 @@ export default function App() {
     } else if (intent.action === 'open-tab' && intent.param) {
       handleTabSwitch(intent.param as WorkspaceTab);
     } else if (intent.action === 'start-wizard') {
+      setWizardArea(activeEngineeringArea);
       setWizardOpen(true);
     } else if (intent.action === 'run-fea') {
       handleRunFea(undefined, true);
@@ -2329,7 +2523,7 @@ export default function App() {
       const preset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === intent.param);
       if (preset) handleApplyFullPreset(preset, true);
     } else if (intent.action === 'reset-part') {
-      handleResetPartAndProduction();
+      handleResetCadArea();
     } else if (intent.action === 'rhino-command' && intent.param) {
       executeMcpToolCall(
         'cad_rhino_command',
@@ -2672,6 +2866,7 @@ export default function App() {
 
   const navItems: { id: WorkspaceTab; label: string }[] = [
     { id: 'onboarding', label: 'Início / Ajuda' },
+    { id: 'library', label: 'Lib / Biblioteca' },
     { id: 'viewport', label: 'Modelagem 3D' },
     { id: 'cam', label: 'CAM & Robô' },
     { id: 'frostbite', label: 'Frostbite 1MW' },
@@ -2821,6 +3016,34 @@ export default function App() {
         selectedAgentId={selectedAgentId}
         onSelectAgent={setSelectedAgentId}
         offlineMode={sqliteProfile.offlineMode}
+        googleUserEmail={
+          user?.email || (backendProfile?.provider === 'google' ? backendProfile.email : null)
+        }
+        googleAccessToken={googleAccessToken}
+        sessionToken={sessionToken}
+        onConnectGoogleDrive={connectGoogleDrive}
+        onOpenDriveMatch={async (driveFile: GoogleDriveFolderFile) => {
+          if (!googleAccessToken) return;
+          const { arrayBuffer, mimeType } = await downloadDriveFileContent(
+            googleAccessToken,
+            driveFile.id,
+            driveFile.name
+          );
+          if (driveFile.name.toLowerCase().endsWith('.parametrix.json')) {
+            const parsed = JSON.parse(new TextDecoder().decode(arrayBuffer)) as {
+              surfaceName?: string;
+              designParams?: ParametricDesignParams;
+              camSettings?: CamSettings;
+            };
+            if (parsed.designParams) setDesignParams(parsed.designParams);
+            if (parsed.camSettings) setCamSettings(parsed.camSettings);
+            setActiveTab('viewport');
+            setLastVoiceStatus(`Snapshot "${parsed.surfaceName || driveFile.name}" carregado do Google Drive.`);
+            return;
+          }
+          const importedFile = new File([arrayBuffer], driveFile.name, { type: mimeType });
+          await handleUnifiedFileUpload(importedFile);
+        }}
         systemResources={systemResources}
         localLlmRec={localLlmRec}
         localQwenStatus={localQwenStatus}
@@ -2828,8 +3051,16 @@ export default function App() {
         mcpEyeEvents={mcpEyeEvents}
         onSendAgentPrompt={handleSendMultiAgentPrompt}
         onVoiceTranscript={handleVoiceTranscript}
-        onOpenWizard={() => setWizardOpen(true)}
+        activeArea={activeEngineeringArea}
+        onOpenWizard={(area) => {
+          setWizardArea(area);
+          setWizardOpen(true);
+        }}
+        onResetCadArea={handleResetCadArea}
+        onResetCaeArea={handleResetCaeArea}
         onRestartCam={() => handleRestartCamProcess()}
+        cadResetCount={cadResetCount}
+        caeResetCount={caeResetCount}
         camRestartCount={camRestartCount}
         lastVoiceStatus={lastVoiceStatus}
       />
@@ -2853,6 +3084,102 @@ export default function App() {
             onUploadFile={handleUnifiedFileUpload}
             onApplyPreset={handleApplyFullPreset}
             scoobiiiProof={scoobiiiProof}
+            liveErpSnapshot={liveErpSnapshot}
+            activeUserLabel={user?.email || `${sqliteProfile.displayName} (${sqliteProfile.handleAt})`}
+            onOpenErpEntry={() => {
+              setEcosystemInitialSubTab('erp');
+              handleTabSwitch('ecosystem');
+            }}
+          />
+        )}
+
+        {activeTab === 'library' && (
+          <LibraryCatalogPanel
+            activePresetId={activePresetId}
+            googleUserEmail={
+              user?.email || (backendProfile?.provider === 'google' ? backendProfile.email : null)
+            }
+            googleAccessToken={googleAccessToken}
+            sessionToken={sessionToken}
+            onConnectGoogleDrive={connectGoogleDrive}
+            onExportPresetToArea={(preset, target) => {
+              handleApplyFullPreset(preset, target === 'cad');
+              if (target === 'erp') {
+                setEcosystemInitialSubTab('erp');
+                handleTabSwitch('ecosystem');
+                setLastVoiceStatus(`Biblioteca "${preset.title}" cotada em tempo real no ERP Open & BI/CRM.`);
+              } else if (target === 'cam') {
+                handleRestartCamProcess(preset.camSettings.machineType);
+                handleTabSwitch('cam');
+                setLastVoiceStatus(`Biblioteca "${preset.title}" enviada para CAM (${preset.camSettings.machineType}).`);
+              } else if (target === 'cae') {
+                handleRunFea(preset.feaSettings, true);
+                handleTabSwitch('sustainability');
+                setLastVoiceStatus(`Biblioteca "${preset.title}" enviada para CAE / Fadiga & LCA.`);
+              } else {
+                setLastVoiceStatus(`Biblioteca "${preset.title}" aberta no Editor CAD 3D.`);
+              }
+            }}
+            onSavePresetToProjects={async (preset) => {
+              handleApplyFullPreset(preset, false);
+              if (user && user.emailVerified) {
+                await handleSaveCloudProject(preset.title);
+              } else {
+                const snap = buildLiveErpWorkspaceSnapshot({
+                  surface,
+                  meshData,
+                  importedModel: null,
+                  featureOps: preset.initialFeatures ?? [],
+                  materialFinish: preset.materialFinish,
+                  partProfile,
+                  feaResult,
+                  feaSettings: preset.feaSettings,
+                  layerComplianceReport,
+                  carbonReport,
+                  camSettings: preset.camSettings,
+                  toolpath,
+                  camServiceJobs,
+                  remoteMachines,
+                  batchQty: erpBatchQty,
+                  targetMarginPct: erpMarginPct,
+                  taxRegime: erpTaxRegime,
+                  logisticsModal: erpLogisticsModal,
+                  distanceKm: erpDistanceKm,
+                  activeOperatorEmail: user?.email || sqliteProfile.email,
+                  activeOperatorHandle: sqliteProfile.handleAt,
+                  presetId: preset.id,
+                });
+                await handleAddErpRecord({
+                  kind: 'order',
+                  title: `Projeto Lib: ${preset.title}`,
+                  status: 'aberto',
+                  partyName: user?.email || sqliteProfile.displayName,
+                  segment: preset.segment,
+                  amountBrl: snap.pricingAndRoi.commercialDisclosureBlocked
+                    ? 0
+                    : snap.pricingAndRoi.parametrixBatchTotalBrl,
+                  modal: erpLogisticsModal,
+                  ownerRole: sqliteProfile.role,
+                });
+                recordDeliverable({
+                  filename: `${preset.id}.projeto.json`,
+                  kind: 'REPORT',
+                  summary: `Projeto "${preset.title}" salvo no workspace & SQLite ERP.`,
+                });
+              }
+            }}
+            onLoadImportedCad={(model, target = 'cad') => {
+              handleLoadImportedModel(model);
+              if (target === 'erp') {
+                setEcosystemInitialSubTab('erp');
+                handleTabSwitch('ecosystem');
+              } else if (target === 'cam') {
+                handleTabSwitch('cam');
+              } else if (target === 'cae') {
+                handleRunFea(undefined, true);
+                handleTabSwitch('sustainability');
+              }
+            }}
           />
         )}
 
@@ -2918,6 +3245,16 @@ export default function App() {
                 layerComplianceReport={layerComplianceReport}
                 onRefineNurbsForTolerances={handleRefineNurbsForTolerances}
                 onResetPartAndProduction={handleResetPartAndProduction}
+                onNewCadProject={() => {
+                  setWizardArea('cad');
+                  setWizardOpen(true);
+                }}
+                onResetCadArea={handleResetCadArea}
+                onNewCaeStudy={() => {
+                  setWizardArea('cae');
+                  setWizardOpen(true);
+                }}
+                onResetCaeArea={handleResetCaeArea}
               />
             </div>
 
@@ -2953,7 +3290,7 @@ export default function App() {
                 }
                 onOpenHelp={() => setActiveTab('onboarding')}
                 onRunQuickFea={() => handleRunFea(undefined, true)}
-                onResetPart={handleResetPartAndProduction}
+                onResetPart={handleResetCadArea}
                 onSelectComponentCamProcess={(mt, comp) => {
                   setDisplay((d) => ({ ...d, selectedComponentId: comp.id, showMachine: true, showToolpath: true }));
                   handleRestartCamProcess(mt);
@@ -3235,6 +3572,10 @@ export default function App() {
                   onLaunchProgram={handleLaunchCamProgram}
                   onSubmitCamService={handleSubmitCamService}
                   onRestartServiceJob={handleRestartCamServiceJob}
+                  onNewCamJob={() => {
+                    setWizardArea('cam');
+                    setWizardOpen(true);
+                  }}
                 />
               </div>
               <div
@@ -3272,7 +3613,7 @@ export default function App() {
                   }
                   onOpenHelp={() => setActiveTab('onboarding')}
                   onRunQuickFea={() => handleRunFea(undefined, true)}
-                  onResetPart={handleResetPartAndProduction}
+                  onResetPart={handleResetCadArea}
                   onSelectComponentCamProcess={(mt, comp) => {
                     setDisplay((d) => ({ ...d, selectedComponentId: comp.id, showMachine: true, showToolpath: true }));
                     handleRestartCamProcess(mt);
@@ -3337,6 +3678,23 @@ export default function App() {
             }
             initialSubTab={ecosystemInitialSubTab}
             initialChatRoom={ecosystemInitialRoom}
+            liveErpSnapshot={liveErpSnapshot}
+            erpBatchQty={erpBatchQty}
+            onChangeErpBatchQty={setErpBatchQty}
+            erpMarginPct={erpMarginPct}
+            onChangeErpMarginPct={setErpMarginPct}
+            erpTaxRegime={erpTaxRegime}
+            onChangeErpTaxRegime={setErpTaxRegime}
+            erpLogisticsModal={erpLogisticsModal}
+            onChangeErpLogisticsModal={setErpLogisticsModal}
+            erpDistanceKm={erpDistanceKm}
+            onChangeErpDistanceKm={setErpDistanceKm}
+            googleUserEmail={
+              user?.email || (backendProfile?.provider === 'google' ? backendProfile.email : null)
+            }
+            googleAccessToken={googleAccessToken}
+            onSaveErpSnapshotToDrive={handleSaveErpSnapshotToDrive}
+            onNavigateTab={handleTabSwitch}
           />
         )}
 
@@ -3367,6 +3725,11 @@ export default function App() {
               setDisplay((d) => ({ ...d, materialFinish: material }))
             }
             onNavigate={handleTabSwitch}
+            onNewCaeStudy={() => {
+              setWizardArea('cae');
+              setWizardOpen(true);
+            }}
+            onResetCaeArea={handleResetCaeArea}
           />
         )}
 
@@ -3430,8 +3793,12 @@ export default function App() {
               setActiveTab('viewport');
             }}
             userSlug={user?.email?.split('@')[0] || sqliteProfile.email.split('@')[0] || 'local-operator'}
+            googleUserEmail={
+              user?.email || (backendProfile?.provider === 'google' ? backendProfile.email : null)
+            }
             googleAccessToken={googleAccessToken}
             onConnectGoogleDrive={connectGoogleDrive}
+            onRecordDeliverable={recordDeliverable}
             designParams={designParams}
             camSettings={effectiveCamSettings}
             sessionToken={sessionToken}
@@ -3479,6 +3846,7 @@ export default function App() {
           onClick={() => setMobileMoreOpen((v) => !v)}
           className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
             mobileMoreOpen ||
+            activeTab === 'library' ||
             activeTab === 'ecosystem' ||
             activeTab === 'sustainability' ||
             activeTab === 'grasshopper' ||
@@ -3519,6 +3887,7 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
+                  { id: 'library', label: 'Lib / Biblioteca', icon: BookOpen },
                   { id: 'ecosystem', label: 'Ecossistema & ERP', icon: Globe },
                   { id: 'sustainability', label: 'Pegada CO₂', icon: Leaf },
                   { id: 'grasshopper', label: 'Grasshopper Nodal', icon: Network },
@@ -3793,42 +4162,64 @@ export default function App() {
         onLogin={handleSqliteOfflineLogin}
       />
 
-      {/* Interactive Real-Time New Project From Scratch Wizard */}
+      {/* Interactive Real-Time New Project / Study / Job Wizard by Area */}
       <ProjectWizardModal
         open={wizardOpen}
+        initialArea={wizardArea}
         onClose={() => setWizardOpen(false)}
-        onCreateProject={(cfg) => {
+        onCreateProject={(cfg: AreaWizardSubmission) => {
           if (cfg.presetIdToLoad) {
             const preset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === cfg.presetIdToLoad);
             if (preset) {
-              handleApplyFullPreset(preset, true);
+              handleApplyFullPreset(preset, cfg.area === 'cad');
             }
-          } else {
+          } else if (cfg.area === 'cad') {
             setImportedModel(null);
+            setActivePresetId(undefined);
+            setCpOverrides({});
+            setFeatureOps([]);
+            setFeaBaseline(null);
+            setFeaComparison(null);
             setDesignParams((prev) => ({ ...prev, ...cfg.designParamsPatch }));
             setActiveSegment(cfg.segment);
             setDisplay((d) => ({
               ...d,
+              mode: 'component-pbr',
               materialFinish: cfg.materialFinish,
               fitViewTrigger: d.fitViewTrigger + 1,
             }));
             setActiveTab('viewport');
-          }
-          setPartProfileOverride({ partName: cfg.name });
-          if (cfg.startCamImmediately) {
-            handleRestartCamProcess(cfg.machineType);
-          } else {
+          } else if (cfg.area === 'cae') {
+            setFeaSettings((prev) => ({ ...prev, ...cfg.feaSettingsPatch }));
+            handleRunFea(cfg.feaSettingsPatch, cfg.activateHeatmap);
+            setActiveTab(cfg.activateHeatmap ? 'viewport' : 'sustainability');
+          } else if (cfg.area === 'cam') {
             setCamSettings((prev) => ({
               ...prev,
               machineType: cfg.machineType,
+              strategy: cfg.camStrategy,
               postFormat: defaultPostForMachine(cfg.machineType),
+              ...(cfg.machineType === 'powder-metal' || cfg.machineType === 'resin-sla'
+                ? { additiveConfig: getDefaultAdditiveSettings(cfg.machineType) }
+                : {}),
             }));
+            if (cfg.startCamImmediately) {
+              handleRestartCamProcess(cfg.machineType);
+            }
+            setActiveTab('cam');
           }
+
+          setPartProfileOverride({ partName: cfg.name });
+          if (cfg.area !== 'cam' && cfg.startCamImmediately) {
+            handleRestartCamProcess(cfg.machineType);
+          }
+
           recordDeliverable({
-            filename: `${cfg.name.toLowerCase().replace(/\s+/g, '_')}.vuc`,
+            filename: `${cfg.name.toLowerCase().replace(/\s+/g, '_')}_${cfg.area}.vuc`,
             kind: 'REPORT',
-            summary: `Novo projeto criado do zero · CAM: ${cfg.machineType} · Material: ${cfg.materialFinish}`,
+            summary: `Novo (${cfg.area.toUpperCase()}) · ${cfg.name} · Material: ${cfg.materialFinish}`,
           });
+          setLastVoiceStatus(`Novo (${cfg.area.toUpperCase()}) criado: "${cfg.name}".`);
         }}
       />
 

@@ -114,6 +114,40 @@ export async function listDriveCadFiles(
   return data.files ?? [];
 }
 
+export function extractGoogleDriveFileId(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (!/(^|\.)(drive|docs)\.google\.com$/i.test(parsed.hostname)) {
+      return null;
+    }
+    const idParam = parsed.searchParams.get('id');
+    if (idParam && /^[a-zA-Z0-9_-]{10,}$/.test(idParam)) {
+      return idParam;
+    }
+    const pathMatch = /\/d\/([a-zA-Z0-9_-]{10,})/i.exec(parsed.pathname);
+    return pathMatch ? pathMatch[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchDriveFileMetadata(
+  accessToken: string,
+  fileId: string
+): Promise<GoogleDriveFolderFile> {
+  const resp = await fetch(
+    `${DRIVE_FILES_API}/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,modifiedTime,webViewLink`,
+    { headers: authHeaders(accessToken) }
+  );
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(
+      `Falha ao consultar arquivo do Google Drive (${resp.status}): ${errText.slice(0, 140)}`
+    );
+  }
+  return (await resp.json()) as GoogleDriveFolderFile;
+}
+
 export async function downloadDriveFileContent(
   accessToken: string,
   fileId: string,

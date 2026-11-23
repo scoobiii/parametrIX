@@ -41,6 +41,8 @@ import {
   deleteDriveFile,
   downloadDriveFileContent,
   ensureUserDriveProjectFolder,
+  extractGoogleDriveFileId,
+  fetchDriveFileMetadata,
   listDriveCadFiles,
   listDriveProjectFiles,
   saveFileToDriveFolder,
@@ -55,6 +57,7 @@ import type {
   NurbsSurfaceData,
   ParametricDesignParams,
   RamdiskMcpStatus,
+  SessionDeliverable,
   ToolpathResult,
 } from '../types/cad';
 
@@ -69,8 +72,14 @@ interface CadFilesPanelProps {
   onToggleImportedOverlay: () => void;
   onOpenViewport: () => void;
   userSlug?: string;
+  googleUserEmail?: string | null;
   googleAccessToken?: string | null;
   onConnectGoogleDrive?: () => Promise<string | null | void>;
+  onRecordDeliverable?: (d: {
+    filename: string;
+    kind: SessionDeliverable['kind'];
+    summary: string;
+  }) => void;
   designParams?: ParametricDesignParams;
   camSettings?: CamSettings;
   sessionToken?: string | null;
@@ -116,8 +125,10 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
   onToggleImportedOverlay,
   onOpenViewport,
   userSlug = 'local-operator',
+  googleUserEmail = null,
   googleAccessToken = null,
   onConnectGoogleDrive,
+  onRecordDeliverable,
   designParams,
   camSettings,
   sessionToken = null,
@@ -144,6 +155,11 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
   const [cadUrlInput, setCadUrlInput] = useState('');
   const [urlBusy, setUrlBusy] = useState(false);
   const [urlInspection, setUrlInspection] = useState<UrlImportInspection | null>(null);
+  const [lastUrlTextFile, setLastUrlTextFile] = useState<{
+    filename: string;
+    mimeType: string;
+    content: string;
+  } | null>(null);
 
   const [ramdiskStatus, setRamdiskStatus] = useState<RamdiskMcpStatus | null>(null);
   const [ramdiskBusy, setRamdiskBusy] = useState(false);
@@ -352,6 +368,18 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
     }
   };
 
+  const emitDeliverable = (
+    filename: string,
+    kind: SessionDeliverable['kind'],
+    summary: string
+  ) => {
+    onRecordDeliverable?.({
+      filename: filename.slice(0, 160),
+      kind,
+      summary: summary.slice(0, 240),
+    });
+  };
+
   const handleOpenDriveFile = async (df: GoogleDriveFolderFile) => {
     if (!googleAccessToken) return;
     setDriveBusy(true);
@@ -376,12 +404,42 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
             label: parsed.surfaceName || df.name,
           });
         }
+        emitDeliverable(
+          df.name,
+          'REPORT',
+          `Snapshot restaurado da sessão Google Drive (${googleUserEmail || localSlug})`
+        );
         setStatusMsg(`Snapshot "${df.name}" restaurado direto do Google Drive.`);
       } else {
         const file = new File([arrayBuffer], df.name, { type: mimeType });
         await handleFileImport(file);
         setStatusMsg(`Arquivo CAD "${df.name}" importado do Google Drive para a Viewport 3D.`);
       }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleSaveDownloadedTextToDrive = async () => {
+    if (!lastUrlTextFile || !googleAccessToken) return;
+    setDriveBusy(true);
+    setErrorMsg(null);
+    try {
+      const folder = driveFolder ?? (await ensureUserDriveProjectFolder(googleAccessToken, localSlug));
+      setDriveFolder(folder);
+      const existing = driveFiles.find((f) => f.name === lastUrlTextFile.filename);
+      await saveFileToDriveFolder(
+        googleAccessToken,
+        folder.folderId,
+        lastUrlTextFile.filename,
+        lastUrlTextFile.content,
+        lastUrlTextFile.mimeType || 'text/plain',
+        existing?.id
+      );
+      setStatusMsg(`Arquivo "${lastUrlTextFile.filename}" salvo na pasta ${folder.folderName} do Google Drive.`);
+      await refreshDriveFolder();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -396,11 +454,67 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
     setUrlBusy(true);
     setErrorMsg(null);
     setStatusMsg(null);
+    setLastUrlTextFile(null);
     try {
+      const driveFileId = extractGoogleDriveFileId(targetUrl);
+      if (driveFileId) {
+        let activeTok = googleAccessToken;
+        if (!activeTok && onConnectGoogleDrive) {
+          const maybeTok = await onConnectGoogleDrive();
+          if (typeof maybeTok === 'string' && maybeTok) {
+            activeTok = maybeTok;
+          }
+        }
+        if (!activeTok) {
+          throw new Error(
+            'Link do Google Drive detectado. Conecte/autorize o token Google Drive na sessão ativa para abrir o arquivo.'
+          );
+        }
+        const meta = await fetchDriveFileMetadata(activeTok, driveFileId);
+        const { arrayBuffer, mimeType } = await downloadDriveFileContent(
+          activeTok,
+          driveFileId,
+          meta.name
+        );
+        setUrlInspection({
+          url: targetUrl,
+          isGrabCad: false,
+          status: 'google-drive-imported',
+          title: meta.name,
+          description: `Importado direto da sessão Google Drive (${googleUserEmail || localSlug})`,
+          detectedFormats: [meta.name.split('.').pop()?.toUpperCase() || 'DRIVE'],
+          directCadUrl: meta.webViewLink || targetUrl,
+          diagnosticNote: `Arquivo "${meta.name}" baixado via OAuth Bearer da sessão Google ativa.`,
+        });
+        if (meta.name.toLowerCase().endsWith('.parametrix.json')) {
+          const parsed = JSON.parse(new TextDecoder().decode(arrayBuffer)) as {
+            surfaceName?: string;
+            designParams?: ParametricDesignParams;
+            camSettings?: CamSettings;
+          };
+          onApplyProjectSnapshot?.({
+            designParams: parsed.designParams,
+            camSettings: parsed.camSettings,
+            label: parsed.surfaceName || meta.name,
+          });
+          emitDeliverable(meta.name, 'REPORT', `Snapshot Drive URL importado (${googleUserEmail || localSlug})`);
+          setStatusMsg(`Snapshot "${meta.name}" restaurado da URL do Google Drive.`);
+        } else {
+          const driveFileObj = new File([arrayBuffer], meta.name, { type: mimeType });
+          await handleFileImport(driveFileObj);
+          setStatusMsg(`Arquivo "${meta.name}" importado da URL do Google Drive ativa.`);
+        }
+        return;
+      }
+
       const resp = await fetch('/api/cad/import-url', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl }),
+        credentials: 'include',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: targetUrl,
+          googleUserEmail: googleUserEmail || undefined,
+        }),
       });
       const data = (await resp.json()) as {
         inspection?: UrlImportInspection;
@@ -429,6 +543,13 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
           type: data.downloadedFile.mimeType || 'application/octet-stream',
         });
         await handleFileImport(importedFile);
+        if (/\.(step|stp|dxf|obj|svg|json)$/i.test(data.downloadedFile.filename)) {
+          setLastUrlTextFile({
+            filename: data.downloadedFile.filename,
+            mimeType: data.downloadedFile.mimeType || 'text/plain',
+            content: new TextDecoder().decode(bytes),
+          });
+        }
         setStatusMsg(
           `Arquivo "${data.downloadedFile.filename}" (${data.downloadedFile.byteSize} B) importado via URL · VUC ${data.vucProof?.vucHash?.slice(0, 14) ?? 'OK'}.`
         );
@@ -519,43 +640,34 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
     setImportBusy(true);
     try {
+      let importedModelResult: ImportedCadModel | null = null;
+      let deliverableKind: SessionDeliverable['kind'] = 'REPORT';
       if (ext === 'stl') {
         const buf = await file.arrayBuffer();
-        const model = parseSTL(buf, file.name);
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = parseSTL(buf, file.name);
+        deliverableKind = 'STL';
       } else if (ext === 'obj') {
         const text = await file.text();
-        const model = parseOBJ(text, file.name);
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = parseOBJ(text, file.name);
       } else if (ext === 'dxf') {
         const text = await file.text();
-        const model = parseDXF(text, file.name);
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = parseDXF(text, file.name);
+        deliverableKind = 'DXF';
       } else if (ext === '3dm') {
         const buf = await file.arrayBuffer();
-        const model = parse3DM(buf, file.name);
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = parse3DM(buf, file.name);
+        deliverableKind = '3DM';
       } else if (ext === 'step' || ext === 'stp' || ext === 'ifc') {
         setStatusMsg('Tesselando geometria B-Rep via OpenCASCADE...');
         const buf = await file.arrayBuffer();
-        const model = await parseSTEPAsync(buf, file.name, ext === 'ifc' ? 'IFC' : 'STEP');
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = await parseSTEPAsync(buf, file.name, ext === 'ifc' ? 'IFC' : 'STEP');
       } else if (ext === 'ipt') {
         setStatusMsg('Decodificando streams OLE2 / ACIS do Inventor (.IPT)...');
         const buf = await file.arrayBuffer();
-        const model = await parseIPTAsync(buf, file.name);
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = await parseIPTAsync(buf, file.name);
       } else if (ext === 'svg') {
         const text = await file.text();
-        const model = parseSVGToCad(text, file.name);
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = parseSVGToCad(text, file.name);
       } else if (isRasterImageFilename(file.name, file.type)) {
         setStatusMsg('Analisando imagem e convertendo em projeto CAD 3D fidedigno...');
         const { model } = await convertImageToCadModel({
@@ -563,11 +675,19 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
           mimeType: file.type,
           blobOrBuffer: file,
         });
-        onSetImportedModel(model);
-        setStatusMsg(model.notes);
+        importedModelResult = model;
       } else {
         setErrorMsg(
           `Extensão .${ext} não suportada. Utilize STL, OBJ, DXF, 3DM, STEP/STP, IFC, IPT, SVG, PNG, JPG ou WEBP.`
+        );
+      }
+      if (importedModelResult) {
+        onSetImportedModel(importedModelResult);
+        setStatusMsg(importedModelResult.notes);
+        emitDeliverable(
+          file.name,
+          deliverableKind,
+          `Importado (${importedModelResult.format}) · ${importedModelResult.triangleCount} triângulos${googleUserEmail ? ` · Google: ${googleUserEmail}` : ''}`
         );
       }
     } catch (err) {
@@ -686,15 +806,39 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
             </label>
 
             <div className="space-y-2">
-              <div className="text-xs font-medium text-slate-400">
-                Importar via URL Pública / GrabCAD Library (Hermes Search + VUC)
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-medium text-slate-400">
+                  Importar via URL Pública / GrabCAD / Google Drive (Hermes Search + VUC)
+                </div>
+                {googleUserEmail && (
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono-tabular">
+                    <span className="text-sky-300 truncate max-w-[190px]">
+                      Google: {googleUserEmail}
+                    </span>
+                    {googleAccessToken ? (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-400/30 text-emerald-300">
+                        Drive OK
+                      </span>
+                    ) : (
+                      onConnectGoogleDrive && (
+                        <button
+                          type="button"
+                          onClick={() => void onConnectGoogleDrive()}
+                          className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-400/40 text-sky-200 hover:bg-sky-500/30 cursor-pointer"
+                        >
+                          Ativar Drive
+                        </button>
+                      )
+                    )}
+                  </div>
+                )}
               </div>
               <form onSubmit={handleImportFromUrl} className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="url"
                   value={cadUrlInput}
                   onChange={(e) => setCadUrlInput(e.target.value)}
-                  placeholder="https://grabcad.com/library/... ou link direto .stl/.step/.dxf/.3dm"
+                  placeholder="https://grabcad.com/library/..., drive.google.com/... ou .stl/.step/.dxf/.3dm"
                   className="flex-1 px-3 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 font-mono-tabular outline-none focus:border-sky-400"
                 />
                 <button
@@ -733,6 +877,16 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
                       >
                         <ExternalLink className="w-3 h-3" /> Abrir página fonte
                       </a>
+                    )}
+                    {lastUrlTextFile && googleAccessToken && (
+                      <button
+                        type="button"
+                        disabled={driveBusy}
+                        onClick={() => void handleSaveDownloadedTextToDrive()}
+                        className="px-2 py-0.5 bg-sky-500/20 border border-sky-400/40 text-sky-200 rounded hover:bg-sky-500/30 cursor-pointer disabled:opacity-50"
+                      >
+                        Salvar também no Google Drive
+                      </button>
                     )}
                   </div>
                 </div>
@@ -1004,7 +1158,9 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
 
               {!googleAccessToken ? (
                 <p className="text-[11px] text-slate-400">
-                  Conecte sua conta Google com permissão Drive para abrir arquivos CAD do seu Drive e sincronizar sua pasta na nuvem.
+                  {googleUserEmail
+                    ? `Sessão Google (${googleUserEmail}) ativa — clique em "Conectar Google Drive" para liberar o token OAuth de leitura/gravação e abrir arquivos CAD do seu Drive.`
+                    : 'Conecte sua conta Google com permissão Drive para abrir arquivos CAD do seu Drive e sincronizar sua pasta na nuvem.'}
                 </p>
               ) : (
                 <div className="space-y-2.5">

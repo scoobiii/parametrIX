@@ -11,6 +11,7 @@ import {
   RotateCcw,
   Send,
   ShieldCheck,
+  Sparkles,
   Upload,
   Wrench,
 } from 'lucide-react';
@@ -68,6 +69,7 @@ interface CamRoboticsPanelProps {
   onLaunchProgram?: (programId: string) => void;
   onSubmitCamService?: (payload: CamServiceSubmissionInput) => Promise<void>;
   onRestartServiceJob?: (jobId: string) => Promise<void>;
+  onNewCamJob?: () => void;
 }
 
 const MACHINE_OPTIONS: {
@@ -109,6 +111,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
   onLaunchProgram,
   onSubmitCamService,
   onRestartServiceJob,
+  onNewCamJob,
 }) => {
   const activeTool = CAM_TOOLS.find((t) => t.id === settings.toolId) ?? CAM_TOOLS[0];
   const [progCategory, setProgCategory] = useState<CamProgramTargetCategory>('datacenter');
@@ -225,14 +228,26 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
               {camVisualState.vucProof.vucHash.slice(0, 12)}
             </span>
           </div>
-          <button
-            type="button"
-            onClick={onRestartProcess}
-            className="w-full min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reiniciar Processo Produtivo CAM (Zero + VUC)
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {onNewCamJob && (
+              <button
+                type="button"
+                onClick={onNewCamJob}
+                className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-sky-500/20 border border-sky-400/50 text-sky-200 hover:bg-sky-500/30 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Novo Job CAM
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onRestartProcess}
+              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reiniciar CAM (0%)
+            </button>
+          </div>
         </div>
 
         {/* Machine Mode Selector (8 Processes) */}

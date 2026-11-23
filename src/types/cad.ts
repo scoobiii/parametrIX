@@ -1,5 +1,8 @@
+export type EngineeringArea = 'cad' | 'cae' | 'cam';
+
 export type WorkspaceTab =
   | 'onboarding'
+  | 'library'
   | 'viewport'
   | 'grasshopper'
   | 'cam'
@@ -1213,6 +1216,8 @@ export type SessionActionKind =
   | 'pointer-move'
   | 'tab-switch'
   | 'camera-preset'
+  | 'cad-reset'
+  | 'cae-reset'
   | 'cam-restart'
   | 'component-select'
   | 'material-change'

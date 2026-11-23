@@ -173,6 +173,7 @@ export function buildProcessShareUrl(input: ProcessUrlParams): string {
 
 const VALID_TABS: WorkspaceTab[] = [
   'onboarding',
+  'library',
   'viewport',
   'grasshopper',
   'cam',
