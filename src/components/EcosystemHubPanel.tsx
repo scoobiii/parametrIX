@@ -1242,6 +1242,15 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
                       {erpDriveBusy ? 'Enviando Drive...' : 'Salvar Proposta no Drive'}
                     </button>
                   )}
+                  {onNavigateTab && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('media-studio')}
+                      className="px-3 py-1.5 text-xs font-semibold bg-[#2563EB]/20 border border-[#22D3EE]/50 text-cyan-200 hover:bg-[#2563EB]/30 rounded-lg cursor-pointer"
+                    >
+                      Media Studio · Organograma & Business Plan →
+                    </button>
+                  )}
                 </div>
               </div>
 

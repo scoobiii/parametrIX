@@ -192,6 +192,25 @@ export function computeFeatureVolumeAndKt(
       const mult = op.count ? Math.min(8, Math.max(1, op.count)) : 1;
       addedMm3 += w * l * d * 0.55 * mult;
       stiffnessBoost *= 1.04;
+    } else if (op.kind === 'blender-boolean-mod' || op.kind === 'blender-decimate') {
+      const w = Math.max(2, op.widthMm);
+      const l = Math.max(4, op.lengthMm);
+      const d = Math.max(1, op.depthMm);
+      removedMm3 += w * l * d * 0.4;
+      stiffnessBoost *= 1.015;
+    } else if (op.kind.startsWith('blender-')) {
+      const w = Math.max(2, op.widthMm);
+      const l = Math.max(4, op.lengthMm);
+      const d = Math.max(1, op.depthMm);
+      const mult = op.count ? Math.min(6, Math.max(1, op.count)) : 1;
+      addedMm3 += w * l * d * 0.42 * mult;
+      stiffnessBoost *= 1.03;
+    } else if (op.kind.startsWith('bim-ifc-')) {
+      const w = Math.max(4, op.widthMm);
+      const l = Math.max(8, op.lengthMm);
+      const d = Math.max(4, op.depthMm);
+      addedMm3 += w * l * d * 0.65;
+      stiffnessBoost *= 1.09;
     }
   }
 

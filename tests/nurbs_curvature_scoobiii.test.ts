@@ -9,6 +9,7 @@ import {
 } from '../src/kernel/nurbs';
 import {
   analyzeCurvatureAndOptimizeWeight,
+  applyNurbsCurvatureCompensationFactor,
   sampleNurbsDifferentialGeometry,
 } from '../src/kernel/curvatureOptimizer';
 import {
@@ -255,6 +256,67 @@ describe('curvatureOptimizer kernel', () => {
     const degDiff = sampleNurbsDifferentialGeometry(collapsed, 2);
     expect(degDiff.maxPrincipalKappa).toBe(0);
   });
+
+  it('interpolates live NURBS curvature compensation factor (0.0 -> 1.0, clamped/NaN) cleanly', () => {
+    const profile = resolvePartEngineeringProfile({ preset: 'shell' });
+    const params: ParametricDesignParams = {
+      ...baseParams,
+      thicknessMm: 8,
+      archHeight: 45,
+      ribCountU: 4,
+      ribCountV: 3,
+    };
+    const suggested: ParametricDesignParams = {
+      ...params,
+      thicknessMm: 5.5,
+      archHeight: 60,
+      ribCountU: 3,
+      ribCountV: 2,
+      ribHeightMm: 16,
+    };
+
+    const previewZero = applyNurbsCurvatureCompensationFactor({
+      baseParams: params,
+      suggestedParams: suggested,
+      factor: NaN,
+      materialFinish: 'aluminum',
+      feaSettings: baseFeaSettings,
+      partProfile: profile,
+      isolationTarget: 'all',
+      importedModel: null,
+    });
+    expect(previewZero.factor).toBe(0);
+    expect(previewZero.weightDeltaPct).toBe(0);
+
+    const previewHalf = applyNurbsCurvatureCompensationFactor({
+      baseParams: params,
+      suggestedParams: suggested,
+      factor: 0.5,
+      materialFinish: 'aluminum',
+      feaSettings: baseFeaSettings,
+      partProfile: {
+        ...profile,
+        safetyCriteria: { ...profile.safetyCriteria, minSafetyFactor: 0, maxDeflectionMm: 0 },
+      },
+      isolationTarget: 'all',
+      importedModel: null,
+    });
+    expect(previewHalf.factor).toBe(0.5);
+    expect(previewHalf.params.thicknessMm).toBe(6.75);
+
+    const previewFull = applyNurbsCurvatureCompensationFactor({
+      baseParams: params,
+      suggestedParams: suggested,
+      factor: 1.5,
+      materialFinish: 'aluminum',
+      feaSettings: baseFeaSettings,
+      partProfile: profile,
+      isolationTarget: 'all',
+      importedModel: null,
+    });
+    expect(previewFull.factor).toBe(1);
+    expect(previewFull.weightAfterKg).toBeLessThan(previewFull.weightBeforeKg);
+  });
 });
 
 describe('scoobiiiVuc kernel', () => {
@@ -353,6 +415,59 @@ describe('scoobiiiVuc kernel', () => {
         lengthMm: 30,
         diameterMm: 6,
         depthMm: 10,
+        createdAt: '00:00:00',
+      },
+      {
+        id: '8',
+        kind: 'blender-boolean-mod',
+        label: 'BooleanExact',
+        targetComponentId: 'shell',
+        point: [0, 30, 0],
+        normal: [0, 1, 0],
+        widthMm: 12,
+        lengthMm: 20,
+        diameterMm: 12,
+        depthMm: 8,
+        createdAt: '00:00:00',
+      },
+      {
+        id: '9',
+        kind: 'blender-array-mod',
+        label: 'ArrayModifier',
+        targetComponentId: 'shell',
+        point: [0, 30, 0],
+        normal: [0, 1, 0],
+        widthMm: 10,
+        lengthMm: 10,
+        diameterMm: 10,
+        depthMm: 8,
+        count: 4,
+        createdAt: '00:00:00',
+      },
+      {
+        id: '10',
+        kind: 'blender-subsurf',
+        label: 'Subsurf',
+        targetComponentId: 'shell',
+        point: [0, 30, 0],
+        normal: [0, 1, 0],
+        widthMm: 16,
+        lengthMm: 16,
+        diameterMm: 16,
+        depthMm: 8,
+        createdAt: '00:00:00',
+      },
+      {
+        id: '11',
+        kind: 'bim-ifc-beam',
+        label: 'IfcBeam',
+        targetComponentId: 'shell',
+        point: [0, 30, 0],
+        normal: [0, 1, 0],
+        widthMm: 14,
+        lengthMm: 60,
+        diameterMm: 14,
+        depthMm: 18,
         createdAt: '00:00:00',
       },
     ];

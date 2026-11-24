@@ -1,9 +1,10 @@
 import type { VoiceActionIntent } from '../types/cad';
 import { parseRhinoCommandPrompt } from './rhinoGeometryEngine';
+import { parseExtendedMagicPenPrompt } from './magicPenToolsCatalog';
 
 /**
  * Deterministic voice & text CAM/CAD command interpreter (Portuguese & English)
- * enabling hands-free control over CAM restart, Rhino CAD commands, part baseline reset,
+ * enabling hands-free control over CAM restart, Rhino/Blender/BIM CAD commands, part baseline reset,
  * all 8 manufacturing modes, Datacenter/Humanoid programs, remote G-code/MQTT dispatch,
  * formal VUC proof, presets, FEA, curvature optimization, agent Q&A routing, and exports.
  */
@@ -50,6 +51,17 @@ export function parseVoiceCommand(rawTranscript: string): VoiceActionIntent {
       action: 'rhino-command',
       param: transcript,
       feedbackText: `Executando comando Rhino ${rhinoParsed.rhinoCommand}: ${rhinoParsed.label}.`,
+    };
+  }
+
+  const extendedParsed = parseExtendedMagicPenPrompt(transcript);
+  if (extendedParsed.matched) {
+    return {
+      transcript,
+      matched: true,
+      action: 'rhino-command',
+      param: transcript,
+      feedbackText: `Executando ferramenta ${extendedParsed.label}.`,
     };
   }
 

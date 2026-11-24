@@ -70,6 +70,10 @@ const VALID_KINDS: SessionDeliverable['kind'][] = [
   'MCP',
   'ICS',
   'REPORT',
+  'SVG',
+  'PDF',
+  'PNG',
+  'JPG',
 ];
 
 function clamp(val: number, min: number, max: number): number {

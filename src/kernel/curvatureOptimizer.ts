@@ -340,3 +340,122 @@ export function analyzeCurvatureAndOptimizeWeight(params: {
     engineeringRationale: rationale,
   };
 }
+
+export interface CurvatureCompensationPreview {
+  factor: number;
+  params: ParametricDesignParams;
+  surface: NurbsSurfaceData;
+  meshData: EvaluatedMesh;
+  feaResult: FeaResult;
+  weightBeforeKg: number;
+  weightAfterKg: number;
+  weightDeltaPct: number;
+  safetyFactor: number;
+  deflectionMm: number;
+  integrityPreserved: boolean;
+}
+
+/**
+ * Interpolates live NURBS curvature compensation factor (0.0 -> baseline, 1.0 -> full optimal)
+ * and evaluates real surface, mesh, and structural FEA metrics in real time.
+ */
+export function applyNurbsCurvatureCompensationFactor(input: {
+  baseParams: ParametricDesignParams;
+  suggestedParams: ParametricDesignParams;
+  factor: number;
+  materialFinish: MaterialFinish;
+  feaSettings: FeaSettings;
+  partProfile: PartEngineeringProfile;
+  isolationTarget: string;
+  importedModel: ImportedCadModel | null;
+  featureOps?: CadFeatureOperation[];
+}): CurvatureCompensationPreview {
+  const {
+    baseParams,
+    suggestedParams,
+    factor,
+    materialFinish,
+    feaSettings,
+    partProfile,
+    isolationTarget,
+    importedModel,
+    featureOps = [],
+  } = input;
+
+  const t = Math.max(0, Math.min(1, Number.isFinite(factor) ? factor : 0));
+  const lerp = (a: number, b: number) => a + (b - a) * t;
+
+  const interpolated: ParametricDesignParams = {
+    ...baseParams,
+    thicknessMm: Number(lerp(baseParams.thicknessMm, suggestedParams.thicknessMm).toFixed(2)),
+    archHeight: Math.round(lerp(baseParams.archHeight, suggestedParams.archHeight)),
+    ribCountU: Math.max(0, Math.round(lerp(baseParams.ribCountU, suggestedParams.ribCountU))),
+    ribCountV: Math.max(0, Math.round(lerp(baseParams.ribCountV, suggestedParams.ribCountV))),
+    ribHeightMm: Math.round(lerp(baseParams.ribHeightMm, suggestedParams.ribHeightMm)),
+  };
+
+  const baseSurface = buildNurbsSurfaceFromParams(baseParams);
+  const baseMesh = tessellateNurbsSurface(
+    baseSurface,
+    baseParams.ribCountU,
+    baseParams.ribCountV,
+    baseParams.ribHeightMm
+  );
+  const baseFea = evaluateStructuralFea(
+    baseSurface,
+    baseMesh,
+    baseParams,
+    materialFinish,
+    feaSettings,
+    isolationTarget,
+    partProfile,
+    importedModel,
+    featureOps
+  );
+
+  const compSurface = buildNurbsSurfaceFromParams(interpolated);
+  const compMesh = tessellateNurbsSurface(
+    compSurface,
+    interpolated.ribCountU,
+    interpolated.ribCountV,
+    interpolated.ribHeightMm
+  );
+  const compFea = evaluateStructuralFea(
+    compSurface,
+    compMesh,
+    interpolated,
+    materialFinish,
+    feaSettings,
+    isolationTarget,
+    partProfile,
+    importedModel,
+    featureOps
+  );
+
+  const weightDeltaPct = Number(
+    (
+      ((compFea.totalMassKg - baseFea.totalMassKg) / Math.max(1e-4, baseFea.totalMassKg)) *
+      100
+    ).toFixed(1)
+  );
+  const targetSf = Math.max(
+    1.5,
+    partProfile.safetyCriteria.minSafetyFactor || feaSettings.targetSafetyFactor
+  );
+  const maxDefl = partProfile.safetyCriteria.maxDeflectionMm || 4.0;
+
+  return {
+    factor: Number(t.toFixed(2)),
+    params: interpolated,
+    surface: compSurface,
+    meshData: compMesh,
+    feaResult: compFea,
+    weightBeforeKg: baseFea.totalMassKg,
+    weightAfterKg: compFea.totalMassKg,
+    weightDeltaPct,
+    safetyFactor: compFea.safetyFactor,
+    deflectionMm: compFea.maxDeflectionMm,
+    integrityPreserved: compFea.safetyFactor >= targetSf && compFea.maxDeflectionMm <= maxDefl,
+  };
+}
+

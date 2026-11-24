@@ -331,6 +331,8 @@ describe('llmBootstrap & voiceCommandParser kernels', () => {
     expect(parseVoiceCommand('usinagem manual dro').param).toBe('manual');
     expect(parseVoiceCommand('enviar codigo g mqtt').action).toBe('dispatch-remote');
     expect(parseVoiceCommand('gerar prova vuc ed25519').action).toBe('verify-vuc');
+    expect(parseVoiceCommand('subsurf 3').action).toBe('rhino-command');
+    expect(parseVoiceCommand('ifcbeam 20mm').action).toBe('rhino-command');
     expect(parseVoiceCommand('agente qual a sinterizacao atual?').action).toBe('agent-query');
     expect(parseVoiceCommand('falar sobre clima amanha').action).toBe('unknown');
   });

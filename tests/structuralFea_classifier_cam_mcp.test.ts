@@ -189,6 +189,32 @@ describe('structuralFea kernel', () => {
         depthMm: 2,
         createdAt: '00:00:00',
       },
+      {
+        id: 'f5',
+        kind: 'blender-boolean-mod',
+        label: 'BooleanExact',
+        targetComponentId: 'shell',
+        point: [mesh.positions[0], mesh.positions[1], mesh.positions[2]],
+        normal: [0, 1, 0],
+        widthMm: 16,
+        lengthMm: 20,
+        diameterMm: 16,
+        depthMm: 12,
+        createdAt: '00:00:00',
+      },
+      {
+        id: 'f6',
+        kind: 'bim-ifc-beam',
+        label: 'IfcBeam',
+        targetComponentId: 'shell',
+        point: [mesh.positions[0], mesh.positions[1], mesh.positions[2]],
+        normal: [0, 1, 0],
+        widthMm: 14,
+        lengthMm: 60,
+        diameterMm: 14,
+        depthMm: 18,
+        createdAt: '00:00:00',
+      },
     ];
 
     // 1. four-corner-pins + torsion-tip + shell isolation + Seguro
@@ -759,7 +785,15 @@ describe('mcpServer kernel', () => {
     expect(executeMcpToolCall('cad_magic_pen_feature', { kind: 'through-hole', diameterMm: 14 }, ctx).status).toBe('ok');
     expect(executeMcpToolCall('cad_magic_pen_feature', { kind: 'rib-boss', widthMm: 8, lengthMm: 24 }, ctx).status).toBe('ok');
     expect(executeMcpToolCall('cad_magic_pen_feature', { kind: 'chamfer-fillet', widthMm: 3 }, ctx).status).toBe('ok');
+    expect(executeMcpToolCall('cad_magic_pen_feature', { kind: 'blender-subsurf', axis: 'y' }, ctx).status).toBe('ok');
+    expect(executeMcpToolCall('cad_magic_pen_feature', { kind: 'bim-ifc-beam' }, ctx).status).toBe('ok');
     expect(executeMcpToolCall('cad_magic_pen_feature', {}, { ...ctx, display: { ...ctx.display, selectedComponentId: 'COMP-1' } }).status).toBe('ok');
+
+    // cad_rhino_command with Rhino, Blender, BIM/IFC, explicit/invalid points & unknown command
+    expect(executeMcpToolCall('cad_rhino_command', { command: 'ExtrudeCrv 12mm', point: [1, 2, 3], normal: [0, 1, 0] }, ctx).status).toBe('ok');
+    expect(executeMcpToolCall('cad_rhino_command', { command: 'Subsurf 3' }, ctx).status).toBe('ok');
+    expect(executeMcpToolCall('cad_rhino_command', { command: 'IfcBeam 20mm', point: [NaN], normal: [1] }, ctx).status).toBe('ok');
+    expect(executeMcpToolCall('cad_rhino_command', { command: 'unknown_command_zzz' }, ctx).status).toBe('error');
 
     // scoobiii proof + session summary + unknown tool
     expect(executeMcpToolCall('cad_get_scoobiii_vuc_proof', {}, ctx).status).toBe('ok');

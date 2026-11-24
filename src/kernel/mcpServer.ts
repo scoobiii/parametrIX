@@ -22,6 +22,10 @@ import type {
 } from '../types/cad';
 import { ISO_METRIC_THREADS } from './scoobiiiVuc';
 import { RHINO_COMMAND_CATALOG, parseRhinoCommandPrompt } from './rhinoGeometryEngine';
+import {
+  EXTENDED_MAGIC_PEN_CATALOG,
+  parseExtendedMagicPenPrompt,
+} from './magicPenToolsCatalog';
 import type { OptimizationObjective } from './structuralFea';
 
 const ALL_SEGMENTS: ApplicationSegment[] = [
@@ -383,6 +387,7 @@ export const MCP_TOOLS_CATALOG: McpToolDefinition[] = [
             'rib-boss',
             'chamfer-fillet',
             ...RHINO_COMMAND_CATALOG.map((c) => c.kind),
+            ...EXTENDED_MAGIC_PEN_CATALOG.map((c) => c.kind),
           ],
         },
         point: { type: 'array', items: { type: 'number' }, description: 'Coordenada [x, y, z] em mm.' },
@@ -832,24 +837,26 @@ export function executeMcpToolCall(
         : 'M6') as IsoThreadSpec;
       const threadDef = ISO_METRIC_THREADS[threadSpec] ?? ISO_METRIC_THREADS.M6;
       const rhinoEntry = RHINO_COMMAND_CATALOG.find((c) => c.kind === kind);
+      const extendedEntry = EXTENDED_MAGIC_PEN_CATALOG.find((c) => c.kind === kind);
+      const catalogDefaults = rhinoEntry?.defaultParams ?? extendedEntry?.defaultParams;
       const widthMm = Number(
         args.widthMm ??
-          rhinoEntry?.defaultParams.widthMm ??
+          catalogDefaults?.widthMm ??
           (kind === 'slot-cutout' ? 12 : threadDef.headDiameterMm)
       );
       const lengthMm = Number(
         args.lengthMm ??
-          rhinoEntry?.defaultParams.lengthMm ??
+          catalogDefaults?.lengthMm ??
           (kind === 'slot-cutout' ? 28 : widthMm)
       );
       const diameterMm = Number(
         args.diameterMm ??
-          rhinoEntry?.defaultParams.diameterMm ??
+          catalogDefaults?.diameterMm ??
           (kind === 'threaded-bolt' ? threadDef.nominalDiameterMm : 12)
       );
       const depthMm = Number(
         args.depthMm ??
-          rhinoEntry?.defaultParams.depthMm ??
+          catalogDefaults?.depthMm ??
           (kind === 'threaded-bolt' ? 16 : 8)
       );
       const label =
@@ -857,15 +864,17 @@ export function executeMcpToolCall(
           ? args.label.trim()
           : rhinoEntry
             ? `Rhino ${rhinoEntry.command} (${depthMm}mm)`
-            : kind === 'threaded-bolt'
-              ? `Parafuso ${threadDef.spec}×${threadDef.pitchMm} (L=${depthMm}mm)`
-              : kind === 'slot-cutout'
-                ? `Rasgo Paramétrico ${widthMm}×${lengthMm}mm`
-                : kind === 'through-hole'
-                  ? `Furo Ø${diameterMm}mm`
-                  : kind === 'rib-boss'
-                    ? `Nervura/Ressalto ${widthMm}×${lengthMm}mm`
-                    : `Chanfro/Filete ${widthMm}mm`;
+            : extendedEntry
+              ? `${extendedEntry.suite === 'blender' ? 'Blender' : 'BIM/IFC'} ${extendedEntry.command} (${depthMm}mm)`
+              : kind === 'threaded-bolt'
+                ? `Parafuso ${threadDef.spec}×${threadDef.pitchMm} (L=${depthMm}mm)`
+                : kind === 'slot-cutout'
+                  ? `Rasgo Paramétrico ${widthMm}×${lengthMm}mm`
+                  : kind === 'through-hole'
+                    ? `Furo Ø${diameterMm}mm`
+                    : kind === 'rib-boss'
+                      ? `Nervura/Ressalto ${widthMm}×${lengthMm}mm`
+                      : `Chanfro/Filete ${widthMm}mm`;
 
       const created = ctx.onAddFeatureOp({
         kind,
@@ -881,19 +890,22 @@ export function executeMcpToolCall(
         threadPitchMm: kind === 'threaded-bolt' ? threadDef.pitchMm : undefined,
         headStyle: args.headStyle === 'hex' ? 'hex' : 'allen',
         slotProfile: args.slotProfile === 'oblong' ? 'oblong' : 'rectangular',
-        rhinoCommand: typeof args.rhinoCommand === 'string' ? args.rhinoCommand : rhinoEntry?.command,
-        count: typeof args.count === 'number' ? args.count : rhinoEntry?.defaultParams.count,
-        angleDeg: typeof args.angleDeg === 'number' ? args.angleDeg : rhinoEntry?.defaultParams.angleDeg,
+        rhinoCommand:
+          typeof args.rhinoCommand === 'string'
+            ? args.rhinoCommand
+            : rhinoEntry?.command ?? extendedEntry?.command,
+        count: typeof args.count === 'number' ? args.count : catalogDefaults?.count,
+        angleDeg: typeof args.angleDeg === 'number' ? args.angleDeg : catalogDefaults?.angleDeg,
         axis:
           args.axis === 'x' || args.axis === 'y' || args.axis === 'z'
             ? args.axis
-            : rhinoEntry?.defaultParams.axis,
+            : catalogDefaults?.axis,
         wallThicknessMm:
           typeof args.wallThicknessMm === 'number'
             ? args.wallThicknessMm
-            : rhinoEntry?.defaultParams.wallThicknessMm,
+            : catalogDefaults?.wallThicknessMm,
         radiusMm:
-          typeof args.radiusMm === 'number' ? args.radiusMm : rhinoEntry?.defaultParams.radiusMm,
+          typeof args.radiusMm === 'number' ? args.radiusMm : catalogDefaults?.radiusMm,
       });
       resultPayload = {
         appliedFeature: created,
@@ -902,10 +914,17 @@ export function executeMcpToolCall(
       };
     } else if (toolName === 'cad_rhino_command') {
       const cmdText = String(args.command ?? '').trim();
-      const parsed = parseRhinoCommandPrompt(cmdText);
-      if (!parsed.matched || !parsed.kind) {
-        throw new Error(`Comando Rhinoceros não reconhecido: "${cmdText}".`);
+      const parsedRhino = parseRhinoCommandPrompt(cmdText);
+      const parsedExtended = parseExtendedMagicPenPrompt(cmdText);
+      const useRhino = parsedRhino.matched && Boolean(parsedRhino.kind);
+      const useExtended = !useRhino && parsedExtended.matched && Boolean(parsedExtended.kind);
+      if (!useRhino && !useExtended) {
+        throw new Error(`Comando Rhinoceros/Blender/BIM não reconhecido: "${cmdText}".`);
       }
+      const resolvedKind = useRhino ? parsedRhino.kind! : parsedExtended.kind!;
+      const resolvedLabel = useRhino ? parsedRhino.label! : parsedExtended.label!;
+      const resolvedCommand = useRhino ? parsedRhino.rhinoCommand : parsedExtended.command;
+      const src = useRhino ? parsedRhino : parsedExtended;
       const bbox = ctx.meshData.boundingBox;
       const rawPt = Array.isArray(args.point) ? args.point.map(Number) : null;
       const rawNorm = Array.isArray(args.normal) ? args.normal.map(Number) : null;
@@ -918,28 +937,28 @@ export function executeMcpToolCall(
           ? [rawNorm[0], rawNorm[1], rawNorm[2]]
           : [0, 1, 0];
       const created = ctx.onAddFeatureOp({
-        kind: parsed.kind,
-        label: parsed.label!,
+        kind: resolvedKind,
+        label: resolvedLabel,
         targetComponentId: String(args.targetComponentId ?? ctx.display.selectedComponentId ?? 'shell'),
         point: pt,
         normal: norm,
-        widthMm: parsed.widthMm!,
-        lengthMm: parsed.lengthMm!,
-        diameterMm: parsed.diameterMm!,
-        depthMm: parsed.depthMm!,
-        rhinoCommand: parsed.rhinoCommand,
-        count: parsed.count,
-        angleDeg: parsed.angleDeg,
-        axis: parsed.axis,
-        wallThicknessMm: parsed.wallThicknessMm,
-        radiusMm: parsed.radiusMm,
+        widthMm: src.widthMm!,
+        lengthMm: src.lengthMm!,
+        diameterMm: src.diameterMm!,
+        depthMm: src.depthMm!,
+        rhinoCommand: resolvedCommand,
+        count: src.count,
+        angleDeg: src.angleDeg,
+        axis: src.axis,
+        wallThicknessMm: src.wallThicknessMm,
+        radiusMm: src.radiusMm,
         mcpCommand: cmdText,
       });
       resultPayload = {
         appliedFeature: created,
-        rhinoCommand: parsed.rhinoCommand,
+        rhinoCommand: resolvedCommand,
         totalFeaturesCount: ctx.featureOps.length + 1,
-        status: `${parsed.label} aplicado na cena 3D via motor Rhino MCP.`,
+        status: `${resolvedLabel} aplicado na cena 3D via motor CAD MCP.`,
       };
     } else if (toolName === 'cad_reset_part_baseline') {
       if (ctx.onResetPartBaseline) {

@@ -19,6 +19,10 @@ import { analyzeCurvatureAndOptimizeWeight } from './src/kernel/curvatureOptimiz
 import { computeScoobiiiVucProof } from './src/kernel/scoobiiiVuc';
 import { resolvePartEngineeringProfile } from './src/kernel/componentClassifier';
 import { selectOptimalLocalLlm } from './src/kernel/llmBootstrap';
+import {
+  NumericTelemetryRingBuffer,
+  resolveAdaptiveRingCapacity,
+} from './src/kernel/ringBuffer';
 import { evaluateRackComparison } from './src/kernel/rackFrostbiteEngine';
 import {
   CAM_PRODUCTION_PROGRAMS,
@@ -119,6 +123,29 @@ const PORT = Number(process.env.PORT) || 3000;
 const MAX_FETCH_BYTES = 12 * 1024 * 1024;
 const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
 const FALLBACK_GEMINI_MODEL = 'gemini-3.1-flash-lite';
+
+const INITIAL_FREE_RAM_GB = Number((os.freemem() / (1024 ** 3)).toFixed(2));
+const TELEMETRY_RING_CAPACITY = resolveAdaptiveRingCapacity(INITIAL_FREE_RAM_GB);
+const serverCpuRing = new NumericTelemetryRingBuffer(TELEMETRY_RING_CAPACITY);
+const serverRamRing = new NumericTelemetryRingBuffer(TELEMETRY_RING_CAPACITY);
+
+function probeLinuxHardwareGpu(): { name: string; source: string } {
+  const candidates = [
+    { path: '/sys/class/kgsl/kgsl-3d0/gpu_model', source: 'sysfs-kgsl' },
+    { path: '/sys/class/drm/card0/device/product_name', source: 'sysfs-drm' },
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c.path)) {
+        const raw = fs.readFileSync(c.path, 'utf8').trim();
+        if (raw) return { name: raw, source: c.source };
+      }
+    } catch {
+      // Ignore unreadable sysfs nodes inside proot/container
+    }
+  }
+  return { name: 'Host Runtime GPU', source: 'fallback' };
+}
 
 function isDisallowedHostname(hostname: string): boolean {
   const lower = hostname.toLowerCase();
@@ -2325,10 +2352,17 @@ ${ragBlock}`;
     const freeRamGb = Number((os.freemem() / (1024 ** 3)).toFixed(2));
     const load1m = os.loadavg()[0] || 0.25;
     const cpuLoadPct = Number(Math.min(100, (load1m / Math.max(1, cpus.length)) * 100).toFixed(1));
-    const gpuHint = String(req.query.gpuName || 'Host Runtime GPU');
+    serverCpuRing.push(cpuLoadPct);
+    serverRamRing.push(freeRamGb);
+
+    const queryGpu = typeof req.query.gpuName === 'string' ? req.query.gpuName.trim() : '';
+    const probed = queryGpu
+      ? { name: queryGpu.slice(0, 120), source: 'client-webgl2' }
+      : probeLinuxHardwareGpu();
+    const gpuHint = probed.name;
     const gpuTier = /rtx|a100|h100|b200|nvidia/i.test(gpuHint)
       ? 'datacenter'
-      : /radeon|gtx|arc|apple m/i.test(gpuHint)
+      : /radeon|gtx|arc|apple m|adreno|mali/i.test(gpuHint)
         ? 'dedicated-mid'
         : 'integrated';
 
@@ -2345,7 +2379,22 @@ ${ragBlock}`;
     };
     const recommendation = selectOptimalLocalLlm(snapshot);
     const localQwenStatus = getLocalQwenStatus();
-    return res.json({ snapshot, recommendation, localQwenStatus, wsClients: wss.clients.size });
+    const ringBufferStats = {
+      telemetryCapacity: TELEMETRY_RING_CAPACITY,
+      telemetryBytes:
+        (serverCpuRing.stats().byteLength ?? 0) + (serverRamRing.stats().byteLength ?? 0),
+      cpuRing: serverCpuRing.stats(),
+      ramRing: serverRamRing.stats(),
+      profileTier: freeRamGb <= 4.5 ? 'MOBILE_LITE' : 'STANDARD',
+      detectedGpuSource: probed.source,
+    };
+    return res.json({
+      snapshot,
+      recommendation,
+      localQwenStatus,
+      wsClients: wss.clients.size,
+      ringBufferStats,
+    });
   });
 
   // Multi-Agent Dropdown Router + MCP Eye Feedback Loop (Voice & Text CAM)

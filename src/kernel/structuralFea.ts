@@ -207,11 +207,11 @@ export function evaluateStructuralFea(
         const influenceR = Math.max(12, charLen * 1.45);
         if (dist < influenceR) {
           const proximity = Math.exp(-Math.pow(dist / (influenceR * 0.52), 2));
-          if (op.kind === 'slot-cutout' || op.kind === 'through-hole') {
+          if (op.kind === 'slot-cutout' || op.kind === 'through-hole' || op.kind === 'blender-boolean-mod') {
             concentrationKt += proximity * 0.95;
           } else if (op.kind === 'threaded-bolt') {
             concentrationKt += proximity * 0.32;
-          } else if (op.kind === 'rib-boss') {
+          } else if (op.kind === 'rib-boss' || op.kind.startsWith('bim-ifc-')) {
             concentrationKt = Math.max(0.72, concentrationKt - proximity * 0.22);
           }
         }
@@ -299,10 +299,10 @@ export function evaluateStructuralFea(
   const eMpa = spec.youngsModulusGpa * 1000;
   const shellI = (effectiveWidthMm * Math.pow(thickness, 3)) / 12;
   const featureCutRatio = featureOps.reduce((acc, op) => {
-    if (op.kind === 'slot-cutout' || op.kind === 'through-hole') {
+    if (op.kind === 'slot-cutout' || op.kind === 'through-hole' || op.kind === 'blender-boolean-mod') {
       return Math.max(0.55, acc - 0.045);
     }
-    if (op.kind === 'rib-boss') {
+    if (op.kind === 'rib-boss' || op.kind.startsWith('bim-ifc-')) {
       return Math.min(1.35, acc + 0.06);
     }
     return acc;

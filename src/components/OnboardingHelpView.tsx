@@ -14,6 +14,7 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  Palette,
   Pause,
   Play,
   Puzzle,
@@ -280,33 +281,132 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
   };
 
   const activeVoiceTopic = VOICE_GUIDE_TOPICS.find((t) => t.id === speakingTopicId) ?? null;
+  const biPct = liveErpSnapshot?.biSummary.techReadinessPct ?? (scoobiiiProof.allPassed ? 94 : 68);
+  const vucPassedCount = scoobiiiProof.checks.filter((c) => c.passed).length;
+  const vucTotalCount = Math.max(1, scoobiiiProof.checks.length);
+  const vucPct = Math.round((vucPassedCount / vucTotalCount) * 100);
+  const biDash = `${Math.max(8, Math.round((biPct / 100) * 100))}, 100`;
+  const vucDash = `${Math.max(8, Math.round((vucPct / 100) * 100))}, 100`;
 
   return (
     <div className="w-full h-full overflow-y-auto overflow-x-hidden bg-[#0b0e14] text-slate-100">
-      <div className="max-w-5xl mx-auto px-3.5 sm:px-6 py-5 sm:py-10 space-y-7 sm:space-y-10">
-        {/* Hero Header */}
-        <section className="space-y-4 pb-6 sm:pb-8 border-b border-white/10">
-          <p className="text-xs font-medium text-sky-400 leading-snug">
-            Guia de Início, Ajuda por Voz & Documentação · Engenheiros, Devs e Agentes
-          </p>
-          <h1
-            className="font-display text-2xl sm:text-4xl font-bold tracking-tight text-slate-100 max-w-3xl leading-[1.15]"
-            style={{ textWrap: 'balance' }}
-          >
-            Ambiente Paramétrico NURBS, Editor 3D IX, FEA & MCP por Segmento
-          </h1>
-          <p className="text-sm sm:text-base text-slate-400 max-w-2xl leading-relaxed">
-            Suba arquivos CAD (.STP/.STEP via OpenCASCADE, .IPT, .STL, .OBJ, .DXF, .3DM, .IFC, .SVG) ou
-            imagens (.PNG, .JPG, .WEBP), edite com a Caneta Mágica, valide tolerâncias GD&T, pegada
-            de carbono e certifique tudo com a prova matemática SCOOBIII/VUC.
-          </p>
+      <div className="max-w-6xl mx-auto px-3.5 sm:px-6 py-4 sm:py-6 space-y-6">
+        {/* Top Fold: Graphics-First Studio Cockpit + SVG Live Gauges + Primary Actions */}
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch pb-5 border-b border-white/10">
+          {/* Left: Interactive Visual Telemetry Cards & Micro-Charts (Leads at Top!) */}
+          <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <button
+              type="button"
+              onClick={() => onNavigate('viewport')}
+              className="p-3 bg-[#111620] border border-sky-500/30 hover:border-sky-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-sky-300">CAD 3D IX</span>
+                <svg viewBox="0 0 36 36" className="w-8 h-8 -rotate-90" aria-hidden="true">
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="#38bdf8" strokeWidth="3.5" strokeDasharray="82, 100" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-base font-bold font-mono-tabular text-slate-100">
+                  {meshData.triangleCount.toLocaleString('pt-BR')}
+                </div>
+                <div className="text-[10px] text-slate-400 truncate">
+                  tri · {meshData.volumeCm3} cm³
+                </div>
+              </div>
+            </button>
 
-          <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2.5 pt-2">
-            <div className="grid grid-cols-2 gap-2.5 sm:flex sm:gap-2.5">
+            <button
+              type="button"
+              onClick={() => onNavigate('sustainability')}
+              className="p-3 bg-[#111620] border border-emerald-500/30 hover:border-emerald-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-emerald-300">CAE / VUC</span>
+                <svg viewBox="0 0 36 36" className="w-8 h-8 -rotate-90" aria-hidden="true">
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="#34d399" strokeWidth="3.5" strokeDasharray={vucDash} strokeLinecap="round" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-base font-bold font-mono-tabular text-slate-100">
+                  {vucPassedCount}/{vucTotalCount}
+                </div>
+                <div className="text-[10px] text-slate-400 truncate">
+                  Prova Matemática {scoobiiiProof.allPassed ? 'OK' : 'Pendente'}
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => (onOpenErpEntry ? onOpenErpEntry() : onNavigate('ecosystem'))}
+              className="p-3 bg-[#111620] border border-indigo-500/30 hover:border-indigo-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-indigo-300">ERP / BI</span>
+                <svg viewBox="0 0 36 36" className="w-8 h-8 -rotate-90" aria-hidden="true">
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="#818cf8" strokeWidth="3.5" strokeDasharray={biDash} strokeLinecap="round" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-base font-bold font-mono-tabular text-slate-100">
+                  {biPct}%
+                </div>
+                <div className="text-[10px] text-slate-400 truncate">
+                  {liveErpSnapshot && !liveErpSnapshot.pricingAndRoi.commercialDisclosureBlocked
+                    ? `R$ ${liveErpSnapshot.pricingAndRoi.parametrixPriceUnitBrl.toFixed(0)} · ROI ${(liveErpSnapshot.pricingAndRoi.roiPct ?? 0).toFixed(0)}%`
+                    : 'Prontidão Operacional'}
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigate('cam')}
+              className="p-3 bg-[#111620] border border-amber-500/30 hover:border-amber-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-amber-300">CAM Tempo Real</span>
+                <svg viewBox="0 0 36 36" className="w-8 h-8" aria-hidden="true">
+                  <rect x="4" y="20" width="5" height="10" rx="1" fill="#fbbf24" opacity="0.55" />
+                  <rect x="12" y="13" width="5" height="17" rx="1" fill="#fbbf24" opacity="0.8" />
+                  <rect x="20" y="7" width="5" height="23" rx="1" fill="#38bdf8" />
+                  <rect x="28" y="11" width="5" height="19" rx="1" fill="#34d399" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-base font-bold font-mono-tabular text-slate-100 truncate">
+                  {formatDuration(sessionSeconds)}
+                </div>
+                <div className="text-[10px] text-slate-400 truncate">
+                  {deliverables.length} entregáveis · 8 processos
+                </div>
+              </div>
+            </button>
+          </div>
+
+          {/* Right: Crisp Studio Header + 4 Touch Actions */}
+          <div className="lg:col-span-5 p-4 bg-[#111620] border border-white/10 rounded-xl flex flex-col justify-between gap-3">
+            <div className="space-y-1">
+              <div className="text-[11px] text-sky-400 font-medium truncate">
+                {activeUserLabel || user?.email || 'Operador Local'} · {surface.name}
+              </div>
+              <h1
+                className="font-display text-lg sm:text-xl font-bold tracking-tight text-slate-100 leading-snug"
+                style={{ textWrap: 'balance' }}
+              >
+                Parametrix CAD, CAE, CAM & ERP em Tempo Real
+              </h1>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => onNavigate('viewport')}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap cursor-pointer"
               >
                 Editor 3D IX
                 <ArrowRight className="w-3.5 h-3.5 shrink-0" />
@@ -315,150 +415,87 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
                 type="button"
                 disabled={uploadBusy}
                 onClick={() => fileInputRef.current?.click()}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-60 transition-colors whitespace-nowrap cursor-pointer"
               >
                 {uploadBusy ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
                 ) : (
                   <FileUp className="w-3.5 h-3.5 shrink-0" />
                 )}
-                <span>{uploadBusy ? 'Importando...' : 'Subir Arquivo'}</span>
+                <span>{uploadBusy ? 'Importando...' : 'Subir CAD / Img'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => (onOpenErpEntry ? onOpenErpEntry() : onNavigate('ecosystem'))}
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg whitespace-nowrap cursor-pointer"
+              >
+                <Briefcase className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span>ERP Open & BI</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('library')}
+                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-emerald-400/50 rounded-lg whitespace-nowrap cursor-pointer"
+              >
+                <BookOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Lib / Biblioteca</span>
               </button>
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={ACCEPTED_CAD_EXTENSIONS}
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (!file) return;
-                setUploadError(null);
-                setUploadBusy(true);
-                try {
-                  await onUploadFile(file);
-                } catch (err) {
-                  setUploadError(
-                    err instanceof Error ? err.message : 'Falha ao processar o arquivo.'
-                  );
-                } finally {
-                  setUploadBusy(false);
-                }
-              }}
-            />
-            <div className="grid grid-cols-2 gap-2.5 sm:flex sm:gap-2.5">
+
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] pt-1 border-t border-white/8">
+              <button
+                type="button"
+                onClick={() => onNavigate('media-studio')}
+                className="text-cyan-300 hover:text-cyan-200 font-medium flex items-center gap-1 cursor-pointer"
+              >
+                <Palette className="w-3 h-3" /> Media Studio 1.0
+              </button>
               <button
                 type="button"
                 onClick={() => onNavigate('mcp')}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 rounded-lg hover:border-sky-400/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="text-amber-300 hover:text-amber-200 font-medium flex items-center gap-1 cursor-pointer"
               >
-                <Terminal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                Agente MCP
+                <Terminal className="w-3 h-3" /> Agente MCP
               </button>
-              <button
-                type="button"
-                onClick={() => onNavigate('sustainability')}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 rounded-lg hover:border-emerald-400/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              <a
+                href="/gitpage/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-sky-300 hover:text-sky-200 font-medium inline-flex items-center gap-1"
               >
-                <Sigma className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                CO₂ & VUC ({scoobiiiProof.allPassed ? 'OK' : 'VER'})
-              </button>
+                GitPage Dinâmica <ArrowRight className="w-3 h-3" />
+              </a>
             </div>
-            <a
-              href="/gitpage/"
-              target="_blank"
-              rel="noreferrer"
-              className="min-h-[44px] flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-[#0e131c] border border-white/10 text-sky-300 hover:border-sky-400/50 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              GitPage Dinâmica
-              <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-            </a>
           </div>
 
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_CAD_EXTENSIONS}
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file) return;
+              setUploadError(null);
+              setUploadBusy(true);
+              try {
+                await onUploadFile(file);
+              } catch (err) {
+                setUploadError(
+                  err instanceof Error ? err.message : 'Falha ao processar o arquivo.'
+                );
+              } finally {
+                setUploadBusy(false);
+              }
+            }}
+          />
+
           {uploadError && (
-            <div className="p-3 bg-rose-500/10 border border-rose-500/35 rounded-lg text-xs text-rose-300">
+            <div className="lg:col-span-12 p-3 bg-rose-500/10 border border-rose-500/35 rounded-lg text-xs text-rose-300">
               {uploadError}
             </div>
           )}
-        </section>
-
-        {/* Entrada Parametrix ERP Open & Biblioteca por Categoria */}
-        <section className="p-4 sm:p-5 bg-[#111620] border border-sky-500/30 rounded-xl space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-display text-sm sm:text-base font-semibold text-slate-100 flex items-center gap-2">
-                <Briefcase className="w-4 h-4 text-sky-400 shrink-0" />
-                Entrada Parametrix ERP Open + Biblioteca por Categoria
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Sessão ativa: <strong className="text-slate-200">{activeUserLabel || user?.email || 'Operador Local'}</strong>
-                {liveErpSnapshot && (
-                  <>
-                    {' · '}
-                    <span>Prontidão BI: {liveErpSnapshot.biSummary.techReadinessPct}%</span>
-                  </>
-                )}
-              </p>
-            </div>
-            {liveErpSnapshot && (
-              <div className="text-[11px] font-mono-tabular px-2.5 py-1 rounded-lg bg-[#0c1017] border border-white/10 text-slate-200">
-                {liveErpSnapshot.pricingAndRoi.commercialDisclosureBlocked ? (
-                  <span className="text-amber-300">
-                    Frostbite 7nm CMOS Pré-Silício · Sem divulgação comercial pública
-                  </span>
-                ) : (
-                  <span>
-                    Custo R$ {liveErpSnapshot.pricingAndRoi.totalCostUnitBrl.toFixed(2)} · Preço Parametrix{' '}
-                    <strong className="text-emerald-300">
-                      R$ {liveErpSnapshot.pricingAndRoi.parametrixPriceUnitBrl.toFixed(2)}
-                    </strong>{' '}
-                    · ROI <strong className="text-sky-300">{(liveErpSnapshot.pricingAndRoi.roiPct ?? 0).toFixed(1)}%</strong> ({liveErpSnapshot.taxBreakdown.regime.toUpperCase()})
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => (onOpenErpEntry ? onOpenErpEntry() : onNavigate('ecosystem'))}
-              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-lg flex items-center gap-1.5 cursor-pointer"
-            >
-              <Briefcase className="w-3.5 h-3.5" />
-              ERP Open & BI/CRM
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('library')}
-              className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 hover:border-emerald-400 rounded-lg flex items-center gap-1.5 cursor-pointer"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              Lib / Biblioteca
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('viewport')}
-              className="min-h-[38px] px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg cursor-pointer"
-            >
-              CAD 3D
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('sustainability')}
-              className="min-h-[38px] px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-emerald-400/50 rounded-lg cursor-pointer"
-            >
-              CAE / Fadiga
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('cam')}
-              className="min-h-[38px] px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-amber-400/50 rounded-lg cursor-pointer"
-            >
-              CAM & Robô
-            </button>
-          </div>
         </section>
 
         {/* Quick Full-Workspace Preset Auto-Fill Section */}

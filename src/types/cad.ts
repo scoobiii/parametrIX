@@ -11,7 +11,8 @@ export type WorkspaceTab =
   | 'sustainability'
   | 'mcp'
   | 'plugins'
-  | 'files';
+  | 'files'
+  | 'media-studio';
 
 export type PresetId = 'shell' | 'impeller' | 'cavity' | 'diagrid';
 
@@ -508,7 +509,21 @@ export interface AgentChatMessage {
 export interface SessionDeliverable {
   id: string;
   filename: string;
-  kind: '3DM' | 'STL' | 'DXF' | 'NC' | 'SRC' | 'MOD' | 'PLUGIN' | 'MCP' | 'ICS' | 'REPORT';
+  kind:
+    | '3DM'
+    | 'STL'
+    | 'DXF'
+    | 'NC'
+    | 'SRC'
+    | 'MOD'
+    | 'PLUGIN'
+    | 'MCP'
+    | 'ICS'
+    | 'REPORT'
+    | 'SVG'
+    | 'PDF'
+    | 'PNG'
+    | 'JPG';
   timestamp: string;
   summary: string;
 }
@@ -557,7 +572,27 @@ export type MagicPenOperationKind =
   | 'rhino-bend'
   | 'rhino-twist'
   | 'rhino-taper'
-  | 'rhino-flow-along-srf';
+  | 'rhino-flow-along-srf'
+  | 'blender-subsurf'
+  | 'blender-bevel'
+  | 'blender-solidify'
+  | 'blender-array-mod'
+  | 'blender-boolean-mod'
+  | 'blender-decimate'
+  | 'blender-remesh-voxel'
+  | 'blender-bridge-loops'
+  | 'blender-screw-lathe'
+  | 'blender-lattice-deform'
+  | 'bim-ifc-beam'
+  | 'bim-ifc-column'
+  | 'bim-ifc-slab'
+  | 'bim-ifc-wall'
+  | 'bim-ifc-truss'
+  | 'bim-ifc-bracing'
+  | 'bim-ifc-footing'
+  | 'bim-ifc-stair'
+  | 'bim-ifc-curtainwall'
+  | 'bim-ifc-mep-duct';
 
 export type IsoThreadSpec = 'M3' | 'M4' | 'M5' | 'M6' | 'M8' | 'M10' | 'M12';
 

@@ -28,6 +28,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sigma,
+  SlidersHorizontal,
   SplitSquareHorizontal,
   Trash2,
   Volume2,
@@ -40,6 +41,10 @@ import {
   interpolateSphericalCameraPose,
 } from '../kernel/cameraTransitions';
 import { solveRobot6AxisIK } from '../kernel/camRobotics';
+import {
+  BIM_IFC_TOOL_CATALOG,
+  BLENDER_TOOL_CATALOG,
+} from '../kernel/magicPenToolsCatalog';
 import { RHINO_COMMAND_CATALOG } from '../kernel/rhinoGeometryEngine';
 import { ISO_METRIC_THREADS } from '../kernel/scoobiiiVuc';
 import { stressRatioToRgb } from '../kernel/structuralFea';
@@ -66,7 +71,7 @@ import type {
 import { ScoobiiiVucModal } from './ScoobiiiVucModal';
 
 type IxMenuTab = 'none' | 'models' | 'section' | 'explode' | 'measure';
-type MagicPenMenuTab = 'slot' | 'hole' | 'bolt' | 'rib' | 'rhino' | 'part';
+type MagicPenMenuTab = 'slot' | 'hole' | 'bolt' | 'rib' | 'rhino' | 'blender' | 'bim' | 'part';
 type MeasureToolMode =
   | 'edge-length'
   | 'edge-radius'
@@ -215,6 +220,21 @@ interface Viewport3DProps {
   onResetPart?: () => void;
   camVisualState?: CamProcessVisualState | null;
   onSelectComponentCamProcess?: (machineType: MachineType, comp: CadComponentPart) => void;
+  curvatureFactor?: number;
+  onChangeCurvatureFactor?: (val: number) => void;
+  curvatureSummary?: {
+    weightBeforeKg: number;
+    weightAfterKg: number;
+    weightDeltaPct: number;
+    safetyFactor: number;
+    deflectionMm: number;
+    integrityPreserved: boolean;
+    targetThicknessMm: number;
+    targetArchHeightMm: number;
+  };
+  onCommitCurvature?: () => void;
+  onResetCurvature?: () => void;
+  onDetectedGpuRenderer?: (gpu: string) => void;
 }
 
 const _vec3A = new THREE.Vector3();
@@ -902,15 +922,25 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   onResetPart,
   camVisualState = null,
   onSelectComponentCamProcess,
+  curvatureFactor = 0,
+  onChangeCurvatureFactor,
+  curvatureSummary,
+  onCommitCurvature,
+  onResetCurvature,
+  onDetectedGpuRenderer,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const onDetectedGpuRendererRef = useRef(onDetectedGpuRenderer);
+  onDetectedGpuRendererRef.current = onDetectedGpuRenderer;
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(
     () => typeof window !== 'undefined' && window.innerWidth < 768
   );
   const [webglLost, setWebglLost] = useState(false);
   const [liveReadout, setLiveReadout] = useState<{ x: number; y: number; z: number } | null>(null);
   const [feaSimPulsed, setFeaSimPulsed] = useState(false);
+  const [curvatureHudOpen, setCurvatureHudOpen] = useState(false);
+  const [mobileLegendOpen, setMobileLegendOpen] = useState(false);
 
   // IX Navigation Menus, Upload & Measurement state
   const [activeIxMenu, setActiveIxMenu] = useState<IxMenuTab>('none');
@@ -938,6 +968,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [penThreadSpec, setPenThreadSpec] = useState<IsoThreadSpec>('M6');
   const [penHeadStyle, setPenHeadStyle] = useState<'allen' | 'hex'>('allen');
   const [penRhinoKind, setPenRhinoKind] = useState<MagicPenOperationKind>('rhino-extrude-crv');
+  const [penBlenderKind, setPenBlenderKind] = useState<MagicPenOperationKind>('blender-subsurf');
+  const [penBimKind, setPenBimKind] = useState<MagicPenOperationKind>('bim-ifc-beam');
   const [penRhinoRadius, setPenRhinoRadius] = useState(4);
   const [penRhinoWall, setPenRhinoWall] = useState(2.5);
   const [penRhinoAngle, setPenRhinoAngle] = useState(45);
@@ -1144,10 +1176,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     const isSoftwareGl = (() => {
       const gl = document.createElement('canvas').getContext('webgl2');
-      if (!gl) return true;
+      if (!gl) {
+        onDetectedGpuRendererRef.current?.('WebGL2 Indisponível (Fallback)');
+        return true;
+      }
       const ext = gl.getExtension('WEBGL_debug_renderer_info');
       const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-      const gpu = String(gl.getParameter(param));
+      const gpu = String(gl.getParameter(param) || 'WebGL2 Hardware');
+      onDetectedGpuRendererRef.current?.(gpu);
       gl.getExtension('WEBGL_lose_context')?.loseContext();
       return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
     })();
@@ -2768,6 +2804,43 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       roughness: 0.24,
       clippingPlanes: activeClip,
     });
+    const blenderMat = new THREE.MeshPhysicalMaterial({
+      color: 0xf97316,
+      emissive: 0x431407,
+      metalness: 0.45,
+      roughness: 0.3,
+      clearcoat: 0.35,
+      clippingPlanes: activeClip,
+    });
+    const blenderWireMat = new THREE.LineBasicMaterial({
+      color: 0xfb923c,
+      clippingPlanes: activeClip,
+    });
+    const bimSteelMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      metalness: 0.78,
+      roughness: 0.28,
+      clippingPlanes: activeClip,
+    });
+    const bimConcreteMat = new THREE.MeshStandardMaterial({
+      color: 0x9ca3af,
+      metalness: 0.12,
+      roughness: 0.82,
+      clippingPlanes: activeClip,
+    });
+    const bimGlassMat = new THREE.MeshPhysicalMaterial({
+      color: 0x7dd3fc,
+      metalness: 0.1,
+      roughness: 0.08,
+      transmission: 0.55,
+      transparent: true,
+      opacity: 0.65,
+      clippingPlanes: activeClip,
+    });
+    const rhinoEdgeMat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      clippingPlanes: activeClip,
+    });
 
     for (const op of featureOps) {
       const container = new THREE.Group();
@@ -2950,7 +3023,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         const h = Math.max(4, op.depthMm);
         const wall = Math.max(1, op.wallThicknessMm ?? 2.2);
         const outer = new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, l));
-        container.add(new THREE.LineSegments(outer, new THREE.LineBasicMaterial({ color: 0x38bdf8 })));
+        container.add(new THREE.LineSegments(outer, rhinoEdgeMat));
         const inner = new THREE.Mesh(
           new THREE.BoxGeometry(Math.max(2, w - wall * 2), Math.max(2, h - wall), Math.max(2, l - wall * 2)),
           gussetMat
@@ -2976,7 +3049,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           }
           container.add(boss);
         }
-      } else {
+      } else if (op.kind.startsWith('rhino-')) {
         // rhino-bend / rhino-twist / rhino-taper / rhino-flow-along-srf
         const w = Math.max(6, op.widthMm);
         const h = Math.max(6, op.depthMm);
@@ -2993,6 +3066,216 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         if (op.kind === 'rhino-bend') mesh.rotation.z = ((op.angleDeg ?? 35) * Math.PI) / 180;
         if (op.kind === 'rhino-flow-along-srf') mesh.scale.set(1, 0.7, l / Math.max(8, w));
         container.add(mesh);
+      } else if (op.kind.startsWith('blender-')) {
+        const w = Math.max(8, op.widthMm);
+        const l = Math.max(8, op.lengthMm);
+        const h = Math.max(5, op.depthMm);
+        if (op.kind === 'blender-subsurf' || op.kind === 'blender-decimate') {
+          const detail = op.kind === 'blender-subsurf' ? 2 : 0;
+          const icoGeo = new THREE.IcosahedronGeometry(Math.max(4, w * 0.42), detail);
+          const mesh = new THREE.Mesh(icoGeo, blenderMat);
+          mesh.position.y = Math.max(4, w * 0.42);
+          mesh.castShadow = true;
+          container.add(mesh);
+          const cageGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(w * 0.9, w * 0.9, w * 0.9));
+          const cage = new THREE.LineSegments(cageGeo, blenderWireMat);
+          cage.position.y = Math.max(4, w * 0.42);
+          container.add(cage);
+        } else if (op.kind === 'blender-bevel') {
+          const shape = new THREE.Shape();
+          shape.moveTo(-w * 0.45, -l * 0.45);
+          shape.lineTo(w * 0.45, -l * 0.45);
+          shape.lineTo(w * 0.45, l * 0.45);
+          shape.lineTo(-w * 0.45, l * 0.45);
+          shape.closePath();
+          const bevelGeo = new THREE.ExtrudeGeometry(shape, {
+            depth: h,
+            bevelEnabled: true,
+            bevelThickness: Math.max(1.2, op.radiusMm ?? 2.8),
+            bevelSize: Math.max(1.2, op.radiusMm ?? 2.8),
+            bevelSegments: Math.min(8, Math.max(2, op.count ?? 4)),
+          });
+          bevelGeo.rotateX(-Math.PI / 2);
+          const mesh = new THREE.Mesh(bevelGeo, blenderMat);
+          mesh.castShadow = true;
+          container.add(mesh);
+        } else if (op.kind === 'blender-solidify' || op.kind === 'blender-lattice-deform') {
+          const shellBox = new THREE.BoxGeometry(w, h, l, 2, 2, 2);
+          const core = new THREE.Mesh(shellBox, op.kind === 'blender-solidify' ? blenderMat : gussetMat);
+          core.position.y = h * 0.5;
+          container.add(core);
+          const wire = new THREE.LineSegments(
+            new THREE.EdgesGeometry(new THREE.BoxGeometry(w + 3, h + 3, l + 3)),
+            blenderWireMat
+          );
+          wire.position.y = h * 0.5;
+          container.add(wire);
+        } else if (op.kind === 'blender-array-mod') {
+          const cnt = Math.min(8, Math.max(2, Math.round(op.count ?? 5)));
+          const spacing = Math.max(6, w * 0.85);
+          for (let i = 0; i < cnt; i++) {
+            const box = new THREE.Mesh(new THREE.BoxGeometry(w * 0.65, h, w * 0.65), blenderMat);
+            const offset = (i - (cnt - 1) * 0.5) * spacing;
+            if (op.axis === 'z') box.position.set(0, h * 0.5, offset);
+            else if (op.axis === 'y') box.position.set(0, h * (0.5 + i * 0.9), 0);
+            else box.position.set(offset, h * 0.5, 0);
+            box.castShadow = true;
+            container.add(box);
+          }
+        } else if (op.kind === 'blender-boolean-mod') {
+          const cutMesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(w * 0.4, w * 0.4, h, 24),
+            pocketMat
+          );
+          cutMesh.position.y = -h * 0.35;
+          container.add(cutMesh);
+          const rim = new THREE.Mesh(
+            new THREE.TorusGeometry(w * 0.42, 1.1, 10, 24),
+            blenderMat
+          );
+          rim.rotation.x = Math.PI / 2;
+          rim.position.y = 0.6;
+          container.add(rim);
+        } else if (op.kind === 'blender-remesh-voxel') {
+          const voxelSize = Math.max(3.5, Math.min(8, w * 0.28));
+          const offsets = [-1, 0, 1];
+          for (const vx of offsets) {
+            for (const vz of offsets) {
+              if (Math.abs(vx) + Math.abs(vz) === 2) continue;
+              const vMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(voxelSize, voxelSize, voxelSize),
+                blenderMat
+              );
+              vMesh.position.set(vx * voxelSize * 1.05, voxelSize * 0.5, vz * voxelSize * 1.05);
+              container.add(vMesh);
+            }
+          }
+        } else if (op.kind === 'blender-bridge-loops') {
+          const bridgeCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(-l * 0.45, 1, 0),
+            new THREE.Vector3(0, h * 0.85, 0),
+            new THREE.Vector3(l * 0.45, 1, 0),
+          ]);
+          const bridgeMesh = new THREE.Mesh(
+            new THREE.TubeGeometry(bridgeCurve, 20, Math.max(2, w * 0.22), 12, false),
+            blenderMat
+          );
+          bridgeMesh.castShadow = true;
+          container.add(bridgeMesh);
+        } else {
+          // blender-screw-lathe
+          const rHelix = Math.max(5, op.radiusMm ?? w * 0.45);
+          const torus = new THREE.Mesh(
+            new THREE.TorusKnotGeometry(rHelix * 0.65, Math.max(1.2, rHelix * 0.18), 48, 12, 2, 3),
+            blenderMat
+          );
+          torus.position.y = h * 0.55;
+          torus.castShadow = true;
+          container.add(torus);
+        }
+      } else {
+        // BIM / IFC structural & MEP elements (bim-ifc-*)
+        const w = Math.max(6, op.widthMm);
+        const l = Math.max(12, op.lengthMm);
+        const h = Math.max(6, op.depthMm);
+        if (op.kind === 'bim-ifc-beam') {
+          const flangeH = Math.max(1.8, h * 0.16);
+          const topFlange = new THREE.Mesh(new THREE.BoxGeometry(w, flangeH, l), bimSteelMat);
+          topFlange.position.y = h - flangeH * 0.5;
+          const botFlange = new THREE.Mesh(new THREE.BoxGeometry(w, flangeH, l), bimSteelMat);
+          botFlange.position.y = flangeH * 0.5;
+          const web = new THREE.Mesh(
+            new THREE.BoxGeometry(Math.max(1.8, w * 0.22), Math.max(2, h - flangeH * 2), l),
+            bimSteelMat
+          );
+          web.position.y = h * 0.5;
+          container.add(topFlange, botFlange, web);
+        } else if (op.kind === 'bim-ifc-column') {
+          const plate = new THREE.Mesh(new THREE.BoxGeometry(w * 1.45, 2.2, w * 1.45), bimConcreteMat);
+          plate.position.y = 1.1;
+          const shaft = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), bimSteelMat);
+          shaft.position.y = h * 0.5 + 2.2;
+          shaft.castShadow = true;
+          container.add(plate, shaft);
+        } else if (op.kind === 'bim-ifc-slab') {
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(w, h, l), bimConcreteMat);
+          slab.position.y = h * 0.5;
+          slab.receiveShadow = true;
+          container.add(slab);
+        } else if (op.kind === 'bim-ifc-wall') {
+          const wall = new THREE.Mesh(
+            new THREE.BoxGeometry(Math.max(4, op.wallThicknessMm ?? w), h, l),
+            bimConcreteMat
+          );
+          wall.position.y = h * 0.5;
+          wall.castShadow = true;
+          container.add(wall);
+        } else if (op.kind === 'bim-ifc-truss') {
+          const chordTop = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.6, l), bimSteelMat);
+          chordTop.position.y = h;
+          const chordBot = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.6, l), bimSteelMat);
+          chordBot.position.y = 1.3;
+          container.add(chordTop, chordBot);
+          const bays = Math.min(6, Math.max(3, Math.round(op.count ?? 4)));
+          for (let i = 0; i <= bays; i++) {
+            const zPos = -l * 0.5 + (i / bays) * l;
+            const post = new THREE.Mesh(new THREE.BoxGeometry(2.2, h, 2.2), bimSteelMat);
+            post.position.set(0, h * 0.5, zPos);
+            container.add(post);
+          }
+        } else if (op.kind === 'bim-ifc-bracing') {
+          const diagLen = Math.hypot(l, h);
+          const ang = Math.atan2(h, l);
+          const strutA = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, diagLen), bimSteelMat);
+          strutA.position.y = h * 0.5;
+          strutA.rotation.x = ang;
+          const strutB = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, diagLen), bimSteelMat);
+          strutB.position.y = h * 0.5;
+          strutB.rotation.x = -ang;
+          container.add(strutA, strutB);
+        } else if (op.kind === 'bim-ifc-footing') {
+          const pad = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.45, l), bimConcreteMat);
+          pad.position.y = h * 0.225;
+          const ped = new THREE.Mesh(new THREE.BoxGeometry(w * 0.5, h * 0.55, l * 0.5), bimConcreteMat);
+          ped.position.y = h * 0.725;
+          container.add(pad, ped);
+        } else if (op.kind === 'bim-ifc-stair') {
+          const steps = Math.min(10, Math.max(3, Math.round(op.count ?? 5)));
+          const stepH = h / steps;
+          const stepD = l / steps;
+          for (let s = 0; s < steps; s++) {
+            const stepMesh = new THREE.Mesh(
+              new THREE.BoxGeometry(w, stepH * (s + 1), stepD),
+              bimConcreteMat
+            );
+            stepMesh.position.set(0, stepH * (s + 1) * 0.5, -l * 0.5 + stepD * (s + 0.5));
+            container.add(stepMesh);
+          }
+        } else if (op.kind === 'bim-ifc-curtainwall') {
+          const pane = new THREE.Mesh(new THREE.BoxGeometry(2.2, h, l), bimGlassMat);
+          pane.position.y = h * 0.5;
+          container.add(pane);
+          for (let m = -1; m <= 1; m++) {
+            const mullion = new THREE.Mesh(new THREE.BoxGeometry(3.6, h, 2.2), bimSteelMat);
+            mullion.position.set(0, h * 0.5, m * (l * 0.42));
+            container.add(mullion);
+          }
+        } else {
+          // bim-ifc-mep-duct
+          const ductR = Math.max(4, op.radiusMm ?? w * 0.5);
+          const duct = new THREE.Mesh(
+            new THREE.CylinderGeometry(ductR, ductR, l, 22, 1, false),
+            steelMat
+          );
+          duct.rotation.x = Math.PI / 2;
+          duct.position.y = ductR + 1.5;
+          const collar = new THREE.Mesh(
+            new THREE.TorusGeometry(ductR * 1.06, 1.1, 10, 22),
+            rimMat
+          );
+          collar.position.y = ductR + 1.5;
+          container.add(duct, collar);
+        }
       }
 
       refs.featureOpsGroup.add(container);
@@ -3003,6 +3286,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     pocketMat.dispose();
     rimMat.dispose();
     gussetMat.dispose();
+    blenderMat.dispose();
+    blenderWireMat.dispose();
+    bimSteelMat.dispose();
+    bimConcreteMat.dispose();
+    bimGlassMat.dispose();
+    rhinoEdgeMat.dispose();
     refs.requestRender();
   }, [featureOps, display.sectionEnabled, display.sectionRatio, display.sectionAxis, display.sectionFlipped]);
 
@@ -3273,6 +3562,47 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         rhinoCommand,
       });
       setPenMcpFeedback(`Comando Rhino ${rhinoCommand} aplicado em ${magicPenPick.componentName}!`);
+    } else if (kind.startsWith('blender-')) {
+      const catalogItem = BLENDER_TOOL_CATALOG.find((b) => b.kind === kind);
+      const blenderCmd = catalogItem?.command ?? kind.replace('blender-', '');
+      onAddFeatureOp({
+        kind,
+        label: `Blender ${blenderCmd} (${penSlotW}×${penDepth}mm)`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: Math.max(4, penSlotW),
+        lengthMm: Math.max(6, penSlotL),
+        diameterMm: Math.max(4, penHoleD),
+        depthMm: Math.max(3, penDepth),
+        radiusMm: penRhinoRadius,
+        wallThicknessMm: penRhinoWall,
+        angleDeg: penRhinoAngle,
+        count: penRhinoCount,
+        axis: penRhinoAxis,
+        rhinoCommand: blenderCmd,
+      });
+      setPenMcpFeedback(`Modificador Blender ${blenderCmd} aplicado em ${magicPenPick.componentName}!`);
+    } else if (kind.startsWith('bim-ifc-')) {
+      const catalogItem = BIM_IFC_TOOL_CATALOG.find((b) => b.kind === kind);
+      const ifcCmd = catalogItem?.command ?? kind.replace('bim-ifc-', 'Ifc');
+      onAddFeatureOp({
+        kind,
+        label: `BIM ${ifcCmd} (${penSlotL}×${penDepth}mm)`,
+        targetComponentId: magicPenPick.componentId,
+        point: magicPenPick.point,
+        normal: magicPenPick.normal,
+        widthMm: Math.max(6, penSlotW),
+        lengthMm: Math.max(12, penSlotL),
+        diameterMm: Math.max(6, penHoleD),
+        depthMm: Math.max(6, penDepth),
+        radiusMm: penRhinoRadius,
+        wallThicknessMm: penRhinoWall,
+        count: penRhinoCount,
+        axis: penRhinoAxis,
+        rhinoCommand: ifcCmd,
+      });
+      setPenMcpFeedback(`Elemento BIM ${ifcCmd} inserido em ${magicPenPick.componentName}!`);
     } else {
       onAddFeatureOp({
         kind: 'chamfer-fillet',
@@ -4163,6 +4493,158 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 </span>
               </button>
             )}
+
+            {!compact && onChangeCurvatureFactor && (
+              <button
+                type="button"
+                onClick={() => setCurvatureHudOpen((v) => !v)}
+                aria-label="Abrir controle de compensação de curvatura NURBS"
+                aria-expanded={curvatureHudOpen}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 shadow-lg transition-colors cursor-pointer ${
+                  curvatureHudOpen || curvatureFactor > 0
+                    ? 'bg-amber-500 text-slate-950 border-amber-300 hover:bg-amber-400'
+                    : 'bg-[#0e131c]/95 border-amber-400/40 text-amber-200 hover:bg-amber-500/20'
+                }`}
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                <span>Curvatura NURBS</span>
+                {curvatureFactor > 0 && (
+                  <span className="font-mono-tabular text-[10px] font-bold">
+                    {(curvatureFactor * 100).toFixed(0)}%
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Exclusive Floating NURBS Curvature Compensation Control Panel (0.0 - 1.0) */}
+        {!compact && onChangeCurvatureFactor && curvatureHudOpen && (
+          <div
+            role="region"
+            aria-label="Controle Flutuante de Compensação de Curvatura NURBS"
+            className="pointer-events-auto w-[285px] sm:w-[320px] max-w-full bg-[#0e131c]/95 border border-amber-400/45 rounded-xl p-3 shadow-2xl space-y-2.5 text-[11px] text-slate-200"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="font-semibold text-amber-200 truncate">
+                  Compensação Curvatura NURBS
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="font-mono-tabular px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-400/35 text-amber-300 font-bold">
+                  {curvatureFactor.toFixed(2)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurvatureHudOpen(false)}
+                  aria-label="Fechar painel flutuante de curvatura NURBS"
+                  className="text-slate-400 hover:text-white px-1 cursor-pointer"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                aria-label="Fator de compensação de curvatura NURBS (0.0 a 1.0)"
+                value={curvatureFactor}
+                onChange={(e) => onChangeCurvatureFactor(Number(e.target.value))}
+                className="w-full accent-amber-400 cursor-pointer"
+              />
+              <div className="flex items-center justify-between text-[10px] font-mono-tabular text-slate-400">
+                <button
+                  type="button"
+                  onClick={() => onChangeCurvatureFactor(0)}
+                  className="px-1.5 py-0.5 rounded bg-[#151c28] hover:text-white cursor-pointer"
+                >
+                  0.0 Base
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeCurvatureFactor(0.5)}
+                  className="px-1.5 py-0.5 rounded bg-[#151c28] hover:text-white cursor-pointer"
+                >
+                  0.50 Equilíbrio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeCurvatureFactor(1)}
+                  className="px-1.5 py-0.5 rounded bg-[#151c28] hover:text-white cursor-pointer"
+                >
+                  1.00 Ótimo
+                </button>
+              </div>
+            </div>
+
+            {curvatureSummary && (
+              <div className="grid grid-cols-3 gap-1.5 text-[10px] bg-[#080c12] border border-white/8 rounded-lg p-2">
+                <div>
+                  <div className="text-slate-500">Massa</div>
+                  <div className="font-mono-tabular text-slate-100 font-semibold">
+                    {curvatureSummary.weightAfterKg.toFixed(2)} kg
+                  </div>
+                  <div
+                    className={`font-mono-tabular text-[9px] ${
+                      curvatureSummary.weightDeltaPct <= 0 ? 'text-emerald-400' : 'text-amber-300'
+                    }`}
+                  >
+                    {curvatureSummary.weightDeltaPct > 0 ? '+' : ''}
+                    {curvatureSummary.weightDeltaPct.toFixed(1)}%
+                  </div>
+                </div>
+                <div>
+                  <div className="text-slate-500">Segurança</div>
+                  <div
+                    className={`font-mono-tabular font-semibold ${
+                      curvatureSummary.integrityPreserved ? 'text-emerald-300' : 'text-rose-400'
+                    }`}
+                  >
+                    FS {curvatureSummary.safetyFactor.toFixed(2)}×
+                  </div>
+                  <div className="font-mono-tabular text-[9px] text-slate-400">
+                    δ {curvatureSummary.deflectionMm.toFixed(2)} mm
+                  </div>
+                </div>
+                <div>
+                  <div className="text-slate-500">Geometria</div>
+                  <div className="font-mono-tabular text-sky-300 font-semibold">
+                    e={curvatureSummary.targetThicknessMm.toFixed(1)}mm
+                  </div>
+                  <div className="font-mono-tabular text-[9px] text-slate-400">
+                    arco {curvatureSummary.targetArchHeightMm.toFixed(0)}mm
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5">
+              {onCommitCurvature && (
+                <button
+                  type="button"
+                  disabled={curvatureFactor <= 0}
+                  onClick={onCommitCurvature}
+                  className="flex-1 py-1.5 px-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-semibold cursor-pointer"
+                >
+                  Aplicar &amp; Fixar
+                </button>
+              )}
+              {onResetCurvature && (
+                <button
+                  type="button"
+                  onClick={onResetCurvature}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#151c28] border border-white/12 hover:border-white/30 text-slate-300 cursor-pointer"
+                >
+                  Zerar
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -4330,107 +4812,137 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         )}
       </div>
 
-      {/* Bottom-Left FEA Stress Heatmap Legend (avoids colliding with Right D-Pad) */}
+      {/* Bottom-Left FEA Stress Heatmap Legend (Desktop always visible, Mobile expandable) */}
       {display.mode === 'stress-heatmap' && activeFea && (
-        <div className="absolute bottom-20 left-3 z-10 w-64 bg-[#0e131c]/95 border border-white/12 rounded-xl p-3 space-y-2 hidden sm:block">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="font-semibold text-slate-100">Mapa de Calor Von Mises</span>
-            <span
-              className={`font-mono-tabular font-semibold ${
-                activeFea.status === 'seguro'
-                  ? 'text-emerald-400'
-                  : activeFea.status === 'alerta'
-                    ? 'text-amber-400'
-                    : 'text-rose-400'
-              }`}
-            >
-              SF {activeFea.safetyFactor}×
-            </span>
-          </div>
-          <div
-            className="h-2.5 w-full rounded-sm"
-            style={{
-              background:
-                'linear-gradient(90deg, #1240e0 0%, #12e6fa 25%, #30db54 50%, #f7eb14 75%, #f72429 100%)',
-            }}
-          />
-          <div className="flex justify-between text-[10px] font-mono-tabular text-slate-400">
-            <span>{activeFea.minStressMpa} MPa</span>
-            <span>{activeFea.meanStressMpa} méd</span>
-            <span className="text-rose-300 font-semibold">{activeFea.maxStressMpa} MPa</span>
-          </div>
-          {activeFea.complianceNote && (
-            <div className="text-[10px] text-slate-300 leading-snug pt-1 border-t border-white/8">
-              {activeFea.complianceNote}
-            </div>
-          )}
-          {beforeFeaResult && (
-            <div className="flex items-center gap-1 pt-1 border-t border-white/10">
-              <button
-                type="button"
-                onClick={() => onUpdateDisplay({ stressComparisonView: 'before' })}
-                className={`flex-1 py-1 text-[10px] font-medium rounded cursor-pointer ${
-                  display.stressComparisonView === 'before'
-                    ? 'bg-amber-500 text-slate-950'
-                    : 'bg-[#141a24] text-slate-300 hover:text-white'
+        <div
+          className={`absolute bottom-14 sm:bottom-20 left-2 sm:left-3 z-10 ${
+            mobileLegendOpen ? 'w-60 sm:w-64' : 'w-auto sm:w-64'
+          } bg-[#0e131c]/95 border border-white/12 rounded-xl p-2 sm:p-3 space-y-2`}
+        >
+          <button
+            type="button"
+            onClick={() => setMobileLegendOpen((v) => !v)}
+            className="sm:hidden flex items-center gap-1.5 text-[11px] font-semibold text-slate-100 cursor-pointer"
+          >
+            <Activity className="w-3.5 h-3.5 text-sky-400" />
+            <span>Von Mises ({activeFea.maxStressMpa} MPa)</span>
+            {mobileLegendOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+          </button>
+          <div className={`${mobileLegendOpen ? 'block' : 'hidden'} sm:block space-y-2`}>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-semibold text-slate-100">Mapa de Calor Von Mises</span>
+              <span
+                className={`font-mono-tabular font-semibold ${
+                  activeFea.status === 'seguro'
+                    ? 'text-emerald-400'
+                    : activeFea.status === 'alerta'
+                      ? 'text-amber-400'
+                      : 'text-rose-400'
                 }`}
               >
-                Antes ({beforeFeaResult.maxStressMpa} MPa)
-              </button>
-              <button
-                type="button"
-                onClick={() => onUpdateDisplay({ stressComparisonView: 'current' })}
-                className={`flex-1 py-1 text-[10px] font-medium rounded cursor-pointer ${
-                  display.stressComparisonView === 'current'
-                    ? 'bg-emerald-500 text-slate-950'
-                    : 'bg-[#141a24] text-slate-300 hover:text-white'
-                }`}
-              >
-                Depois ({feaResult?.maxStressMpa ?? 0} MPa)
-              </button>
+                SF {activeFea.safetyFactor}×
+              </span>
             </div>
-          )}
+            <div
+              className="h-2.5 w-full rounded-sm"
+              style={{
+                background:
+                  'linear-gradient(90deg, #1240e0 0%, #12e6fa 25%, #30db54 50%, #f7eb14 75%, #f72429 100%)',
+              }}
+            />
+            <div className="flex justify-between text-[10px] font-mono-tabular text-slate-400">
+              <span>{activeFea.minStressMpa} MPa</span>
+              <span>{activeFea.meanStressMpa} méd</span>
+              <span className="text-rose-300 font-semibold">{activeFea.maxStressMpa} MPa</span>
+            </div>
+            {activeFea.complianceNote && (
+              <div className="text-[10px] text-slate-300 leading-snug pt-1 border-t border-white/8">
+                {activeFea.complianceNote}
+              </div>
+            )}
+            {beforeFeaResult && (
+              <div className="flex items-center gap-1 pt-1 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={() => onUpdateDisplay({ stressComparisonView: 'before' })}
+                  className={`flex-1 py-1 text-[10px] font-medium rounded cursor-pointer ${
+                    display.stressComparisonView === 'before'
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-[#141a24] text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Antes ({beforeFeaResult.maxStressMpa} MPa)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateDisplay({ stressComparisonView: 'current' })}
+                  className={`flex-1 py-1 text-[10px] font-medium rounded cursor-pointer ${
+                    display.stressComparisonView === 'current'
+                      ? 'bg-emerald-500 text-slate-950'
+                      : 'bg-[#141a24] text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Depois ({feaResult?.maxStressMpa ?? 0} MPa)
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Bottom-Left Object Mask Family Legend (interactive click-to-select) */}
+      {/* Bottom-Left Object Mask Family Legend (Desktop visible, Mobile expandable) */}
       {display.mode === 'object-mask' && (
-        <div className="absolute bottom-20 left-3 z-10 w-64 max-h-60 overflow-y-auto bg-[#0e131c]/95 border border-white/12 rounded-xl p-3 space-y-2 hidden sm:block">
-          <div className="text-[11px] font-semibold text-slate-100">
-            Object Mask · Famílias ({familyLegend.length})
-          </div>
-          <div className="space-y-1.5">
-            {familyLegend.map((fam) => (
-              <button
-                key={fam.family}
-                type="button"
-                onClick={() => {
-                  const first = components.find((c) => c.family === fam.family);
-                  if (first) {
-                    onUpdateDisplay({ selectedComponentId: first.id });
-                  }
-                }}
-                className="w-full text-left space-y-0.5 p-1 rounded hover:bg-white/5 cursor-pointer"
-              >
-                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className="w-3 h-3 rounded-sm shrink-0"
-                      style={{ backgroundColor: fam.color }}
-                    />
-                    <span className="truncate">{fam.family}</span>
+        <div
+          className={`absolute bottom-14 sm:bottom-20 left-2 sm:left-3 z-10 ${
+            mobileLegendOpen ? 'w-60 sm:w-64' : 'w-auto sm:w-64'
+          } max-h-60 overflow-y-auto bg-[#0e131c]/95 border border-white/12 rounded-xl p-2 sm:p-3 space-y-2`}
+        >
+          <button
+            type="button"
+            onClick={() => setMobileLegendOpen((v) => !v)}
+            className="sm:hidden flex items-center gap-1.5 text-[11px] font-semibold text-slate-100 cursor-pointer"
+          >
+            <Box className="w-3.5 h-3.5 text-sky-400" />
+            <span>Máscara ({familyLegend.length} famílias)</span>
+            {mobileLegendOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+          </button>
+          <div className={`${mobileLegendOpen ? 'block' : 'hidden'} sm:block space-y-2`}>
+            <div className="text-[11px] font-semibold text-slate-100">
+              Object Mask · Famílias ({familyLegend.length})
+            </div>
+            <div className="space-y-1.5">
+              {familyLegend.map((fam) => (
+                <button
+                  key={fam.family}
+                  type="button"
+                  onClick={() => {
+                    const first = components.find((c) => c.family === fam.family);
+                    if (first) {
+                      onUpdateDisplay({ selectedComponentId: first.id });
+                    }
+                  }}
+                  className="w-full text-left space-y-0.5 p-1 rounded hover:bg-white/5 cursor-pointer"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="w-3 h-3 rounded-sm shrink-0"
+                        style={{ backgroundColor: fam.color }}
+                      />
+                      <span className="truncate">{fam.family}</span>
+                    </div>
+                    <span className="font-mono-tabular text-[10px] text-slate-500 shrink-0">
+                      {fam.count}×
+                    </span>
                   </div>
-                  <span className="font-mono-tabular text-[10px] text-slate-500 shrink-0">
-                    {fam.count}×
-                  </span>
-                </div>
-                {fam.processSummary && (
-                  <div className="pl-5 text-[10px] text-emerald-300/90 font-mono-tabular truncate">
-                    {fam.processSummary}
-                  </div>
-                )}
-              </button>
-            ))}
+                  {fam.processSummary && (
+                    <div className="pl-5 text-[10px] text-emerald-300/90 font-mono-tabular truncate">
+                      {fam.processSummary}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -4626,7 +5138,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           </div>
 
           {/* Operation Tabs */}
-          <div className="grid grid-cols-6 gap-1 p-0.5 bg-[#07090d] border border-white/8 rounded-lg text-[10px] font-semibold">
+          <div className="grid grid-cols-4 gap-1 p-0.5 bg-[#07090d] border border-white/8 rounded-lg text-[10px] font-semibold">
             {(
               [
                 { id: 'slot', label: 'Rasgo' },
@@ -4634,6 +5146,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 { id: 'bolt', label: 'Rosca' },
                 { id: 'rib', label: 'Nervura' },
                 { id: 'rhino', label: 'Rhino' },
+                { id: 'blender', label: 'Blender' },
+                { id: 'bim', label: 'BIM/IFC' },
                 { id: 'part', label: 'Peça' },
               ] as { id: MagicPenMenuTab; label: string }[]
             ).map((t) => (
@@ -4643,7 +5157,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 onClick={() => setMagicPenTab(t.id)}
                 className={`py-1 rounded transition-colors cursor-pointer ${
                   magicPenTab === t.id
-                    ? 'bg-sky-500 text-slate-950'
+                    ? t.id === 'blender'
+                      ? 'bg-orange-500 text-slate-950'
+                      : t.id === 'bim'
+                        ? 'bg-cyan-400 text-slate-950'
+                        : 'bg-sky-500 text-slate-950'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -4941,6 +5459,139 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                   Executar {RHINO_COMMAND_CATALOG.find((c) => c.kind === penRhinoKind)?.command ?? 'Rhino'}
                 </button>
               </div>
+            </div>
+          )}
+
+          {magicPenTab === 'blender' && (
+            <div className="space-y-2 text-[10px]">
+              <label className="space-y-0.5 block">
+                <span className="text-slate-400 block">Modificadores BMesh Blender (10 ferramentas)</span>
+                <select
+                  aria-label="Modificador Blender"
+                  value={penBlenderKind}
+                  onChange={(e) => setPenBlenderKind(e.target.value as MagicPenOperationKind)}
+                  className="w-full px-2 py-1.5 bg-[#141923] border border-white/12 rounded text-slate-100"
+                >
+                  {BLENDER_TOOL_CATALOG.map((cmd) => (
+                    <option key={cmd.kind} value={cmd.kind}>
+                      {cmd.command} · {cmd.category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="text-[10px] text-slate-400 leading-snug">
+                {BLENDER_TOOL_CATALOG.find((c) => c.kind === penBlenderKind)?.description}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Raio/Bisel</span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={60}
+                    step={0.5}
+                    value={penRhinoRadius}
+                    onChange={(e) => setPenRhinoRadius(Math.max(0.5, Number(e.target.value) || 2))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Níveis/Qtd</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={penRhinoCount}
+                    onChange={(e) => setPenRhinoCount(Math.max(1, Math.min(24, Number(e.target.value) || 1)))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Eixo</span>
+                  <select
+                    aria-label="Eixo Blender"
+                    value={penRhinoAxis}
+                    onChange={(e) => setPenRhinoAxis(e.target.value as 'x' | 'y' | 'z')}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100"
+                  >
+                    <option value="x">X</option>
+                    <option value="y">Y</option>
+                    <option value="z">Z</option>
+                  </select>
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleApplyMagicPenFeature(penBlenderKind)}
+                className="w-full py-1.5 rounded-lg bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold text-[11px] cursor-pointer"
+              >
+                Aplicar {BLENDER_TOOL_CATALOG.find((c) => c.kind === penBlenderKind)?.command ?? 'Blender'}
+              </button>
+            </div>
+          )}
+
+          {magicPenTab === 'bim' && (
+            <div className="space-y-2 text-[10px]">
+              <label className="space-y-0.5 block">
+                <span className="text-slate-400 block">Elementos BIM / IFC Estrutural (10 classes)</span>
+                <select
+                  aria-label="Elemento BIM IFC"
+                  value={penBimKind}
+                  onChange={(e) => setPenBimKind(e.target.value as MagicPenOperationKind)}
+                  className="w-full px-2 py-1.5 bg-[#141923] border border-white/12 rounded text-slate-100"
+                >
+                  {BIM_IFC_TOOL_CATALOG.map((cmd) => (
+                    <option key={cmd.kind} value={cmd.kind}>
+                      {cmd.command} · {cmd.category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="text-[10px] text-slate-400 leading-snug">
+                {BIM_IFC_TOOL_CATALOG.find((c) => c.kind === penBimKind)?.description}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Vão (mm)</span>
+                  <input
+                    type="number"
+                    min={10}
+                    max={250}
+                    value={penSlotL}
+                    onChange={(e) => setPenSlotL(Math.max(10, Number(e.target.value) || 40))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Altura (mm)</span>
+                  <input
+                    type="number"
+                    min={6}
+                    max={150}
+                    value={penDepth}
+                    onChange={(e) => setPenDepth(Math.max(6, Number(e.target.value) || 18))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+                <label className="space-y-0.5">
+                  <span className="text-slate-400 block">Módulos</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={penRhinoCount}
+                    onChange={(e) => setPenRhinoCount(Math.max(1, Math.min(12, Number(e.target.value) || 4)))}
+                    className="w-full px-1.5 py-1 bg-[#141923] border border-white/12 rounded text-slate-100 font-mono-tabular"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleApplyMagicPenFeature(penBimKind)}
+                className="w-full py-1.5 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-semibold text-[11px] cursor-pointer"
+              >
+                Inserir {BIM_IFC_TOOL_CATALOG.find((c) => c.kind === penBimKind)?.command ?? 'IfcElement'}
+              </button>
             </div>
           )}
 

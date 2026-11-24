@@ -2,6 +2,8 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Boxes,
+  Briefcase,
+  ChevronDown,
   Cpu,
   ExternalLink,
   Flame,
@@ -14,6 +16,7 @@ import {
   LogOut,
   MoreHorizontal,
   Network,
+  Palette,
   Puzzle,
   RotateCcw,
   Save,
@@ -35,6 +38,7 @@ const FrostbiteRackDashboard = lazy(() => import('./components/FrostbiteRackDash
 const GrasshopperCanvas = lazy(() => import('./components/GrasshopperCanvas').then(m => ({ default: m.GrasshopperCanvas })));
 const LibraryCatalogPanel = lazy(() => import('./components/LibraryCatalogPanel').then(m => ({ default: m.LibraryCatalogPanel })));
 const McpToolsPanel = lazy(() => import('./components/McpToolsPanel').then(m => ({ default: m.McpToolsPanel })));
+const MediaStudioPanel = lazy(() => import('./components/MediaStudioPanel').then(m => ({ default: m.MediaStudioPanel })));
 import { OfflineAuthModal } from './components/OfflineAuthModal';
 import { OnboardingHelpView } from './components/OnboardingHelpView';
 import { ParametricSidebar } from './components/ParametricSidebar';
@@ -76,7 +80,15 @@ import {
   shouldRecordPointerSample,
 } from './kernel/sessionPointerRecorder';
 import { parseRhinoCommandPrompt } from './kernel/rhinoGeometryEngine';
-import { analyzeCurvatureAndOptimizeWeight } from './kernel/curvatureOptimizer';
+import { parseExtendedMagicPenPrompt } from './kernel/magicPenToolsCatalog';
+import {
+  LmaxRingBuffer,
+  resolveAdaptiveRingCapacity,
+} from './kernel/ringBuffer';
+import {
+  analyzeCurvatureAndOptimizeWeight,
+  applyNurbsCurvatureCompensationFactor,
+} from './kernel/curvatureOptimizer';
 import { buildUserProfileWithRole } from './kernel/ecosystemErpLogistics';
 import { GRAPH_TEMPLATES, evaluateGraphPipeline } from './kernel/graphEngine';
 import {
@@ -240,8 +252,11 @@ export default function App() {
   const [erpDistanceKm, setErpDistanceKm] = useState<number>(220);
   const [scoobiiiModalOpen, setScoobiiiModalOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [desktopModulesOpen, setDesktopModulesOpen] = useState(false);
   const [mobileCamPane, setMobileCamPane] = useState<'viewport' | 'panel'>('viewport');
   const [mobileGraphMode, setMobileGraphMode] = useState<'split' | 'graph' | 'viewport'>('split');
+  const [curvatureCompensationFactor, setCurvatureCompensationFactor] = useState(0);
+  const [detectedWebglGpu, setDetectedWebglGpu] = useState<string>('');
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const [deliverables, setDeliverables] = useState<SessionDeliverable[]>([]);
   const [savedProjects, setSavedProjects] = useState<SavedCadProject[]>([]);
@@ -288,6 +303,10 @@ export default function App() {
   const [sessionRecordingEnabled, setSessionRecordingEnabled] = useState(true);
   const [delegatedByPo, setDelegatedByPo] = useState(true);
   const [sessionEvents, setSessionEvents] = useState<SessionInteractionEvent[]>([]);
+  const mcpEyeRingRef = useRef<LmaxRingBuffer<McpEyeEvent>>(new LmaxRingBuffer<McpEyeEvent>(64));
+  const sessionEventRingRef = useRef<LmaxRingBuffer<SessionInteractionEvent>>(
+    new LmaxRingBuffer<SessionInteractionEvent>(128)
+  );
   const [ecosystemInitialSubTab, setEcosystemInitialSubTab] = useState<
     'chat' | 'session' | 'logistics' | 'erp' | 'compute' | 'remote'
   >('chat');
@@ -416,12 +435,113 @@ export default function App() {
     [graphNodes, graphWires, designParams, camSettings]
   );
 
-  const effectiveDesignParams = useMemo<ParametricDesignParams>(
+  const baseDesignParams = useMemo<ParametricDesignParams>(
     () =>
       activeTab === 'grasshopper'
         ? { ...designParams, ...graphEval.designPatch }
         : designParams,
     [activeTab, designParams, graphEval.designPatch]
+  );
+
+  // Baseline Curvature Target computed strictly from uncompensated params (prevents slider feedback loops)
+  const curvatureTargetReport = useMemo(() => {
+    const s = buildNurbsSurfaceFromParams(baseDesignParams);
+    const m = tessellateNurbsSurface(
+      s,
+      baseDesignParams.ribCountU,
+      baseDesignParams.ribCountV,
+      baseDesignParams.ribHeightMm
+    );
+    const baseProfile = {
+      ...(importedModel?.detectedProfile && activeSegment === importedModel.detectedProfile.segment
+        ? importedModel.detectedProfile
+        : resolvePartEngineeringProfile({
+            filename: importedModel?.filename,
+            layers: importedModel?.layers,
+            preset: baseDesignParams.preset,
+            segmentOverride: activeSegment,
+            surfaceName: s.name,
+          })),
+      ...partProfileOverride,
+      segment: activeSegment,
+    };
+    const baseFea = evaluateStructuralFea(
+      s,
+      m,
+      baseDesignParams,
+      display.materialFinish,
+      feaSettings,
+      display.isolationTarget,
+      baseProfile,
+      importedModel,
+      featureOps
+    );
+    return analyzeCurvatureAndOptimizeWeight({
+      surface: s,
+      meshData: m,
+      designParams: baseDesignParams,
+      materialFinish: display.materialFinish,
+      feaSettings,
+      feaResult: baseFea,
+      partProfile: baseProfile,
+      isolationTarget: display.isolationTarget,
+      importedModel,
+      featureOps,
+    });
+  }, [
+    baseDesignParams,
+    importedModel,
+    activeSegment,
+    partProfileOverride,
+    display.materialFinish,
+    display.isolationTarget,
+    feaSettings,
+    featureOps,
+  ]);
+
+  const curvatureCompensationPreview = useMemo(() => {
+    if (curvatureCompensationFactor <= 0.001) return null;
+    const s = buildNurbsSurfaceFromParams(baseDesignParams);
+    const baseProfile = {
+      ...(importedModel?.detectedProfile && activeSegment === importedModel.detectedProfile.segment
+        ? importedModel.detectedProfile
+        : resolvePartEngineeringProfile({
+            filename: importedModel?.filename,
+            layers: importedModel?.layers,
+            preset: baseDesignParams.preset,
+            segmentOverride: activeSegment,
+            surfaceName: s.name,
+          })),
+      ...partProfileOverride,
+      segment: activeSegment,
+    };
+    return applyNurbsCurvatureCompensationFactor({
+      baseParams: baseDesignParams,
+      suggestedParams: curvatureTargetReport.suggestedParams,
+      factor: curvatureCompensationFactor,
+      materialFinish: display.materialFinish,
+      feaSettings,
+      partProfile: baseProfile,
+      isolationTarget: display.isolationTarget,
+      importedModel,
+      featureOps,
+    });
+  }, [
+    curvatureCompensationFactor,
+    baseDesignParams,
+    curvatureTargetReport.suggestedParams,
+    display.materialFinish,
+    feaSettings,
+    importedModel,
+    activeSegment,
+    partProfileOverride,
+    display.isolationTarget,
+    featureOps,
+  ]);
+
+  const effectiveDesignParams = useMemo<ParametricDesignParams>(
+    () => (curvatureCompensationPreview ? curvatureCompensationPreview.params : baseDesignParams),
+    [curvatureCompensationPreview, baseDesignParams]
   );
 
   const effectiveCamSettings = useMemo<CamSettings>(
@@ -633,7 +753,8 @@ export default function App() {
           : display.selectedComponentId,
       detail,
     });
-    setSessionEvents((prev) => [...prev.slice(-199), evt]);
+    sessionEventRingRef.current.push(evt);
+    setSessionEvents(sessionEventRingRef.current.toArray(false));
   };
 
   useEffect(() => {
@@ -880,6 +1001,7 @@ export default function App() {
   const handleLoadImportedModel = (model: ImportedCadModel | null) => {
     setImportedModel(model);
     setActivePresetId(undefined);
+    setCurvatureCompensationFactor(0);
     setPartProfileOverride({});
     setFeaBaseline(null);
     setFeaComparison(null);
@@ -936,6 +1058,7 @@ export default function App() {
 
   const handleApplyFullPreset = (preset: FullWorkspacePreset, openEditor = true) => {
     setActivePresetId(preset.id);
+    setCurvatureCompensationFactor(0);
     setDesignParams({ ...preset.designParams });
     setActiveSegment(preset.segment);
     setPartProfileOverride(preset.partProfileOverride ?? {});
@@ -1106,10 +1229,50 @@ export default function App() {
     setFeaBaseline({ fea: beforeFea, params: beforeParams });
     setFeaComparison(report);
     setDesignParams(nextParams);
+    setCurvatureCompensationFactor(0);
     recordDeliverable({
       filename: `${afterSurface.id}_otimizacao_curvatura.md`,
       kind: 'REPORT',
       summary: `Curvatura NURBS: massa -${curvatureOptReport.weightReductionPct}% (${beforeFea.totalMassKg}→${afterFea.totalMassKg} kg · SF ${afterFea.safetyFactor}×)`,
+    });
+  };
+
+  const handleCommitCurvatureCompensation = () => {
+    if (!curvatureCompensationPreview) return;
+    const beforeSurface = buildNurbsSurfaceFromParams(baseDesignParams);
+    const beforeMesh = tessellateNurbsSurface(
+      beforeSurface,
+      baseDesignParams.ribCountU,
+      baseDesignParams.ribCountV,
+      baseDesignParams.ribHeightMm
+    );
+    const beforeFea = evaluateStructuralFea(
+      beforeSurface,
+      beforeMesh,
+      baseDesignParams,
+      display.materialFinish,
+      feaSettings,
+      display.isolationTarget,
+      partProfile,
+      importedModel,
+      featureOps
+    );
+    const report = buildFeaComparisonReport(
+      beforeFea,
+      curvatureCompensationPreview.feaResult,
+      baseDesignParams,
+      curvatureCompensationPreview.params,
+      `Compensação NURBS aplicada em ${Math.round(curvatureCompensationPreview.factor * 100)}%: espessura ${baseDesignParams.thicknessMm}→${curvatureCompensationPreview.params.thicknessMm}mm, flecha ${baseDesignParams.archHeight}→${curvatureCompensationPreview.params.archHeight}mm.`,
+      partProfile
+    );
+    setFeaBaseline({ fea: beforeFea, params: baseDesignParams });
+    setFeaComparison(report);
+    setDesignParams(curvatureCompensationPreview.params);
+    setCurvatureCompensationFactor(0);
+    recordDeliverable({
+      filename: `${curvatureCompensationPreview.surface.id}_comp_curvatura_${Math.round(curvatureCompensationPreview.factor * 100)}pct.md`,
+      kind: 'REPORT',
+      summary: `Compensação NURBS ${(curvatureCompensationPreview.factor * 100).toFixed(0)}%: ${curvatureCompensationPreview.weightBeforeKg}→${curvatureCompensationPreview.weightAfterKg} kg · SF ${curvatureCompensationPreview.safetyFactor}×`,
     });
   };
 
@@ -1212,7 +1375,8 @@ export default function App() {
 
     const fetchResources = async () => {
       try {
-        const resp = await fetch('/api/system/resources');
+        const gpuParam = detectedWebglGpu ? `?gpuName=${encodeURIComponent(detectedWebglGpu)}` : '';
+        const resp = await fetch(`/api/system/resources${gpuParam}`);
         if (!resp.ok || !active) return;
         const data = (await resp.json()) as {
           snapshot: SystemResourceSnapshot;
@@ -1224,6 +1388,13 @@ export default function App() {
             modelSizeBytes?: number;
           };
         };
+        const targetCap = resolveAdaptiveRingCapacity(data.snapshot.freeRamGb);
+        if (mcpEyeRingRef.current.capacity !== targetCap) {
+          const prevEye = mcpEyeRingRef.current.toArray(false);
+          const nextRing = new LmaxRingBuffer<McpEyeEvent>(targetCap);
+          for (const item of prevEye) nextRing.push(item);
+          mcpEyeRingRef.current = nextRing;
+        }
         setSystemResources(data.snapshot);
         setLocalLlmRec(data.recommendation);
         if (data.localQwenStatus) {
@@ -1263,7 +1434,9 @@ export default function App() {
 
     void fetchResources();
     void fetchSqliteState();
-    const resTimer = window.setInterval(() => void fetchResources(), 15000);
+    const resTimer = window.setInterval(() => {
+      void fetchResources();
+    }, 15000);
 
     let ws: WebSocket | null = null;
     let reconnectTimer: number | null = null;
@@ -1348,9 +1521,9 @@ export default function App() {
               setComputeNodes(msg.payload as ComputeShareNode[]);
             } else if (msg.type === 'mcp:eye' && msg.payload) {
               const eyeEvt = msg.payload as McpEyeEvent;
-              setMcpEyeEvents((prev) =>
-                prev.some((e) => e.id === eyeEvt.id) ? prev : [eyeEvt, ...prev.slice(0, 29)]
-              );
+              if (mcpEyeRingRef.current.pushUniqueBy(eyeEvt, (e) => e.id)) {
+                setMcpEyeEvents(mcpEyeRingRef.current.toArray(true));
+              }
             } else if (msg.type === 'cam:service' && msg.payload) {
               const job = msg.payload as CamServiceJob;
               setCamServiceJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
@@ -1451,6 +1624,32 @@ export default function App() {
       if (ws) ws.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (!detectedWebglGpu) return;
+    let active = true;
+    void fetch(`/api/system/resources?gpuName=${encodeURIComponent(detectedWebglGpu)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: {
+        snapshot?: SystemResourceSnapshot;
+        recommendation?: LocalLlmRecommendation;
+        localQwenStatus?: {
+          installed: boolean;
+          ragExamplesCount: number;
+          ready: boolean;
+          modelSizeBytes?: number;
+        };
+      } | null) => {
+        if (!active || !data?.snapshot) return;
+        setSystemResources(data.snapshot);
+        if (data.recommendation) setLocalLlmRec(data.recommendation);
+        if (data.localQwenStatus) setLocalQwenStatus(data.localQwenStatus);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [detectedWebglGpu]);
 
   useEffect(() => {
     if (!authReady || !user || !user.emailVerified) {
@@ -1717,6 +1916,7 @@ export default function App() {
   const handleResetCadArea = () => {
     setImportedModel(null);
     setActivePresetId(undefined);
+    setCurvatureCompensationFactor(0);
     setFeatureOps([]);
     setCpOverrides({});
     setSelectedControlPoint(null);
@@ -1903,7 +2103,7 @@ export default function App() {
     ) as IsoThreadSpec;
 
     const rhinoParsed = parseRhinoCommandPrompt(prompt);
-    if (rhinoParsed) {
+    if (rhinoParsed.matched && rhinoParsed.kind) {
       const log = executeMcpToolCall(
         'cad_magic_pen_feature',
         {
@@ -1927,6 +2127,36 @@ export default function App() {
       if (log.status === 'ok') {
         return {
           summary: `Comando Rhino ${rhinoParsed.rhinoCommand} executado em ${pick.componentName} e auditado no VUC.`,
+        };
+      }
+    }
+
+    const extendedParsed = parseExtendedMagicPenPrompt(prompt);
+    if (extendedParsed.matched && extendedParsed.kind) {
+      const log = executeMcpToolCall(
+        'cad_magic_pen_feature',
+        {
+          kind: extendedParsed.kind,
+          targetComponentId: pick.componentId,
+          point: pick.point,
+          normal: pick.normal,
+          widthMm: extendedParsed.widthMm ?? Math.max(4, Math.round(pick.widthMm)),
+          lengthMm: extendedParsed.lengthMm ?? Math.max(6, Math.round(pick.lengthMm)),
+          diameterMm: extendedParsed.diameterMm,
+          depthMm: extendedParsed.depthMm ?? 12,
+          radiusMm: extendedParsed.radiusMm,
+          wallThicknessMm: extendedParsed.wallThicknessMm,
+          angleDeg: extendedParsed.angleDeg,
+          count: extendedParsed.count,
+          axis: extendedParsed.axis,
+          rhinoCommand: extendedParsed.command,
+          label: `${extendedParsed.label} (${pick.componentName})`,
+        },
+        mcpContextRef.current
+      );
+      if (log.status === 'ok') {
+        return {
+          summary: `${extendedParsed.label} aplicado em ${pick.componentName} e auditado no VUC.`,
         };
       }
     }
@@ -2075,7 +2305,8 @@ export default function App() {
     payload: unknown
   ) => {
     const evt = createMcpEyeEvent(direction, source, summary, payload);
-    setMcpEyeEvents((prev) => [evt, ...prev.slice(0, 29)]);
+    mcpEyeRingRef.current.push(evt);
+    setMcpEyeEvents(mcpEyeRingRef.current.toArray(true));
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'mcp:eye', payload: evt }));
     }
@@ -2865,22 +3096,41 @@ export default function App() {
   }, []);
 
   const navItems: { id: WorkspaceTab; label: string }[] = [
-    { id: 'onboarding', label: 'Início / Ajuda' },
-    { id: 'library', label: 'Lib / Biblioteca' },
-    { id: 'viewport', label: 'Modelagem 3D' },
+    { id: 'onboarding', label: 'Início' },
+    { id: 'viewport', label: 'CAD 3D' },
     { id: 'cam', label: 'CAM & Robô' },
+    { id: 'ecosystem', label: 'ERP / BI' },
+    { id: 'library', label: 'Lib' },
     { id: 'frostbite', label: 'Frostbite 1MW' },
-    { id: 'ecosystem', label: 'Ecossistema & ERP' },
     { id: 'grasshopper', label: 'Grasshopper' },
-    { id: 'sustainability', label: 'Pegada CO₂' },
+    { id: 'sustainability', label: 'CAE / CO₂' },
     { id: 'mcp', label: 'MCP Tools' },
     { id: 'plugins', label: 'Plugins SDK' },
     { id: 'files', label: 'Arquivos CAD' },
+    { id: 'media-studio', label: 'Media Studio 1.0' },
+  ];
+
+  const primaryDesktopNavIds: WorkspaceTab[] = [
+    'onboarding',
+    'viewport',
+    'cam',
+    'ecosystem',
+    'library',
+  ];
+  const secondaryDesktopNavIds: WorkspaceTab[] = [
+    'media-studio',
+    'frostbite',
+    'grasshopper',
+    'sustainability',
+    'mcp',
+    'plugins',
+    'files',
   ];
 
   const handleTabSwitch = (tab: WorkspaceTab) => {
     setActiveTab(tab);
     setMobileMoreOpen(false);
+    setDesktopModulesOpen(false);
     recordSessionDiscreteAction('tab-switch', `Navegou para aba ${tab}`, { tab });
     if (tab === 'cam') {
       setDisplay((d) => ({ ...d, showToolpath: true, showMachine: true }));
@@ -2919,12 +3169,13 @@ export default function App() {
             selectedComponentId: display.selectedComponentId,
             detail: `Ponteiro (${xPct.toFixed(0)}%, ${yPct.toFixed(0)}%) em ${activeTab}`,
           });
-          setSessionEvents((prev) => [...prev.slice(-199), evt]);
+          sessionEventRingRef.current.push(evt);
+          setSessionEvents(sessionEventRingRef.current.toArray(false));
         }
       }}
     >
-      {/* Top Navigation Bar (Mobile-First 3-zone header) */}
-      <header className="h-12 px-3 sm:px-5 border-b border-white/10 bg-[#0f141d] flex items-center justify-between gap-2 sm:gap-6 shrink-0">
+      {/* Top Navigation Bar (Clean 3-zone contract, zero clipped desktop tabs) */}
+      <header className="h-12 px-3 sm:px-5 border-b border-white/10 bg-[#0f141d] flex items-center justify-between gap-2 sm:gap-6 shrink-0 relative z-30">
         <div className="flex items-center gap-2 min-w-0 shrink-0">
           <span className="font-display text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
             Parametrix CAD
@@ -2934,8 +3185,9 @@ export default function App() {
           </span>
         </div>
 
-        <nav className="hidden md:flex items-center gap-4 lg:gap-6 overflow-x-auto min-w-0 flex-1">
-          {navItems.map((item) => {
+        <nav className="hidden md:flex items-center gap-4 lg:gap-5 min-w-0 flex-1">
+          {primaryDesktopNavIds.map((id) => {
+            const item = navItems.find((n) => n.id === id)!;
             const active = activeTab === item.id;
             return (
               <button
@@ -2952,6 +3204,48 @@ export default function App() {
               </button>
             );
           })}
+
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setDesktopModulesOpen((v) => !v)}
+              className={`py-3 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
+                secondaryDesktopNavIds.includes(activeTab)
+                  ? 'border-sky-400 text-sky-200'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span>
+                {secondaryDesktopNavIds.includes(activeTab)
+                  ? navItems.find((n) => n.id === activeTab)?.label
+                  : 'Módulos'}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+            </button>
+
+            {desktopModulesOpen && (
+              <div className="absolute left-0 top-full mt-1 w-52 bg-[#111620] border border-white/15 rounded-xl shadow-2xl p-1.5 space-y-0.5 z-50">
+                {secondaryDesktopNavIds.map((id) => {
+                  const item = navItems.find((n) => n.id === id)!;
+                  const active = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleTabSwitch(item.id)}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-sky-500/20 text-sky-200 border border-sky-400/40'
+                          : 'text-slate-300 hover:bg-white/8 hover:text-white'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </nav>
 
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
@@ -3291,6 +3585,31 @@ export default function App() {
                 onOpenHelp={() => setActiveTab('onboarding')}
                 onRunQuickFea={() => handleRunFea(undefined, true)}
                 onResetPart={handleResetCadArea}
+                curvatureFactor={curvatureCompensationFactor}
+                onChangeCurvatureFactor={setCurvatureCompensationFactor}
+                curvatureSummary={{
+                  weightBeforeKg:
+                    curvatureCompensationPreview?.weightBeforeKg ?? feaResult.totalMassKg,
+                  weightAfterKg:
+                    curvatureCompensationPreview?.weightAfterKg ?? feaResult.totalMassKg,
+                  weightDeltaPct: curvatureCompensationPreview?.weightDeltaPct ?? 0,
+                  safetyFactor:
+                    curvatureCompensationPreview?.safetyFactor ?? feaResult.safetyFactor,
+                  deflectionMm:
+                    curvatureCompensationPreview?.deflectionMm ?? feaResult.maxDeflectionMm,
+                  integrityPreserved: curvatureCompensationPreview?.integrityPreserved ?? true,
+                  targetThicknessMm:
+                    curvatureCompensationPreview?.params.thicknessMm ??
+                    effectiveDesignParams.thicknessMm,
+                  targetArchHeightMm:
+                    curvatureCompensationPreview?.params.archHeight ??
+                    effectiveDesignParams.archHeight,
+                }}
+                onCommitCurvature={handleCommitCurvatureCompensation}
+                onResetCurvature={() => setCurvatureCompensationFactor(0)}
+                onDetectedGpuRenderer={(gpu) => {
+                  if (gpu) setDetectedWebglGpu((prev) => prev || gpu);
+                }}
                 onSelectComponentCamProcess={(mt, comp) => {
                   setDisplay((d) => ({ ...d, selectedComponentId: comp.id, showMachine: true, showToolpath: true }));
                   handleRestartCamProcess(mt);
@@ -3614,6 +3933,31 @@ export default function App() {
                   onOpenHelp={() => setActiveTab('onboarding')}
                   onRunQuickFea={() => handleRunFea(undefined, true)}
                   onResetPart={handleResetCadArea}
+                  curvatureFactor={curvatureCompensationFactor}
+                  onChangeCurvatureFactor={setCurvatureCompensationFactor}
+                  curvatureSummary={{
+                    weightBeforeKg:
+                      curvatureCompensationPreview?.weightBeforeKg ?? feaResult.totalMassKg,
+                    weightAfterKg:
+                      curvatureCompensationPreview?.weightAfterKg ?? feaResult.totalMassKg,
+                    weightDeltaPct: curvatureCompensationPreview?.weightDeltaPct ?? 0,
+                    safetyFactor:
+                      curvatureCompensationPreview?.safetyFactor ?? feaResult.safetyFactor,
+                    deflectionMm:
+                      curvatureCompensationPreview?.deflectionMm ?? feaResult.maxDeflectionMm,
+                    integrityPreserved: curvatureCompensationPreview?.integrityPreserved ?? true,
+                    targetThicknessMm:
+                      curvatureCompensationPreview?.params.thicknessMm ??
+                      effectiveDesignParams.thicknessMm,
+                    targetArchHeightMm:
+                      curvatureCompensationPreview?.params.archHeight ??
+                      effectiveDesignParams.archHeight,
+                  }}
+                  onCommitCurvature={handleCommitCurvatureCompensation}
+                  onResetCurvature={() => setCurvatureCompensationFactor(0)}
+                  onDetectedGpuRenderer={(gpu) => {
+                    if (gpu) setDetectedWebglGpu((prev) => prev || gpu);
+                  }}
                   onSelectComponentCamProcess={(mt, comp) => {
                     setDisplay((d) => ({ ...d, selectedComponentId: comp.id, showMachine: true, showToolpath: true }));
                     handleRestartCamProcess(mt);
@@ -3810,6 +4154,18 @@ export default function App() {
             }}
           />
         )}
+        {activeTab === 'media-studio' && (
+          <MediaStudioPanel
+            liveErpSnapshot={liveErpSnapshot}
+            activeUserEmail={
+              user?.email ||
+              (backendProfile?.provider === 'google' ? backendProfile.email : sqliteProfile.email)
+            }
+            onNavigateTab={handleTabSwitch}
+            onRecordDeliverable={recordDeliverable}
+            onAddErpRecord={handleAddErpRecord}
+          />
+        )}
       </main>
 
       {/* Mobile Thumb-Zone Bottom Navigation Bar (< 768px) */}
@@ -3820,9 +4176,9 @@ export default function App() {
         {(
           [
             { id: 'onboarding', label: 'Início', icon: Home },
-            { id: 'viewport', label: '3D IX', icon: Boxes },
+            { id: 'viewport', label: 'CAD 3D', icon: Boxes },
             { id: 'cam', label: 'CAM', icon: Cpu },
-            { id: 'frostbite', label: '1MW', icon: Flame },
+            { id: 'ecosystem', label: 'ERP', icon: Briefcase },
           ] as const
         ).map((item) => {
           const Icon = item.icon;
@@ -3847,12 +4203,13 @@ export default function App() {
           className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
             mobileMoreOpen ||
             activeTab === 'library' ||
-            activeTab === 'ecosystem' ||
+            activeTab === 'frostbite' ||
             activeTab === 'sustainability' ||
             activeTab === 'grasshopper' ||
             activeTab === 'mcp' ||
             activeTab === 'plugins' ||
-            activeTab === 'files'
+            activeTab === 'files' ||
+            activeTab === 'media-studio'
               ? 'text-sky-400'
               : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -3887,9 +4244,10 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
+                  { id: 'media-studio', label: 'Media Studio 1.0', icon: Palette },
                   { id: 'library', label: 'Lib / Biblioteca', icon: BookOpen },
-                  { id: 'ecosystem', label: 'Ecossistema & ERP', icon: Globe },
-                  { id: 'sustainability', label: 'Pegada CO₂', icon: Leaf },
+                  { id: 'frostbite', label: 'Frostbite 1MW', icon: Flame },
+                  { id: 'sustainability', label: 'CAE / CO₂', icon: Leaf },
                   { id: 'grasshopper', label: 'Grasshopper Nodal', icon: Network },
                   { id: 'mcp', label: 'Agente RAG + MCP', icon: Terminal },
                   { id: 'plugins', label: 'Plugins SDK', icon: Puzzle },

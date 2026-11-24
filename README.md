@@ -94,6 +94,36 @@ Plataforma paramétrica full-stack para modelagem NURBS, análise estrutural FEA
 - **Rastreamento GPS & Compartilhamento de 20% Compute**: Monitoramento multimodal ponto a ponto (**Rodoviário, Ferroviário, Aéreo e Fluvial**) com coordenadas em tempo real e pool de compartilhamento voluntário de 20% da capacidade dos dispositivos conectados.
 - **ERP / CRM Open Free**: Gestão integrada de ordens de produção, fornecedores, lotes de insumos, cotações e entregas sem custo de licença.
 
+### 17. ParametrIX Media Studio — Identidade Visual 1.0 & Motor Dual (GAN Criativo + Construtiva)
+- **Identidade Oficial 1.0 (`src/kernel/mediaStudioEngine.ts` + `MediaStudioPanel.tsx`)**:
+  - Marca **PARAMETRIX** — *Tecnologia • Inovação • Liberdade* — *"Engenharia paramétrica para um mundo melhor"*, construída sobre o símbolo **P geométrico** e paleta fixa **Preto (`#05070B`) · Azul (`#2563EB`) · Ciano (`#22D3EE`) · Branco (`#F8FAFC`)** com equivalência **RGB + CMYK**.
+  - Suporte completo a **Identidade Oficial ParametrIX** ou criação sob medida para **produtos e marcas de clientes** (cartão de visita, camiseta, polo, embalagem, uniformes e kits corporativos).
+- **Motor Criativo GAN (Vetor Latente `z`) + Engenharia Construtiva ParametrIX**:
+  - **Camada Criativa (GAN Determinístico)**: Sintetiza vetor latente 8D (`seed`, intensidade criativa, harmônicos de malha NURBS, nós de circuito VUC e vetores cinéticos) com hash reprodutível.
+  - **Camada Construtiva ParametrIX**: Audita proporção travada `1:1` do símbolo `P`, sangria industrial (`>= 3 mm` a `300 DPI`), limite de cobertura de tinta **CMYK TAC (`<= 290%`)**, trava de **URL/QR Code** (bloqueado por padrão até confirmação explícita do domínio oficial) e custo unitário/lote integrado ao ERP Open.
+- **Pipeline em 7 Etapas & Formatos de Produção**:
+  - Fluxo `1. Identidade → 2. Mídia (01–09) → 3. GAN + Construtiva → 4. Personalização → 5. Preview (Frente / Verso / Aplicação Real) → 6. Aprovação → 7. Exportação`.
+  - Exporta arquivos reais **`.SVG`** vetorial, **`.PDF`** vetorial imprimível (`%PDF-1.4` com sangria e hash VUC), **`.PNG`** transparente e **`.JPG`**, lançando automaticamente nos entregáveis da sessão e no **ERP Open SQLite**.
+
+### 18. Biblioteca 01–09 & Projeto Especial — ParametrIX no Futebol
+- **Matriz Única Derivada em 9 Categorias**: `01 Logotipo`, `02 Redes Sociais`, `03 Papelaria Corporativa` (Cartão de Visita `90×50 mm`, Timbrado, Crachá, Pasta), `04 Vestuário & Produtos` (Camiseta, Polo, Uniforme, Boné, Jaqueta), `05 Futebol & Estádio`, `06 Publicidade & Eventos`, `07 Produtos & Brindes`, `08 Digital` e `09 Manual da Marca`.
+- **Projeto Especial Esportivo**: Camisa de Jogador (Frente/Verso), Manga, Calção, Placa de Campo (`6000×900 mm`), Painel LED de Estádio, Backdrop de Entrevista, Colete de Treino e Torcida — com **slot dedicado de patrocinador parceiro sem distorcer o `P`** e trava de conformidade para **direitos de imagem de atletas** e **regras de clube/competição/estádio**.
+
+### 19. Fundação ParametrIF & Agentes Gestores no GitHub
+- **ParametrIF Foundation**: Carta de governança da marca, certificação de **Representantes Oficiais** (*Embaixador Regional*, *Engenheiro Certificado VUC*, *Parceiro Manufatura CAM*, *Gestão Esportiva & Clubes*) com emissão de credencial VUC verificável.
+- **Agentes Gestores no GitHub (`scoobiii/parametrIX`)**: `@parametrif-brand-guard` (auditoria de paleta/marca e trava QR em PRs), `@parametrix-ci-vuc` (gate obrigatório `100% V8 + 27/27 audit:cad + proof/vuc-latest.json`) e `@parametrif-registry` (sincronia de representantes), com exportação pronta do workflow `.github/workflows/parametrif-brand-guard.yml`.
+
+### 20. Plano de Negócios ParametrIX & Organograma Multi-Agente ERP/CRM
+- **Missão**: Democratizar engenharia paramétrica CAD/CAE/CAM, manufatura inteligente e identidade construtiva verificável por prova matemática VUC.
+- **Visão**: Consolidar o sistema operacional aberto que une projeto 3D NURBS, chão de fábrica robótico, branding construtivo e ERP/CRM em tempo real.
+- **Proposta de Valor**: Do arquivo técnico ou conceito visual à peça fabricada, certificada em Ed25519 VUC e precificada com ROI real em um único fluxo contínuo.
+- **Organograma de 10 Agentes Autônomos Integrados ao ERP/CRM ao Vivo**: Mapeia cada agente (*Orquestrador VUC*, *ParametrIF & GitHub*, *Media Studio GAN*, *CAD NURBS*, *CAE FEA & CO₂*, *CAM & Robótica*, *Suprimentos & BOM*, *Logística Multimodal*, *CRM & Clientes*, *Financeiro & Fiscal*) diretamente aos módulos e KPIs em tempo real do **ERP Open / BI / CRM**.
+
+### 21. HUD Flutuante de Curvatura NURBS, Caneta Mágica Blender/BIM & Buffers LMAX
+- **HUD Exclusivo na Viewport 3D (`0.0–1.0`)**: Ajuste em tempo real do fator de compensação de curvatura NURBS diretamente sobre a viewport com recálculo ao vivo da otimização estrutural de massa.
+- **Caneta Mágica Estendida (`magicPenToolsCatalog.ts`)**: Catálogo completo com **10 ferramentas de malha estilo Blender** (`extrude-face`, `inset-face`, `bevel-edge`, `loop-cut`, `mirror-symmetry`, `solidify-shell`, `subsurf-smooth`, `boolean-union`, `bridge-loops`, `bisect-plane`) + **10 elementos BIM/IFC** (`IfcWall`, `IfcSlab`, `IfcColumn`, `IfcBeam`, `IfcStair`, `IfcCurtainWall`, `IfcRoof`, `IfcFooting`, `IfcDoor`, `IfcWindow`) integrados à cena 3D, MCP e parser de voz.
+- **Buffers Circulares LMAX & Probe Real de Hardware GPU**: Telemetria contínua sem alocação excessiva (`LmaxRingBuffer`) e sondagem real de WebGL2 + GPU/DRI Linux (`/api/system/resources`) com prova formal **Ed25519 + SHA-256 VUC** (`npm run vuc:proof` → `proof/vuc-latest.json`).
+
 ---
 
 ## Auditoria Experimental do Motor CAD / Inventor `.IPT` / CAE / CAM
@@ -230,7 +260,8 @@ npm run lint           # Verificação de tipos TypeScript (tsc --noEmit)
 npm run test:coverage  # Suíte Vitest com 100% statements/branches/functions/lines (V8)
 npm run audit:cad      # Suíte de auditoria determinística do motor CAD/IPT/CAE/CAM (27 testes)
 npm run build          # Build de produção Vite (dist/)
-npm run ci             # Gate obrigatório: lint + 100% coverage + audit:cad + build
+npm run vuc:proof      # Emite certificado formal SHA-256 + Ed25519 (proof/vuc-latest.json)
+npm run ci             # Gate obrigatório: lint + 100% coverage + audit:cad + build + vuc:proof
 npm run onboard        # Diagnóstico somente leitura do ambiente e do perfil MOBILE_LITE
 npm run start          # Servidor em produção (tsx server.ts)
 ```

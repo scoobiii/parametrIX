@@ -158,12 +158,12 @@ export function calculateCarbonFootprint(params: {
   // Adjust net part volume for Magic Pen cutouts/additions
   let deltaFeatureCm3 = 0;
   for (const op of featureOps) {
-    if (op.kind === 'slot-cutout') {
+    if (op.kind === 'slot-cutout' || op.kind === 'blender-boolean-mod') {
       deltaFeatureCm3 -= (op.widthMm * op.lengthMm * op.depthMm) / 1000;
     } else if (op.kind === 'through-hole') {
       const r = op.diameterMm / 2;
       deltaFeatureCm3 -= (Math.PI * r * r * op.depthMm) / 1000;
-    } else if (op.kind === 'rib-boss') {
+    } else if (op.kind === 'rib-boss' || op.kind.startsWith('bim-ifc-')) {
       deltaFeatureCm3 += (op.widthMm * op.lengthMm * op.depthMm) / 1000;
     }
   }

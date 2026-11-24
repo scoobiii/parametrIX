@@ -96,6 +96,32 @@ describe('carbonFootprint kernel', () => {
         depthMm: 2,
         createdAt: 't',
       },
+      {
+        id: 'f5',
+        kind: 'blender-boolean-mod',
+        label: 'BooleanExact',
+        targetComponentId: 'shell',
+        point: [0, 0, 0],
+        normal: [0, 1, 0],
+        widthMm: 12,
+        lengthMm: 16,
+        diameterMm: 12,
+        depthMm: 6,
+        createdAt: 't',
+      },
+      {
+        id: 'f6',
+        kind: 'bim-ifc-beam',
+        label: 'IfcBeam',
+        targetComponentId: 'shell',
+        point: [0, 0, 0],
+        normal: [0, 1, 0],
+        widthMm: 14,
+        lengthMm: 40,
+        diameterMm: 14,
+        depthMm: 16,
+        createdAt: 't',
+      },
     ];
 
     const imported: ImportedCadModel = {

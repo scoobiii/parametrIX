@@ -418,11 +418,11 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
           <button
             type="button"
             onClick={() => onOpenWizard(activeArea)}
-            className="px-2.5 py-1 text-[11px] font-semibold rounded border border-sky-400/50 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 flex items-center gap-1 cursor-pointer"
+            className="px-2 sm:px-2.5 py-1 text-[11px] font-semibold rounded border border-sky-400/50 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
             title={`Abrir assistente de novo projeto específico para a área ${activeArea.toUpperCase()}`}
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+            <span>
               {activeArea === 'cad'
                 ? 'Novo CAD'
                 : activeArea === 'cae'
@@ -442,7 +442,7 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
                 onRestartCam();
               }
             }}
-            className="px-2.5 py-1 text-[11px] font-semibold rounded border border-amber-400/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 flex items-center gap-1 cursor-pointer font-mono-tabular"
+            className="px-2 sm:px-2.5 py-1 text-[11px] font-semibold rounded border border-amber-400/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 flex items-center gap-1 cursor-pointer font-mono-tabular whitespace-nowrap shrink-0"
             title={
               activeArea === 'cad'
                 ? 'Reiniciar apenas geometria CAD e features (sem zerar CAM/CAE)'
@@ -451,13 +451,20 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
                   : 'Reiniciar processo produtivo CAM do zero com prova VUC'
             }
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">
+            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline">
               {activeArea === 'cad'
                 ? 'Reiniciar CAD'
                 : activeArea === 'cae'
                   ? 'Reiniciar CAE'
                   : 'Reiniciar CAM'}
+            </span>
+            <span className="sm:hidden">
+              {activeArea === 'cad'
+                ? 'Zero CAD'
+                : activeArea === 'cae'
+                  ? 'Zero CAE'
+                  : 'Zero CAM'}
             </span>
             {activeArea === 'cad' && cadResetCount > 0 && <span>#{cadResetCount}</span>}
             {activeArea === 'cae' && caeResetCount > 0 && <span>#{caeResetCount}</span>}
