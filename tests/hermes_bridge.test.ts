@@ -7,13 +7,13 @@ import {
   buildClawFamilyBundle,
   buildHermesAgentBundle,
   executeHermesCompactSearch,
-  inspectGrabCadOrCadUrl,
+  inspectPublicCadUrl,
   isDisallowedExternalHost,
 } from '../src/server/hermesBridge';
 import { resolveLocalQwenPaths } from '../src/server/localQwenRunner';
 import { verifyFormalVucCertificate } from '../src/server/vucFormalProof';
 
-describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (100% Coverage)', () => {
+describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + Public CAD URL + VUC (100% Coverage)', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -125,7 +125,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     relay.unregisterClient('non-existent');
   });
 
-  it('blocks SSRF internal hosts and inspects GrabCAD / public CAD URLs accurately', async () => {
+  it('blocks SSRF internal hosts and inspects public CAD URLs accurately', async () => {
     expect(isDisallowedExternalHost('localhost')).toBe(true);
     expect(isDisallowedExternalHost('0.0.0.0')).toBe(true);
     expect(isDisallowedExternalHost('::1')).toBe(true);
@@ -137,21 +137,21 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     expect(isDisallowedExternalHost('172.16.0.1')).toBe(true);
     expect(isDisallowedExternalHost('192.168.1.50')).toBe(true);
     expect(isDisallowedExternalHost('172.32.0.1')).toBe(false);
-    expect(isDisallowedExternalHost('grabcad.com')).toBe(false);
+    expect(isDisallowedExternalHost('cadrepo.example.org')).toBe(false);
 
-    const invalid = await inspectGrabCadOrCadUrl({ url: 'not a url' });
+    const invalid = await inspectPublicCadUrl({ url: 'not a url' });
     expect(invalid.status).toBe('invalid-url');
     expect(verifyFormalVucCertificate(invalid.vucCertificate).valid).toBe(true);
 
-    const ftpBlocked = await inspectGrabCadOrCadUrl({ url: 'ftp://example.org/gear.stl' });
+    const ftpBlocked = await inspectPublicCadUrl({ url: 'ftp://example.org/gear.stl' });
     expect(ftpBlocked.status).toBe('invalid-url');
 
-    const localBlocked = await inspectGrabCadOrCadUrl({ url: 'http://127.0.0.1:3000/secret.stl' });
+    const localBlocked = await inspectPublicCadUrl({ url: 'http://127.0.0.1:3000/secret.stl' });
     expect(localBlocked.status).toBe('invalid-url');
 
-    // HTTP 403 on GrabCAD (.step suffix in slug) -> blocked-or-auth-required
-    const http403 = await inspectGrabCadOrCadUrl({
-      url: 'https://grabcad.com/library/spur-gear.step',
+    // HTTP 403 on public repository (.step suffix in slug) -> blocked-or-auth-required
+    const http403 = await inspectPublicCadUrl({
+      url: 'https://cadrepo.example.org/library/spur-gear.step',
       fetcher: async () => ({
         ok: false,
         status: 403,
@@ -162,8 +162,8 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     expect(http403.status).toBe('blocked-or-auth-required');
     expect(http403.detectedFormats).toEqual(['STEP']);
 
-    // HTTP 401 & 429 & generic 500 without resp.status or resp.text
-    const http401 = await inspectGrabCadOrCadUrl({
+    // HTTP 401 & generic 500 without resp.status or resp.text
+    const http401 = await inspectPublicCadUrl({
       url: 'https://example.org/model-one',
       fetcher: async () => ({
         ok: false,
@@ -174,7 +174,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     expect(http401.status).toBe('blocked-or-auth-required');
     expect(http401.httpStatus).toBe(401);
 
-    const http500 = await inspectGrabCadOrCadUrl({
+    const http500 = await inspectPublicCadUrl({
       url: 'https://example.org/broken',
       fetcher: async () => ({
         ok: false,
@@ -184,21 +184,21 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     expect(http500.status).toBe('blocked-or-auth-required');
     expect(http500.httpStatus).toBe(500);
 
-    // GrabCAD Cloudflare interstitial
-    const cfBlock = await inspectGrabCadOrCadUrl({
-      url: 'https://grabcad.com/library/robot-arm-1',
+    // Cloudflare / auth interstitial
+    const cfBlock = await inspectPublicCadUrl({
+      url: 'https://cadrepo.example.org/library/robot-arm-1',
       fetcher: async () => ({
         ok: true,
         status: 200,
         headers: { get: () => 'text/html' },
         json: async () => ({}),
-        text: async () => '<html><body>Just a moment... Sign in to GrabCAD</body></html>',
+        text: async () => '<html><body>Just a moment... Sign in required</body></html>',
       }),
     });
     expect(cfBlock.status).toBe('blocked-or-auth-required');
 
     // Direct CAD file (.stl)
-    const directCad = await inspectGrabCadOrCadUrl({
+    const directCad = await inspectPublicCadUrl({
       url: 'https://cdn.example.org/models/flange.stl',
       fetcher: async () => ({
         ok: true,
@@ -211,9 +211,9 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     expect(directCad.httpStatus).toBe(200);
     expect(directCad.detectedFormats).toEqual(['STL']);
 
-    // GrabCAD HTML with OpenGraph metadata + format tags + no direct download link
-    const grabCadHtml = await inspectGrabCadOrCadUrl({
-      url: 'https://grabcad.com/library/planetary-gearbox-1',
+    // Public repository HTML with OpenGraph metadata + format tags + no direct download link
+    const repoHtml = await inspectPublicCadUrl({
+      url: 'https://cadrepo.example.org/library/planetary-gearbox-1',
       fetcher: async () => ({
         ok: true,
         status: 200,
@@ -227,14 +227,14 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
           '</head><body>Download STEP or STL</body></html>',
       }),
     });
-    expect(grabCadHtml.status).toBe('ok');
-    expect(grabCadHtml.isGrabCad).toBe(true);
-    expect(grabCadHtml.title).toBe('Planetary Gearbox & Carrier');
-    expect(grabCadHtml.detectedFormats).toEqual(['STEP', 'STL']);
-    expect(grabCadHtml.previewImageUrl).toBe('https://cdn.example.org/gear.png');
+    expect(repoHtml.status).toBe('ok');
+    expect(repoHtml.isPublicRepository).toBe(true);
+    expect(repoHtml.title).toBe('Planetary Gearbox & Carrier');
+    expect(repoHtml.detectedFormats).toEqual(['STEP', 'STL']);
+    expect(repoHtml.previewImageUrl).toBe('https://cdn.example.org/gear.png');
 
-    // Non-GrabCAD HTML with <title>, meta description fallback, and direct href link
-    const publicHtmlWithHref = await inspectGrabCadOrCadUrl({
+    // Public HTML with <title>, meta description fallback, and direct href link
+    const publicHtmlWithHref = await inspectPublicCadUrl({
       url: 'https://cadrepo.example.org/part-99/',
       fetcher: async () => ({
         ok: true,
@@ -256,7 +256,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
       text: async () => '<html><body>Simple page</body></html>',
       json: async () => ({}),
     } as Response);
-    const minimalHtml = await inspectGrabCadOrCadUrl({
+    const minimalHtml = await inspectPublicCadUrl({
       url: 'https://cadrepo.example.org/',
     });
     expect(globalSpy).toHaveBeenCalledTimes(1);
@@ -264,7 +264,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     expect(minimalHtml.description).toContain('Página CAD');
 
     // Network errors (Error instance & primitive string, with & without directExtMatch)
-    const netErr = await inspectGrabCadOrCadUrl({
+    const netErr = await inspectPublicCadUrl({
       url: 'https://example.org/part.step',
       fetcher: async () => {
         throw new Error('ECONNRESET');
@@ -273,7 +273,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     expect(netErr.status).toBe('network-error');
     expect(netErr.detectedFormats).toEqual(['STEP']);
 
-    const netStrErr = await inspectGrabCadOrCadUrl({
+    const netStrErr = await inspectPublicCadUrl({
       url: 'https://example.org/page',
       fetcher: async () => {
         throw 'timeout-raw';
@@ -285,7 +285,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     // Timeout aborts cleanly
     vi.useFakeTimers();
     let aborted = false;
-    const timeoutInspect = inspectGrabCadOrCadUrl({
+    const timeoutInspect = inspectPublicCadUrl({
       url: 'https://example.org/slow',
       fetcher: (_u, init) =>
         new Promise((_res, rej) => {
@@ -302,7 +302,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     vi.useRealTimers();
   });
 
-  it('executes compact RAG + GrabCAD / DuckDuckGo search with VUC Ed25519 verification', async () => {
+  it('executes compact RAG + public CAD URL / DuckDuckGo search with VUC Ed25519 verification', async () => {
     const emptyRes = await executeHermesCompactSearch({
       query: '   ',
       dynamicDocs: [
@@ -344,9 +344,9 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
     });
     expect(emptyWeb.webStatus).toBe('disabled');
 
-    // URL inspection inside executeHermesCompactSearch (GrabCAD ok & network-error -> unavailable)
-    const grabCadUrlHit = await executeHermesCompactSearch({
-      query: 'importe https://grabcad.com/library/cycloidal-drive-1',
+    // URL inspection inside executeHermesCompactSearch (public URL ok & network-error -> unavailable)
+    const cadUrlHit = await executeHermesCompactSearch({
+      query: 'importe https://cadrepo.example.org/library/cycloidal-drive-1',
       includeWeb: true,
       fetcher: async () => ({
         ok: true,
@@ -356,24 +356,24 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
         text: async () => '<html><title>Cycloidal Drive</title></html>',
       }),
     });
-    expect(grabCadUrlHit.webStatus).toBe('ok');
-    expect(grabCadUrlHit.grabCadInspection?.isGrabCad).toBe(true);
-    expect(grabCadUrlHit.hits[0].source).toBe('grabcad-url');
+    expect(cadUrlHit.webStatus).toBe('ok');
+    expect(cadUrlHit.cadUrlInspection?.isPublicRepository).toBe(true);
+    expect(cadUrlHit.hits[0].source).toBe('public-cad-url');
 
-    const nonGrabCadUrlFail = await executeHermesCompactSearch({
+    const cadUrlFail = await executeHermesCompactSearch({
       query: 'abra https://cadrepo.example.org/housing.stl',
       includeWeb: true,
       fetcher: async () => {
         throw new Error('dns failed');
       },
     });
-    expect(nonGrabCadUrlFail.webStatus).toBe('unavailable');
-    expect(nonGrabCadUrlFail.grabCadInspection?.status).toBe('network-error');
+    expect(cadUrlFail.webStatus).toBe('unavailable');
+    expect(cadUrlFail.cadUrlInspection?.status).toBe('network-error');
 
-    // GrabCAD keyword rewrites DuckDuckGo query to site:grabcad.com/library
+    // DuckDuckGo keyword search
     let capturedUrl = '';
-    const grabCadKeywordRes = await executeHermesCompactSearch({
-      query: 'grabcad planetary gearbox',
+    const ddgKeywordRes = await executeHermesCompactSearch({
+      query: 'planetary gearbox step stl',
       maxResults: 1,
       includeWeb: true,
       fetcher: async (u) => {
@@ -383,7 +383,7 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
           json: async () => ({
             Heading: 'Planetary Gearbox',
             AbstractText: 'Compact planetary gearset.',
-            AbstractURL: 'https://grabcad.com/library/planetary',
+            AbstractURL: 'https://cadrepo.example.org/library/planetary',
             RelatedTopics: [
               { Text: 'Topic 1 - Pitch circle', FirstURL: 'https://example.org/t1' },
               { Text: '   ' },
@@ -394,9 +394,9 @@ describe('Hermes Bridge + WebSocket MCP Relay + Search Engine + GrabCAD + VUC (1
         };
       },
     });
-    expect(capturedUrl).toContain('site%3Agrabcad.com%2Flibrary');
-    expect(grabCadKeywordRes.webStatus).toBe('ok');
-    expect(verifyFormalVucCertificate(grabCadKeywordRes.vucCertificate).valid).toBe(true);
+    expect(capturedUrl).toContain('planetary%20gearbox%20step%20stl');
+    expect(ddgKeywordRes.webStatus).toBe('ok');
+    expect(verifyFormalVucCertificate(ddgKeywordRes.vucCertificate).valid).toBe(true);
 
     const webTopicsOnly = await executeHermesCompactSearch({
       query: 'engrenagem DIN 867',

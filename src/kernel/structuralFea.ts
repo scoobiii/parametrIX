@@ -107,8 +107,10 @@ export function evaluateStructuralFea(
   isolationTarget = 'all',
   profile?: PartEngineeringProfile,
   importedModel?: ImportedCadModel | null,
-  featureOps: CadFeatureOperation[] = []
+  featureOps: CadFeatureOperation[] = [],
+  ganStiffnessFactor = 1.0
 ): FeaResult {
+  const effectiveGanBoost = Math.max(1, ganStiffnessFactor);
   const effectiveFinish = profile?.primaryMaterial ?? materialFinish;
   const spec = MATERIAL_MECHANICAL_SPECS[effectiveFinish] ?? MATERIAL_MECHANICAL_SPECS.aluminum;
   const vertexCount = meshData.vertexCount;
@@ -147,7 +149,7 @@ export function evaluateStructuralFea(
   const baseBendingMpa =
     ((feaSettings.loadNewtons * spanRef * (useImportedBox ? 0.085 : 0.18)) /
       (effectiveWidthMm * thickness * thickness)) /
-    (ribInertiaFactor * shellActionDivisor);
+    (ribInertiaFactor * shellActionDivisor * Math.pow(effectiveGanBoost, 0.35));
 
   const minX = meshData.boundingBox.min[0];
   const maxX = meshData.boundingBox.max[0];
@@ -307,7 +309,7 @@ export function evaluateStructuralFea(
     }
     return acc;
   }, 1.0);
-  const effI = shellI * ribInertiaFactor * shellActionDivisor * featureCutRatio;
+  const effI = shellI * ribInertiaFactor * shellActionDivisor * featureCutRatio * effectiveGanBoost;
   const supportCoeff =
     feaSettings.supportMode === 'cantilever-u'
       ? 3

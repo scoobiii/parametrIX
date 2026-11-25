@@ -101,9 +101,9 @@ const FLANGE_CNC_DXF = [
 export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
   {
     id: 'preset-dh-fork',
-    title: 'Garfo Downhill Dupla Coroa (Conjunto 3D)',
-    badge: 'ISO 4210 · Ciclismo',
-    subtitle: 'Preenche conjunto multi-peça, Object Mask, FEA 5400 N, parafusos M6 e CAM 5-eixos.',
+    title: 'RockShox BoXXer Ultimate 27.5" (Ref. GAN Controlada)',
+    badge: 'ISO 4210 · Ref. GAN Controlada',
+    subtitle: 'Conjunto multi-peça com 7 layers, Object Mask, FEA 5400 N, parafuso M6 e correção GAN determinística.',
     segment: 'ciclismo-mobilidade',
     graphTemplateId: 'tpl-bim-shell',
     designParams: {
@@ -140,6 +140,8 @@ export const WORKSPACE_PROJECT_PRESETS: FullWorkspacePreset[] = [
     },
     materialFinish: 'aluminum',
     displayMode: 'component-pbr',
+    showMachine: false,
+    showToolpath: false,
     buildImportedModel: () =>
       parseOBJ(ROCKSHOX_FORK_ASSEMBLY_OBJ, 'RockShox_BoXXer_DH.obj'),
     initialFeatures: [

@@ -1307,3 +1307,54 @@ export interface ProductionSessionLogRecord {
   vucHash: string;
   createdAt: string;
 }
+
+export interface GanLayerMetric {
+  layerName: string;
+  allowedMm: number;
+  chordalErrorMm: number;
+  feaElasticMm: number;
+  deviationMm: number;
+  utilizationPct: number;
+  status: 'conforme' | 'atencao' | 'nao-conforme';
+}
+
+export interface GanEpochSnapshot {
+  epoch: number;
+  phaseLabel: string;
+  latentProgress: number;
+  ganStiffnessFactor: number;
+  uDivisions: number;
+  vDivisions: number;
+  thicknessMm: number;
+  archHeightMm: number;
+  ribCountU: number;
+  ribCountV: number;
+  discriminatorLoss: number;
+  maxDeviationMm: number;
+  allowedDeviationMm: number;
+  safetyFactor: number;
+  maxDeflectionMm: number;
+  maxStressMpa: number;
+  massKg: number;
+  conformeCount: number;
+  totalLayers: number;
+  feaStatus: 'seguro' | 'alerta' | 'critico';
+  overallStatus: 'conforme' | 'atencao' | 'nao-conforme';
+  layers: GanLayerMetric[];
+}
+
+export interface GanConformityReport {
+  referenceCode: string;
+  partName: string;
+  segment: ApplicationSegment;
+  totalEpochs: number;
+  epochs: GanEpochSnapshot[];
+  initialEpoch: GanEpochSnapshot;
+  finalEpoch: GanEpochSnapshot;
+  allConformed: boolean;
+  recommendedParams: ParametricDesignParams;
+  recommendedGanStiffnessFactor: number;
+  vucHash: string;
+  generatedAt: string;
+}
+

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   LIBRARY_CATEGORIES,
   LIBRARY_CATALOG_ITEMS,
-  buildGrabCadLibrarySearchUrl,
   filterLibraryItems,
   listLibraryCategoriesWithBest,
   resolveLibraryPreset,
@@ -17,10 +16,19 @@ describe('libraryCatalog', () => {
       expect(g.bestItem.isCategoryBest).toBe(true);
       expect(g.items[0].id).toBe(g.bestItem.id);
       expect(g.items.every((it) => it.categoryId === g.category.id)).toBe(true);
+      expect(g.category.defaultCatalogQuery.length).toBeGreaterThan(2);
     }
   });
 
-  it('filters by category and text query', () => {
+  it('marks RockShox BoXXer Ultimate 27.5 as controlled deterministic GAN reference', () => {
+    const boxxer = LIBRARY_CATALOG_ITEMS.find((it) => it.presetId === 'preset-dh-fork');
+    expect(boxxer).toBeDefined();
+    expect(boxxer?.isDeterministicGanReference).toBe(true);
+    expect(boxxer?.ganReferenceCode).toBe('GAN-REF-BOXXER-275');
+    expect(boxxer?.catalogSearchTags.length).toBeGreaterThan(3);
+  });
+
+  it('filters by category and text query natively', () => {
     const allItems = filterLibraryItems('all', '');
     expect(allItems.length).toBe(LIBRARY_CATALOG_ITEMS.length);
 
@@ -34,13 +42,6 @@ describe('libraryCatalog', () => {
 
     const emptyMatch = filterLibraryItems('robotica', 'inexistente-xyz');
     expect(emptyMatch).toEqual([]);
-  });
-
-  it('builds GrabCAD search URLs cleanly', () => {
-    expect(buildGrabCadLibrarySearchUrl('')).toBe('https://grabcad.com/library');
-    expect(buildGrabCadLibrarySearchUrl('spur gear M2')).toContain(
-      'https://grabcad.com/library?page=1&time=all_time&sort=recent&query=spur%20gear%20M2'
-    );
   });
 
   it('resolves full presets by library id, preset id, or returns undefined', () => {

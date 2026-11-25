@@ -617,7 +617,7 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
               <div className="p-2.5 bg-emerald-500/10 border border-emerald-400/35 rounded-lg text-[11px] text-emerald-200 flex items-center justify-between gap-2">
                 <span>
                   <strong>Modo Offline / Agente Local Ativo:</strong> Mordomo{' '}
-                  <strong>Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) + Qwen 2.5 0.5B SimpleTool Harness + Search Local/GrabCAD</strong>{' '}
+                  <strong>Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) + Qwen 2.5 0.5B SimpleTool Harness + Super-RAG Local</strong>{' '}
                   respondem automaticamente neste chat e nos processos.
                 </span>
               </div>
@@ -832,7 +832,7 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
                 disabled={!isRegistered}
                 placeholder={
                   isRegistered
-                    ? `Enviar em #${chatRoom} (use @hermes, @burrinho, @grabcad, @cam ou URL GrabCAD)...`
+                    ? `Enviar em #${chatRoom} (use @hermes, @burrinho, @cam ou URL CAD/Drive)...`
                     : 'Faça login ou cadastre-se para enviar mensagens no chat público'
                 }
                 value={chatDraft}

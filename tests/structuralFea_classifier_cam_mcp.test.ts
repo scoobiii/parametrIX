@@ -352,6 +352,11 @@ describe('structuralFea kernel', () => {
     };
     const resRootVol = evaluateStructuralFea(surface, mesh, baseParams, 'aluminum', baseFeaSettings, 'imported', profile, impRootVol);
     expect(resRootVol.elementStresses.length).toBe(mesh.bimElements.length);
+
+    // 5. GAN closed-section stiffness multiplier reduces deflection & increases safety factor
+    const resGanBoosted = evaluateStructuralFea(surface, mesh, baseParams, 'aluminum', baseFeaSettings, 'imported', profile, impRootVol, [], 4.0);
+    expect(resGanBoosted.maxDeflectionMm).toBeLessThan(resRootVol.maxDeflectionMm);
+    expect(resGanBoosted.safetyFactor).toBeGreaterThan(resRootVol.safetyFactor);
   });
 
   it('synthesizes optimizations for all 3 objectives and builds before/after comparison reports', () => {

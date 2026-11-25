@@ -7,17 +7,16 @@ import {
   Briefcase,
   Cloud,
   Cpu,
-  ExternalLink,
   FolderOpen,
   Globe,
   Loader2,
   RefreshCw,
   Save,
   Search,
+  Sparkles,
 } from 'lucide-react';
 import {
   LIBRARY_CATEGORIES,
-  buildGrabCadLibrarySearchUrl,
   filterLibraryItems,
   listLibraryCategoriesWithBest,
   resolveLibraryPreset,
@@ -35,7 +34,7 @@ import type {
   ImportedCadModel,
 } from '../types/cad';
 
-interface GrabCadSearchHit {
+interface CatalogSearchHit {
   title: string;
   url: string;
   snippet: string;
@@ -54,6 +53,7 @@ interface LibraryCatalogPanelProps {
   ) => void;
   onSavePresetToProjects: (preset: FullWorkspacePreset) => Promise<void>;
   onLoadImportedCad: (model: ImportedCadModel, target?: EngineeringArea | 'erp') => void;
+  onSimulateGanPreset?: (preset: FullWorkspacePreset) => void;
 }
 
 export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
@@ -65,11 +65,12 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
   onExportPresetToArea,
   onSavePresetToProjects,
   onLoadImportedCad,
+  onSimulateGanPreset,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<LibraryCategoryId | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [grabCadUrlInput, setGrabCadUrlInput] = useState('');
-  const [grabCadHits, setGrabCadHits] = useState<GrabCadSearchHit[]>([]);
+  const [cadUrlInput, setCadUrlInput] = useState('');
+  const [catalogHits, setCatalogHits] = useState<CatalogSearchHit[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [savingItemId, setSavingItemId] = useState<string | null>(null);
@@ -84,14 +85,21 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
     [selectedCategory, searchQuery]
   );
 
+  // Deduplicate: when viewing all categories without search, the curated Best items
+  // appear exclusively in the top section, while complementary items appear below.
+  const showingAllWithoutSearch = selectedCategory === 'all' && !searchQuery.trim();
+  const secondaryItems = useMemo(
+    () =>
+      showingAllWithoutSearch
+        ? filteredItems.filter((item) => !item.isCategoryBest)
+        : filteredItems,
+    [showingAllWithoutSearch, filteredItems]
+  );
+
   const activeCategoryMeta =
     selectedCategory === 'all'
       ? LIBRARY_CATEGORIES[0]
       : (LIBRARY_CATEGORIES.find((c) => c.id === selectedCategory) ?? LIBRARY_CATEGORIES[0]);
-
-  const effectiveGrabCadUrl = buildGrabCadLibrarySearchUrl(
-    searchQuery.trim() || activeCategoryMeta.defaultGrabCadQuery
-  );
 
   const refreshDriveLibrary = useCallback(async () => {
     if (!googleAccessToken) {
@@ -117,8 +125,8 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
     }
   }, [googleAccessToken, refreshDriveLibrary]);
 
-  const handleGrabCadSearch = async (queryOverride?: string) => {
-    const q = (queryOverride ?? searchQuery).trim() || activeCategoryMeta.defaultGrabCadQuery;
+  const handleCatalogSearch = async (queryOverride?: string) => {
+    const q = (queryOverride ?? searchQuery).trim() || activeCategoryMeta.defaultCatalogQuery;
     setSearchBusy(true);
     setErrorMsg(null);
     setStatusMsg(null);
@@ -130,7 +138,7 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
         credentials: 'include',
         headers,
         body: JSON.stringify({
-          query: `grabcad ${q}`,
+          query: q,
           includeWeb: true,
           maxResults: 6,
           googleUserEmail: googleUserEmail || undefined,
@@ -138,40 +146,40 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
         }),
       });
       const data = (await resp.json()) as {
-        webHits?: GrabCadSearchHit[];
+        webHits?: CatalogSearchHit[];
         ragHits?: { docTitle?: string; text?: string }[];
         compactSummaryText?: string;
         error?: string;
       };
       if (!resp.ok) {
-        throw new Error(data.error || 'Falha ao consultar busca GrabCAD + RAG.');
+        throw new Error(data.error || 'Falha ao consultar busca Super-RAG & Drive.');
       }
-      const hits: GrabCadSearchHit[] = [
+      const hits: CatalogSearchHit[] = [
         ...(data.webHits ?? []),
         ...(data.ragHits ?? []).slice(0, 2).map((r) => ({
           title: r.docTitle || 'Documento RAG Local',
-          url: buildGrabCadLibrarySearchUrl(q),
+          url: '',
           snippet: (r.text || '').slice(0, 160),
           source: 'RAG Local',
         })),
       ];
-      setGrabCadHits(hits);
+      setCatalogHits(hits);
       setStatusMsg(
         hits.length > 0
-          ? `${hits.length} referência(s) GrabCAD/RAG encontradas para "${q}".`
-          : `Nenhuma prévia direta retornada; abra o catálogo GrabCAD com a sua sessão Google.`
+          ? `${hits.length} referência(s) Super-RAG/Drive encontradas para "${q}".`
+          : `Nenhuma prévia externa retornada; utilize o catálogo nativo Parametrix ou seu Google Drive.`
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Falha na busca GrabCAD.');
+      setErrorMsg(err instanceof Error ? err.message : 'Falha na busca do catálogo.');
     } finally {
       setSearchBusy(false);
     }
   };
 
-  const handleImportGrabCadUrl = async (target: EngineeringArea | 'erp' = 'cad') => {
-    const rawUrl = grabCadUrlInput.trim();
+  const handleImportPublicCadUrl = async (target: EngineeringArea | 'erp' = 'cad') => {
+    const rawUrl = cadUrlInput.trim();
     if (!rawUrl) {
-      setErrorMsg('Cole uma URL pública GrabCAD ou link direto .STEP/.STL/.DXF/.OBJ/.SVG.');
+      setErrorMsg('Cole uma URL pública direta .STEP/.STL/.DXF/.OBJ/.SVG ou link do Google Drive.');
       return;
     }
     setImportBusy(true);
@@ -210,11 +218,11 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
         );
       } else {
         setStatusMsg(
-          `${data.title || 'GrabCAD'}: ${data.diagnosticNote || 'Página protegida por autenticação web. Baixe o .STEP/.STL via sessão Google no GrabCAD e importe direto na aba Arquivos CAD.'}`
+          `${data.title || 'URL CAD'}: ${data.diagnosticNote || 'Página inspecionada. Baixe o .STEP/.STL e importe direto na aba Arquivos CAD.'}`
         );
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Erro ao importar URL GrabCAD.');
+      setErrorMsg(err instanceof Error ? err.message : 'Erro ao importar URL CAD.');
     } finally {
       setImportBusy(false);
     }
@@ -278,6 +286,16 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
           <Cpu className="w-3 h-3" />
           CAM
         </button>
+        {item.isDeterministicGanReference && onSimulateGanPreset && (
+          <button
+            type="button"
+            onClick={() => onSimulateGanPreset(preset)}
+            className="px-2.5 py-1.5 text-[11px] font-semibold bg-emerald-500/20 border border-emerald-400/60 text-emerald-200 hover:bg-emerald-500/30 rounded-md flex items-center gap-1 cursor-pointer"
+          >
+            <Sparkles className="w-3 h-3 text-emerald-300" />
+            Simular GAN (0/7 → 7/7)
+          </button>
+        )}
         <button
           type="button"
           disabled={isSaving}
@@ -306,7 +324,7 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
           className="px-2.5 py-1.5 text-[11px] font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-md flex items-center gap-1 cursor-pointer"
         >
           <Briefcase className="w-3 h-3" />
-          Cotar no ERP & BI
+          Cotar no ERP &amp; BI
         </button>
       </div>
     );
@@ -315,21 +333,21 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
   return (
     <div className="w-full h-full overflow-y-auto bg-[#0b0e14] text-slate-100 p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header + Active Google Session (GAS) + GrabCAD Connector */}
+        {/* Header + Active Google Session (GAS) + Native CAD & Drive Connector */}
         <div className="bg-[#111620] border border-white/10 rounded-2xl p-4 sm:p-6 space-y-4">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2 text-xs font-medium text-sky-400">
                 <BookOpen className="w-4 h-4" />
-                <span>Lib / Biblioteca Parametrix por Categoria · Sessão Google (GAS) & GrabCAD</span>
+                <span>Lib / Biblioteca Parametrix por Categoria · Ref. GAN Controlada &amp; Google Drive</span>
               </div>
               <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-100">
-                Catálogo Industrial por Categoria + Integração GrabCAD & Google Drive
+                Catálogo Industrial por Categoria + Referências GAN &amp; Google Drive
               </h1>
               <p className="text-xs text-slate-400 max-w-3xl">
-                Cada categoria destaca o melhor exemplo validado pronto para exportação direta para{' '}
-                <strong className="text-slate-200">CAD, CAE, CAM, Projetos e ERP Open</strong> (com
-                cálculo automático de insumos, impostos, logística, preço Parametrix, mercado e BI/CRM).
+                Cada categoria destaca um único exemplo validado e deduplicado pronto para{' '}
+                <strong className="text-slate-200">CAD, CAE, CAM, Simulação GAN 7/7 e ERP Open</strong>{' '}
+                (com cálculo automático de insumos, impostos, logística, preço Parametrix e BI/CRM).
               </p>
             </div>
 
@@ -363,20 +381,10 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
                   Drive Ativo ({driveFiles.length})
                 </button>
               )}
-              <a
-                href={effectiveGrabCadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="min-h-[38px] px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-400/45 text-amber-200 hover:bg-amber-500/25 rounded-lg flex items-center gap-1.5"
-              >
-                <Globe className="w-3.5 h-3.5" />
-                Abrir GrabCAD ({googleUserEmail ? 'Sessão Google' : 'Web'})
-                <ExternalLink className="w-3 h-3" />
-              </a>
             </div>
           </div>
 
-          {/* Search Bar + Direct URL GrabCAD Importer */}
+          {/* Search Bar + Direct Public CAD URL Importer */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <div className="flex gap-2">
               <div className="relative flex-1">
@@ -385,33 +393,33 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Filtrar biblioteca ou pesquisar modelos GrabCAD (ex: spur gear M2, turbine)..."
+                  placeholder="Filtrar biblioteca ou buscar no Super-RAG (ex: RockShox BoXXer, spur gear M2)..."
                   className="w-full pl-9 pr-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
                 />
               </div>
               <button
                 type="button"
                 disabled={searchBusy}
-                onClick={() => void handleGrabCadSearch()}
+                onClick={() => void handleCatalogSearch()}
                 className="px-3.5 py-2 text-xs font-semibold bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 hover:bg-emerald-500/30 rounded-lg flex items-center gap-1.5 shrink-0 cursor-pointer"
               >
                 {searchBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Globe className="w-3.5 h-3.5" />}
-                Buscar GrabCAD
+                Buscar Super-RAG &amp; Drive
               </button>
             </div>
 
             <div className="flex gap-2">
               <input
                 type="url"
-                value={grabCadUrlInput}
-                onChange={(e) => setGrabCadUrlInput(e.target.value)}
-                placeholder="Cole URL GrabCAD ou link direto .STEP/.STL/.OBJ/.DXF/.SVG..."
+                value={cadUrlInput}
+                onChange={(e) => setCadUrlInput(e.target.value)}
+                placeholder="Cole URL pública direta .STEP/.STL/.OBJ/.DXF/.SVG ou Google Drive..."
                 className="flex-1 px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 outline-none focus:border-sky-400"
               />
               <button
                 type="button"
                 disabled={importBusy}
-                onClick={() => void handleImportGrabCadUrl('cad')}
+                onClick={() => void handleImportPublicCadUrl('cad')}
                 className="px-3 py-2 text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 rounded-lg shrink-0 cursor-pointer"
               >
                 {importBusy ? 'Importando...' : 'Importar p/ CAD'}
@@ -419,7 +427,7 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
               <button
                 type="button"
                 disabled={importBusy}
-                onClick={() => void handleImportGrabCadUrl('erp')}
+                onClick={() => void handleImportPublicCadUrl('erp')}
                 className="px-3 py-2 text-xs font-semibold bg-[#141a24] border border-sky-400/45 text-sky-200 hover:bg-sky-500/15 rounded-lg shrink-0 cursor-pointer"
               >
                 + ERP
@@ -438,40 +446,32 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
             </div>
           )}
 
-          {grabCadHits.length > 0 && (
+          {catalogHits.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-white/10">
               <div className="text-xs font-semibold text-slate-300">
-                Resultados GrabCAD & Super-RAG Local ({grabCadHits.length})
+                Resultados Super-RAG Local &amp; Catálogo ({catalogHits.length})
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                {grabCadHits.map((hit, idx) => (
+                {catalogHits.map((hit, idx) => (
                   <div
-                    key={`${hit.url}-${idx}`}
+                    key={`${hit.url || hit.title}-${idx}`}
                     className="p-3 bg-[#0c1017] border border-white/10 rounded-lg space-y-1.5 text-xs"
                   >
                     <div className="font-semibold text-slate-100 truncate">{hit.title}</div>
                     <p className="text-[11px] text-slate-400 line-clamp-2">{hit.snippet}</p>
                     <div className="flex items-center justify-between gap-2 pt-1 text-[11px]">
                       <span className="font-mono-tabular text-sky-400">{hit.source}</span>
-                      <div className="flex items-center gap-2">
+                      {hit.url && (
                         <button
                           type="button"
                           onClick={() => {
-                            setGrabCadUrlInput(hit.url);
+                            setCadUrlInput(hit.url);
                           }}
                           className="text-emerald-300 hover:underline cursor-pointer"
                         >
                           Usar URL
                         </button>
-                        <a
-                          href={hit.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sky-300 hover:underline inline-flex items-center gap-1"
-                        >
-                          Abrir <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -510,7 +510,7 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
         </div>
 
         {/* Best Example per Category Highlight Grid (when viewing all categories & no search) */}
-        {selectedCategory === 'all' && !searchQuery.trim() && (
+        {showingAllWithoutSearch && (
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="font-display text-sm sm:text-base font-semibold text-slate-100 flex items-center gap-2">
@@ -530,14 +530,25 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
                   <div
                     key={group.category.id}
                     className={`p-4 bg-[#111620] rounded-xl border space-y-2.5 ${
-                      isActive ? 'border-emerald-400/70' : 'border-white/12'
+                      best.isDeterministicGanReference
+                        ? 'border-emerald-400/60 ring-1 ring-emerald-500/25'
+                        : isActive
+                          ? 'border-emerald-400/70'
+                          : 'border-white/12'
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2 text-[11px] font-mono-tabular">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono-tabular">
                       <span className="text-amber-300 font-semibold">
                         ★ Melhor · {group.category.label}
                       </span>
-                      <span className="text-sky-300">{best.standardBadge}</span>
+                      <div className="flex items-center gap-1.5">
+                        {best.isDeterministicGanReference && best.ganReferenceCode && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-400/45 text-emerald-300 font-semibold">
+                            Ref. GAN Controlada · {best.ganReferenceCode}
+                          </span>
+                        )}
+                        <span className="text-sky-300">{best.standardBadge}</span>
+                      </div>
                     </div>
                     <div className="font-display text-sm font-bold text-slate-100">
                       {best.title}
@@ -554,62 +565,63 @@ export const LibraryCatalogPanel: React.FC<LibraryCatalogPanelProps> = ({
           </section>
         )}
 
-        {/* Full Filtered Library Catalog */}
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-sm sm:text-base font-semibold text-slate-100">
-              Todos os Modelos da Categoria Selecionada ({filteredItems.length})
-            </h2>
-            <a
-              href={effectiveGrabCadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-sky-300 hover:text-sky-200 inline-flex items-center gap-1"
-            >
-              Ver mais exemplos desta categoria no GrabCAD
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          </div>
+        {/* Deduplicated Complementary Models / Filtered Category Section */}
+        {secondaryItems.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-sm sm:text-base font-semibold text-slate-100">
+                {showingAllWithoutSearch
+                  ? `Modelos Complementares da Biblioteca (${secondaryItems.length})`
+                  : `Modelos da Categoria Selecionada (${secondaryItems.length})`}
+              </h2>
+              <span className="text-[11px] font-mono-tabular text-slate-400">
+                Catálogo determinístico sem duplicatas
+              </span>
+            </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {filteredItems.map((item) => {
-              const isActive = activePresetId === item.presetId;
-              return (
-                <div
-                  key={item.id}
-                  className={`p-4 bg-[#111620] rounded-xl border space-y-2.5 ${
-                    isActive ? 'border-emerald-400/70' : 'border-white/10'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2 text-[11px] font-mono-tabular">
-                    <span className={item.isCategoryBest ? 'text-amber-300 font-semibold' : 'text-slate-400'}>
-                      {item.isCategoryBest ? `★ Destaque · ${item.categoryLabel}` : item.categoryLabel}
-                    </span>
-                    <span className="text-sky-300">
-                      {item.standardBadge} · Lote {item.defaultBatchQty} un
-                    </span>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {secondaryItems.map((item) => {
+                const isActive = activePresetId === item.presetId;
+                return (
+                  <div
+                    key={item.id}
+                    className={`p-4 bg-[#111620] rounded-xl border space-y-2.5 ${
+                      item.isDeterministicGanReference
+                        ? 'border-emerald-400/60 ring-1 ring-emerald-500/20'
+                        : isActive
+                          ? 'border-emerald-400/70'
+                          : 'border-white/10'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono-tabular">
+                      <span className={item.isCategoryBest ? 'text-amber-300 font-semibold' : 'text-slate-400'}>
+                        {item.isCategoryBest ? `★ Destaque · ${item.categoryLabel}` : item.categoryLabel}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {item.isDeterministicGanReference && item.ganReferenceCode && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-400/45 text-emerald-300 font-semibold">
+                            Ref. GAN Controlada · {item.ganReferenceCode}
+                          </span>
+                        )}
+                        <span className="text-sky-300">
+                          {item.standardBadge} · Lote {item.defaultBatchQty} un
+                        </span>
+                      </div>
+                    </div>
+                    <div className="font-display text-sm font-bold text-slate-100">
+                      {item.title}
+                    </div>
+                    <p className="text-xs text-slate-400 leading-relaxed">{item.summary}</p>
+                    <div className="text-[11px] font-mono-tabular text-slate-300">
+                      {item.keySpecs.join(' · ')}
+                    </div>
+                    {renderExportActions(item)}
                   </div>
-                  <div className="font-display text-sm font-bold text-slate-100">
-                    {item.title}
-                  </div>
-                  <p className="text-xs text-slate-400 leading-relaxed">{item.summary}</p>
-                  <div className="flex items-center justify-between gap-2 text-[11px] font-mono-tabular text-slate-300">
-                    <span>{item.keySpecs.join(' · ')}</span>
-                    <a
-                      href={buildGrabCadLibrarySearchUrl(item.grabCadSearchQuery)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-amber-300 hover:underline shrink-0 inline-flex items-center gap-1"
-                    >
-                      GrabCAD <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                  {renderExportActions(item)}
-                </div>
-              );
-            })}
-          </div>
-        </section>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Active Google Drive CAD Files Section */}
         {googleAccessToken && driveFiles.length > 0 && (

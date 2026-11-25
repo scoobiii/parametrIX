@@ -44,7 +44,7 @@ describe('qwenProjectRagFinetune kernel', () => {
     expect(Object.keys(QWEN_SPECIALIST_PROFILES)).toHaveLength(8);
 
     expect(routeQwenSpecialistFunction('hermes burrinho openclaw').id).toBe('hermes-search-butler');
-    expect(routeQwenSpecialistFunction('https://grabcad.com/library/spur-gear-1').id).toBe(
+    expect(routeQwenSpecialistFunction('https://cadrepo.example.org/library/spur-gear-1').id).toBe(
       'hermes-search-butler'
     );
     expect(routeQwenSpecialistFunction('frostbite 7nm 500mhz 800v rack').id).toBe('frostbite-7nm');
@@ -98,7 +98,7 @@ describe('qwenProjectRagFinetune kernel', () => {
   it('generates verifiable ChatML fine-tuning examples, JSONL serialization, and RT specialist RAG context', () => {
     const defaultDataset = buildQwenChatMlFinetuneDataset();
     expect(defaultDataset.length).toBeGreaterThanOrEqual(8);
-    expect(defaultDataset.some((ex) => ex.id === 'ft-hermes-claw-grabcad-drive')).toBe(true);
+    expect(defaultDataset.some((ex) => ex.id === 'ft-hermes-claw-cad-drive')).toBe(true);
 
     const enrichedDataset = buildQwenChatMlFinetuneDataset([SAMPLE_DOC], {
       partName: 'Torso Humanoide',

@@ -87,6 +87,8 @@ interface ParametricSidebarProps {
   onResetCadArea?: () => void;
   onNewCaeStudy?: () => void;
   onResetCaeArea?: () => void;
+  detectedSegment?: ApplicationSegment | null;
+  onStartGanSimulation?: () => void;
 }
 
 const PRESET_OPTIONS: { id: PresetId; label: string; subtitle: string }[] = [
@@ -147,6 +149,8 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
   onResetCadArea,
   onNewCaeStudy,
   onResetCaeArea,
+  detectedSegment,
+  onStartGanSimulation,
 }) => {
   const [expandedLayerName, setExpandedLayerName] = useState<string | null>(null);
 
@@ -248,6 +252,23 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
                 </option>
               ))}
             </select>
+            {detectedSegment && detectedSegment !== activeSegment && (
+              <div className="mt-1.5 p-2 rounded-lg bg-amber-500/10 border border-amber-400/40 flex items-center justify-between gap-2 text-[10px]">
+                <span className="text-amber-200 leading-snug">
+                  Segmento nativo da peça:{' '}
+                  <strong>
+                    {SEGMENT_CATALOG.find((s) => s.id === detectedSegment)?.label ?? detectedSegment}
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onChangeSegment(detectedSegment)}
+                  className="px-2 py-1 rounded bg-amber-400 text-slate-950 font-semibold shrink-0 cursor-pointer hover:bg-amber-300"
+                >
+                  Restaurar Segmento
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1 text-[11px] pt-1 border-t border-white/8">
@@ -851,12 +872,17 @@ export const ParametricSidebar: React.FC<ParametricSidebarProps> = ({
 
             <button
               type="button"
-              onClick={onApplyCurvatureOptimization}
-              disabled={hasImportedModel}
-              className="w-full py-1.5 text-[11px] font-semibold bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-45 rounded-md cursor-pointer"
+              onClick={() => {
+                if (hasImportedModel && onStartGanSimulation) {
+                  onStartGanSimulation();
+                } else {
+                  onApplyCurvatureOptimization();
+                }
+              }}
+              className="w-full py-1.5 text-[11px] font-semibold bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 hover:bg-emerald-500/30 rounded-md cursor-pointer"
             >
               {hasImportedModel
-                ? 'Otimização NURBS (Disponível em Peça Paramétrica)'
+                ? 'Simular & Aplicar GAN Determinística (7/7 CONFORME)'
                 : `Aplicar Otimização de Peso (-${curvatureOptReport.weightReductionPct}%)`}
             </button>
           </div>

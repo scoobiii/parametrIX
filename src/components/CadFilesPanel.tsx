@@ -92,7 +92,7 @@ interface CadFilesPanelProps {
 
 interface UrlImportInspection {
   url: string;
-  isGrabCad: boolean;
+  isPublicRepository: boolean;
   status: string;
   httpStatus?: number;
   title: string;
@@ -478,7 +478,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
         );
         setUrlInspection({
           url: targetUrl,
-          isGrabCad: false,
+          isPublicRepository: false,
           status: 'google-drive-imported',
           title: meta.name,
           description: `Importado direto da sessão Google Drive (${googleUserEmail || localSlug})`,
@@ -531,7 +531,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
         setUrlInspection(data.inspection);
       }
       if (!resp.ok) {
-        throw new Error(data.error || 'Falha ao consultar URL CAD / GrabCAD.');
+        throw new Error(data.error || 'Falha ao consultar URL CAD pública.');
       }
       if (data.downloadedFile?.base64Content) {
         const binary = atob(data.downloadedFile.base64Content);
@@ -808,7 +808,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
             <div className="space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-xs font-medium text-slate-400">
-                  Importar via URL Pública / GrabCAD / Google Drive (Hermes Search + VUC)
+                  Importar via URL Pública / Repositório CAD / Google Drive (Hermes Search + VUC)
                 </div>
                 {googleUserEmail && (
                   <div className="flex items-center gap-1.5 text-[10px] font-mono-tabular">
@@ -838,7 +838,7 @@ export const CadFilesPanel: React.FC<CadFilesPanelProps> = ({
                   type="url"
                   value={cadUrlInput}
                   onChange={(e) => setCadUrlInput(e.target.value)}
-                  placeholder="https://grabcad.com/library/..., drive.google.com/... ou .stl/.step/.dxf/.3dm"
+                  placeholder="https://drive.google.com/..., raw.githubusercontent.com/... ou .stl/.step/.dxf/.3dm"
                   className="flex-1 px-3 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 font-mono-tabular outline-none focus:border-sky-400"
                 />
                 <button

@@ -68,7 +68,7 @@ export const QWEN_05B_SERIES_CATALOG: Record<
     hfRepo: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
     ggufRelPath: QWEN_CORE_GGUF_REL_PATH,
     ramMb: 469,
-    strength: 'Orquestração PT-BR em tempo real (Hermes + Burrinhos Open/Nano/PicoClaw), Search RAG/GrabCAD e ERP',
+    strength: 'Orquestração PT-BR em tempo real (Hermes + Burrinhos Open/Nano/PicoClaw), Search RAG/Drive e ERP',
   },
 };
 
@@ -86,7 +86,7 @@ export const QWEN_CORE_SYSTEM_PROMPT = [
 export const QWEN_SPECIALIST_PROFILES: Record<QwenSpecialistFunctionId, QwenSpecialistProfile> = {
   'cad-geometry': {
     id: 'cad-geometry',
-    title: 'RT-CAD · Geometria B-Rep / NURBS / Rhino / GrabCAD',
+    title: 'RT-CAD · Geometria B-Rep / NURBS / Rhino / GAN',
     modelVariant: 'qwen2.5-coder-0.5b-instruct-q4',
     ggufRelPath: QWEN_CODER_GGUF_REL_PATH,
     targetDomains: ['CAD', 'PRESETS', 'MCP', 'LIVE_STATE', 'USER_RAG'],
@@ -136,13 +136,13 @@ export const QWEN_SPECIALIST_PROFILES: Record<QwenSpecialistFunctionId, QwenSpec
   },
   'hermes-search-butler': {
     id: 'hermes-search-butler',
-    title: 'RT-Hermes · Mordomo + Burrinhos (Open/Nano/PicoClaw) + Search & GrabCAD/Drive',
+    title: 'RT-Hermes · Mordomo + Burrinhos (Open/Nano/PicoClaw) + Search & Google Drive',
     modelVariant: 'qwen2.5-0.5b-instruct-q4',
     ggufRelPath: QWEN_CORE_GGUF_REL_PATH,
     targetDomains: ['HERMES_CLAW', 'USER_RAG', 'MCP', 'LIVE_STATE'],
     maxPromptTokensBudget: 540,
     rtDirective:
-      'Especialista RT Hermes & Família Burrinho: coordene OpenClaw/NanoClaw/PicoClaw em Qwen 0.5B (:11435), busca RAG local + Web + GrabCAD URL e arquivos do Google Drive.',
+      'Especialista RT Hermes & Família Burrinho: coordene OpenClaw/NanoClaw/PicoClaw em Qwen 0.5B (:11435), busca RAG local + Web + URL pública CAD e arquivos do Google Drive.',
   },
   'erp-logistics': {
     id: 'erp-logistics',
@@ -173,7 +173,7 @@ export function routeQwenSpecialistFunction(query: string): QwenSpecialistProfil
     .replace(/[\u0300-\u036f]/g, '');
 
   if (
-    /(hermes|burrinho|openclaw|nanoclaw|picoclaw|grabcad|drive\.google|google drive|search|busca|pesquis)/.test(
+    /(hermes|burrinho|openclaw|nanoclaw|picoclaw|drive\.google|google drive|search|busca|pesquis)/.test(
       q
     ) ||
     /https?:\/\//i.test(query)
@@ -219,7 +219,7 @@ export function buildFullProjectKnowledgeCorpus(
       title: 'Motor CAD Geométrico & Formatos Reais',
       domain: 'CAD',
       content:
-        'Suporta leitura e exportação fiel de .STEP/.STP (OpenCASCADE WASM + B-Rep), .IPT (OLE2+zlib+ACIS SAT ou Display Mesh; se ShapeManager ASM binário fechado orienta exportar STEP AP214/AP203), .DXF (CIRCLE/LWPOLYLINE/ARC/3DFACE), .3DM (OpenNURBS NURBS), .STL (ASCII/Binário), .IFC e .SVG. Inclui Caneta Mágica 3D, comandos Rhinoceros, Object Mask e importação por URL pública/GrabCAD e Google Drive autenticado.',
+        'Suporta leitura e exportação fiel de .STEP/.STP (OpenCASCADE WASM + B-Rep), .IPT (OLE2+zlib+ACIS SAT ou Display Mesh; se ShapeManager ASM binário fechado orienta exportar STEP AP214/AP203), .DXF (CIRCLE/LWPOLYLINE/ARC/3DFACE), .3DM (OpenNURBS NURBS), .STL (ASCII/Binário), .IFC e .SVG. Inclui Caneta Mágica 3D, comandos Rhinoceros, Object Mask, Referência GAN Controlada (RockShox BoXXer 27.5") e importação por URL pública/Google Drive autenticado.',
     },
     {
       id: 'core-fea-curvature',
@@ -244,10 +244,10 @@ export function buildFullProjectKnowledgeCorpus(
     },
     {
       id: 'core-hermes-claw-search',
-      title: 'Mordomo Hermes + Burrinhos Baixa Renda (OpenClaw/NanoClaw/PicoClaw) + GrabCAD & Drive',
+      title: 'Mordomo Hermes + Burrinhos Baixa Renda (OpenClaw/NanoClaw/PicoClaw) & Google Drive',
       domain: 'HERMES_CLAW',
       content:
-        'No Modo Offline (SQLite Local), o Parametrix ativa automaticamente o agente local com Mordomo Hermes, família Burrinho (OpenClaw JSON, NanoClaw Sandbox YAML, PicoClaw Go v2) em Qwen 2.5 0.5B (:11435, dual Coder/Instruct Q4_K_M), motor de busca local RAG + Web pública (DuckDuckGo) + extração/importação de URLs GrabCAD e acesso autenticado Google Drive (drive.file + drive.readonly) para abrir e salvar projetos CAD.',
+        'No Modo Offline (SQLite Local), o Parametrix ativa automaticamente o agente local com Mordomo Hermes, família Burrinho (OpenClaw JSON, NanoClaw Sandbox YAML, PicoClaw Go v2) em Qwen 2.5 0.5B (:11435, dual Coder/Instruct Q4_K_M), motor de busca local RAG + Web pública (DuckDuckGo) + inspeção de URLs CAD diretas (.STEP/.STL/.OBJ) e acesso autenticado Google Drive (drive.file + drive.readonly) para abrir e salvar projetos CAD.',
     },
     {
       id: 'core-remote-mqtt-swagger',
@@ -382,12 +382,12 @@ export function buildQwenChatMlFinetuneDataset(
         'Cada processo gera hash_input (SHA-256), hash_output (SHA-256), hash_processo e assinatura_ed25519 verificável via POST /api/vuc/formal-verify ou npm run vuc:proof em proof/vuc-latest.json. O pipeline CI exige lint limpo, 100% de cobertura Vitest V8, 27/27 no audit:cad e vite build sem erros.',
     },
     {
-      id: 'ft-hermes-claw-grabcad-drive',
+      id: 'ft-hermes-claw-cad-drive',
       domain: 'HERMES_CLAW',
       specialistId: 'hermes-search-butler',
-      user: 'Como o Modo Offline ativa o Hermes + Burrinho + Search + GrabCAD + Google Drive?',
+      user: 'Como o Modo Offline ativa o Hermes + Burrinho + Search + URL CAD + Google Drive?',
       assistant:
-        'Ao entrar em Modo Offline (SQLite Local), o Parametrix seleciona automaticamente o agente local com Mordomo Hermes, Burrinhos (OpenClaw, NanoClaw, PicoClaw) em Qwen 2.5 0.5B (:11435, roteado por função RT Coder/Instruct), Search Local/Web e inspeção de URLs GrabCAD. Se logado no Google com escopo Drive, você abre e importa arquivos CAD direto da sua conta.',
+        'Ao entrar em Modo Offline (SQLite Local), o Parametrix seleciona automaticamente o agente local com Mordomo Hermes, Burrinhos (OpenClaw, NanoClaw, PicoClaw) em Qwen 2.5 0.5B (:11435, roteado por função RT Coder/Instruct), Search Local/Web e inspeção de URLs públicas CAD (.STEP/.STL/.OBJ). Se logado no Google com escopo Drive, você abre e importa arquivos CAD direto da sua conta.',
     },
   ];
 

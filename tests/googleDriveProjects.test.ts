@@ -18,7 +18,7 @@ describe('googleDriveProjects - extractGoogleDriveFileId', () => {
   });
 
   it('returns null for non-Google-Drive URLs and invalid inputs', () => {
-    expect(extractGoogleDriveFileId('https://grabcad.com/library/turbine-1')).toBeNull();
+    expect(extractGoogleDriveFileId('https://cadrepo.example.org/models/turbine-1.step')).toBeNull();
     expect(extractGoogleDriveFileId('not-a-valid-url')).toBeNull();
     expect(extractGoogleDriveFileId('https://drive.google.com/drive/my-drive')).toBeNull();
   });

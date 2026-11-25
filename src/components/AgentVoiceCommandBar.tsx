@@ -234,7 +234,7 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
           headers,
           body: JSON.stringify({
             query,
-            includeWeb: !offlineMode || /https?:\/\/|grabcad/i.test(query),
+            includeWeb: !offlineMode || /https?:\/\//i.test(query),
             maxResults: 4,
             googleUserEmail: googleUserEmail || undefined,
             googleDriveActive: Boolean(googleAccessToken),
@@ -500,7 +500,7 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
                   type="text"
                   value={promptDraft}
                   onChange={(e) => setPromptDraft(e.target.value)}
-                  placeholder='Comando CAM, URL GrabCAD ou pergunta ao Hermes/Qwen 0.5B...'
+                  placeholder='Comando CAM, URL CAD pública ou pergunta ao Hermes/Qwen 0.5B...'
                   className="flex-1 min-w-[200px] px-3 py-1.5 text-xs bg-[#090c11] border border-white/12 rounded text-slate-100 outline-none focus:border-sky-400"
                 />
                 <button
@@ -508,7 +508,7 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
                   disabled={agentBusy}
                   onClick={() => void handleSearchHermes()}
                   className="px-3 py-1.5 text-xs font-semibold bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 rounded hover:bg-emerald-500/30 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
-                  title="Buscar via Hermes + Burrinhos no Super-RAG local e GrabCAD"
+                  title="Buscar via Hermes + Burrinhos no Super-RAG local e Drive"
                 >
                   <Search className="w-3.5 h-3.5" />
                   Buscar Hermes
@@ -535,14 +535,14 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
                   { label: 'Cold-Plate DC', cmd: 'coldplate' },
                   { label: 'Prova VUC Ed25519', cmd: 'prova vuc' },
                   { label: 'Enviar Código G / MQTT', cmd: 'enviar codigo g' },
-                  { label: 'Search GrabCAD / RAG', cmd: 'buscar grabcad engrenagem helice step stl' },
+                  { label: 'Search Super-RAG / Drive', cmd: 'buscar biblioteca cad engrenagem helice step stl' },
                   { label: 'Agente: Status CAM & Sinterização', cmd: 'qual parametro de sinterizacao e ferramenta CAM atual?' },
                 ].map((chip) => (
                   <button
                     key={chip.label}
                     type="button"
                     onClick={() => {
-                      if (chip.label === 'Search GrabCAD / RAG') {
+                      if (chip.label === 'Search Super-RAG / Drive') {
                         void handleSearchHermes(chip.cmd);
                         return;
                       }

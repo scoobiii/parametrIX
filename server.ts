@@ -66,7 +66,7 @@ import {
   buildClawFamilyBundle,
   buildHermesAgentBundle,
   executeHermesCompactSearch,
-  inspectGrabCadOrCadUrl,
+  inspectPublicCadUrl,
   type BrowserMcpRpcResponsePayload,
 } from './src/server/hermesBridge';
 import {
@@ -2438,7 +2438,7 @@ ${ragBlock}`;
         query: userMessage,
         dynamicDocs: getRegisteredRagDocs(),
         cadSummary: enrichedSummary,
-        includeWeb: Boolean(req.body?.includeWeb) || /https?:\/\/|grabcad/i.test(userMessage),
+        includeWeb: Boolean(req.body?.includeWeb) || /https?:\/\//i.test(userMessage),
         maxResults: 3,
       });
       const qwenStatus = getLocalQwenStatus();
@@ -2468,7 +2468,7 @@ ${ragBlock}`;
             modelUsed: qwenRes.modelUsed,
             specialistProfile,
             searchHits: searchRes.hits.slice(0, 4),
-            grabCadInspection: searchRes.grabCadInspection,
+            cadUrlInspection: searchRes.cadUrlInspection,
             reply: qwenRes.reply,
             vucHash: proof.vucHash,
             formalVuc: qwenRes.vucCertificate,
@@ -2515,7 +2515,7 @@ ${ragBlock}`;
               modelUsed: `${specialistProfile.modelVariant} (localhost)`,
               specialistProfile,
               searchHits: searchRes.hits.slice(0, 4),
-              grabCadInspection: searchRes.grabCadInspection,
+              cadUrlInspection: searchRes.cadUrlInspection,
               reply: replyText,
               vucHash: proof.vucHash,
               formalVuc: formalCert,
@@ -2544,13 +2544,13 @@ ${ragBlock}`;
         eyeEvents,
         vucHash: proof.vucHash,
       });
-      const grabCadNote = searchRes.grabCadInspection
-        ? ` | GrabCAD/URL: "${searchRes.grabCadInspection.title}" (${searchRes.grabCadInspection.detectedFormats.join('/') || searchRes.grabCadInspection.status}) — ${searchRes.grabCadInspection.diagnosticNote}`
+      const cadUrlNote = searchRes.cadUrlInspection
+        ? ` | CAD/URL: "${searchRes.cadUrlInspection.title}" (${searchRes.cadUrlInspection.detectedFormats.join('/') || searchRes.cadUrlInspection.status}) — ${searchRes.cadUrlInspection.diagnosticNote}`
         : '';
       const topSearchLine = searchRes.hits[0]
         ? ` | Search (${searchRes.hits[0].source}): ${searchRes.hits[0].title}`
         : '';
-      const reply = `[Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) · ${specialistProfile.title}] ${baseDeterministic}${topSearchLine}${grabCadNote}`;
+      const reply = `[Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) · ${specialistProfile.title}] ${baseDeterministic}${topSearchLine}${cadUrlNote}`;
       const formalCert = createFormalVucCertificate({
         domain: 'AGENT_HERMES_LOCAL_RT',
         status: 'PASS',
@@ -2564,7 +2564,7 @@ ${ragBlock}`;
         modelUsed: `${specialistProfile.modelVariant} (${specialistProfile.id} · Hermes+Claw)`,
         specialistProfile,
         searchHits: searchRes.hits.slice(0, 4),
-        grabCadInspection: searchRes.grabCadInspection,
+        cadUrlInspection: searchRes.cadUrlInspection,
         reply,
         vucHash: proof.vucHash,
         formalVuc: formalCert,
@@ -3533,7 +3533,7 @@ ${ragBlock}`;
         typeof req.body?.googleUserEmail === 'string' && req.body.googleUserEmail.trim()
           ? req.body.googleUserEmail.trim()
           : sessionClaims?.email ?? null;
-      const inspection = await inspectGrabCadOrCadUrl({ url: rawUrl });
+      const inspection = await inspectPublicCadUrl({ url: rawUrl });
       if (inspection.status === 'invalid-url') {
         return res.status(400).json({ error: inspection.diagnosticNote, inspection });
       }
@@ -3572,7 +3572,7 @@ ${ragBlock}`;
 
       const proof = sqliteStore.recordVucProof(
         'CAD_URL_INSPECT',
-        `GrabCAD/URL: ${inspection.title} (${inspection.status})`,
+        `CAD/URL: ${inspection.title} (${inspection.status})`,
         {
           url: rawUrl,
           status: inspection.status,
@@ -3710,8 +3710,8 @@ ${ragBlock}`;
       offlineMode ||
       activeAgentId === 'local-llm' ||
       Boolean(req.body?.askLocalAgent) ||
-      /@(hermes|burrinho|openclaw|nanoclaw|picoclaw|qwen|local|search|buscar|grabcad)\b/i.test(check.content) ||
-      /https?:\/\/(?:www\.)?grabcad\.com/i.test(check.content);
+      /@(hermes|burrinho|openclaw|nanoclaw|picoclaw|qwen|local|search|buscar|cadurl)\b/i.test(check.content) ||
+      /https?:\/\//i.test(check.content);
     const wantsAnyAgent =
       !isAgent &&
       (wantsHermesOrLocal ||
@@ -3737,7 +3737,7 @@ ${ragBlock}`;
           query: check.content,
           dynamicDocs: getRegisteredRagDocs(),
           cadSummary,
-          includeWeb: !offlineMode || /grabcad\.com|https?:\/\//i.test(check.content),
+          includeWeb: !offlineMode || /https?:\/\//i.test(check.content),
           maxResults: 3,
         });
         let qwenReplyText = '';
@@ -3759,15 +3759,15 @@ ${ragBlock}`;
           cadSummary,
           vucHash: msg.vucHash,
         });
-        const grabCadNote = searchRes.grabCadInspection
-          ? `\nGrabCAD/URL "${searchRes.grabCadInspection.title}" (${searchRes.grabCadInspection.detectedFormats.join('/') || searchRes.grabCadInspection.status}): ${searchRes.grabCadInspection.diagnosticNote}`
+        const cadUrlNote = searchRes.cadUrlInspection
+          ? `\nCAD/URL "${searchRes.cadUrlInspection.title}" (${searchRes.cadUrlInspection.detectedFormats.join('/') || searchRes.cadUrlInspection.status}): ${searchRes.cadUrlInspection.diagnosticNote}`
           : '';
         const searchHint = searchRes.hits[0]
           ? `\nSearch [${searchRes.hits[0].source}]: ${searchRes.hits[0].title} — ${searchRes.hits[0].snippet.slice(0, 120)}`
           : '';
         const finalText = qwenReplyText
-          ? `[Hermes + Burrinhos · ${specialist.title}]\n${qwenReplyText}${grabCadNote}`
-          : `[Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) · ${specialist.title}]\n${deterministicLocal}${searchHint}${grabCadNote}`;
+          ? `[Hermes + Burrinhos · ${specialist.title}]\n${qwenReplyText}${cadUrlNote}`
+          : `[Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) · ${specialist.title}]\n${deterministicLocal}${searchHint}${cadUrlNote}`;
 
         agentReply = sqliteStore.appendChatMessage({
           room: check.room,

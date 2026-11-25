@@ -27,6 +27,7 @@ export default defineConfig({
         'src/kernel/graphEngine.ts',
         'src/kernel/nurbs.ts',
         'src/kernel/curvatureOptimizer.ts',
+        'src/kernel/ganConformityEngine.ts',
         'src/kernel/scoobiiiVuc.ts',
         'src/kernel/scoobiiiProofTelemetry.ts',
         'src/kernel/componentClassifier.ts',

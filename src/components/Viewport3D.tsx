@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   Sigma,
   SlidersHorizontal,
+  Sparkles,
   SplitSquareHorizontal,
   Trash2,
   Volume2,
@@ -57,6 +58,7 @@ import type {
   DisplayMode,
   EvaluatedMesh,
   FeaResult,
+  GanConformityReport,
   ImportedCadModel,
   IsoThreadSpec,
   MachineType,
@@ -68,6 +70,7 @@ import type {
   ToolpathResult,
   ViewportDisplayState,
 } from '../types/cad';
+import { GanConformityPanel } from './GanConformityPanel';
 import { ScoobiiiVucModal } from './ScoobiiiVucModal';
 
 type IxMenuTab = 'none' | 'models' | 'section' | 'explode' | 'measure';
@@ -235,6 +238,15 @@ interface Viewport3DProps {
   onCommitCurvature?: () => void;
   onResetCurvature?: () => void;
   onDetectedGpuRenderer?: (gpu: string) => void;
+  ganReport?: GanConformityReport | null;
+  ganEpochIndex?: number;
+  ganAnimating?: boolean;
+  ganPanelOpen?: boolean;
+  onToggleGanPanel?: () => void;
+  onPlayPauseGan?: () => void;
+  onRestartGan?: () => void;
+  onScrubGanEpoch?: (index: number) => void;
+  onCommitGan?: () => void;
 }
 
 const _vec3A = new THREE.Vector3();
@@ -928,6 +940,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   onCommitCurvature,
   onResetCurvature,
   onDetectedGpuRenderer,
+  ganReport = null,
+  ganEpochIndex = 0,
+  ganAnimating = false,
+  ganPanelOpen = false,
+  onToggleGanPanel,
+  onPlayPauseGan,
+  onRestartGan,
+  onScrubGanEpoch,
+  onCommitGan,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -2390,7 +2411,31 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         xrayOrGhost
       );
     }
-    if (display.selectedComponentId === 'shell') {
+    if (ganPanelOpen && ganReport && !hasImported) {
+      const activeEp =
+        ganReport.epochs[Math.min(ganReport.epochs.length - 1, Math.max(0, ganEpochIndex))] ??
+        ganReport.finalEpoch;
+      const tLatent = activeEp.latentProgress;
+      mat.vertexColors = false;
+      mat.map = null;
+      if (activeEp.overallStatus === 'conforme') {
+        mat.color.setHex(0x10b981);
+        mat.emissive.setHex(0x059669);
+        mat.emissiveIntensity = 0.24;
+      } else if (tLatent > 0.02) {
+        const cyan = new THREE.Color(0x38bdf8);
+        const em = new THREE.Color(0x10b981);
+        mat.color.copy(cyan.lerp(em, tLatent));
+        mat.emissive.setHex(0x0284c7);
+        mat.emissiveIntensity = 0.26;
+      } else {
+        mat.color.setHex(0xef4444);
+        mat.emissive.setHex(0xb91c1c);
+        mat.emissiveIntensity = 0.22;
+      }
+      mat.metalness = 0.25;
+      mat.roughness = 0.35;
+    } else if (display.selectedComponentId === 'shell') {
       mat.emissive.setHex(0x0284c7);
       mat.emissiveIntensity = 0.22;
     }
@@ -2560,9 +2605,43 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
       mMat.wireframe = display.mode === 'wireframe';
 
-      if (display.selectedComponentId === componentId) {
+      if (ganPanelOpen && ganReport) {
+        const activeEp =
+          ganReport.epochs[Math.min(ganReport.epochs.length - 1, Math.max(0, ganEpochIndex))] ??
+          ganReport.finalEpoch;
+        const tLatent = activeEp.latentProgress;
+        const matchedLayer = activeEp.layers.find(
+          (l) =>
+            l.layerName === componentId ||
+            componentId.toLowerCase().includes(l.layerName.toLowerCase()) ||
+            l.layerName.toLowerCase().includes(componentId.toLowerCase())
+        );
+        const layerStatus = matchedLayer?.status ?? activeEp.overallStatus;
+        mMat.vertexColors = false;
+        mMat.map = null;
+        mMat.metalness = 0.22;
+        mMat.roughness = 0.34;
+        if (layerStatus === 'conforme') {
+          mMat.color.setHex(0x10b981);
+          mMat.emissive.setHex(0x059669);
+          mMat.emissiveIntensity = 0.26;
+        } else if (tLatent > 0.02) {
+          const fromCol = new THREE.Color(layerStatus === 'atencao' ? 0xf59e0b : 0x38bdf8);
+          const toCol = new THREE.Color(0x10b981);
+          mMat.color.copy(fromCol.lerp(toCol, tLatent));
+          mMat.emissive.setHex(0x0ea5e9);
+          mMat.emissiveIntensity = 0.24;
+        } else {
+          mMat.color.setHex(0xef4444);
+          mMat.emissive.setHex(0xb91c1c);
+          mMat.emissiveIntensity = 0.24;
+        }
+      } else if (display.selectedComponentId === componentId) {
         mMat.emissive.setHex(0x38bdf8);
         mMat.emissiveIntensity = 0.28;
+      } else {
+        mMat.emissive.setHex(0x000000);
+        mMat.emissiveIntensity = 0;
       }
       mMat.needsUpdate = true;
     }
@@ -2615,7 +2694,19 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     }
 
     refs.requestRender();
-  }, [display, machineType, toolpath, feaResult, beforeFeaResult, meshData, importedModel, partProfile]);
+  }, [
+    display,
+    machineType,
+    toolpath,
+    feaResult,
+    beforeFeaResult,
+    meshData,
+    importedModel,
+    partProfile,
+    ganPanelOpen,
+    ganEpochIndex,
+    ganReport,
+  ]);
 
   // Update Toolpath Lines
   useEffect(() => {
@@ -4515,8 +4606,48 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 )}
               </button>
             )}
+
+            {!compact && ganReport && onToggleGanPanel && (
+              <button
+                type="button"
+                onClick={onToggleGanPanel}
+                aria-label="Abrir simulação GAN de conformidade"
+                aria-expanded={ganPanelOpen}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 shadow-lg transition-colors cursor-pointer ${
+                  ganPanelOpen
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-300 hover:bg-emerald-400'
+                    : 'bg-[#0e131c]/95 border-emerald-400/45 text-emerald-200 hover:bg-emerald-500/20'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span>GAN Correção</span>
+                <span className="font-mono-tabular text-[10px] font-bold">
+                  {ganReport.finalEpoch.conformeCount}/{ganReport.finalEpoch.totalLayers}
+                </span>
+              </button>
+            )}
           </div>
         )}
+
+        {!compact &&
+          ganPanelOpen &&
+          ganReport &&
+          onToggleGanPanel &&
+          onPlayPauseGan &&
+          onRestartGan &&
+          onScrubGanEpoch &&
+          onCommitGan && (
+            <GanConformityPanel
+              report={ganReport}
+              epochIndex={ganEpochIndex}
+              animating={ganAnimating}
+              onPlayPause={onPlayPauseGan}
+              onRestart={onRestartGan}
+              onScrubEpoch={onScrubGanEpoch}
+              onCommit={onCommitGan}
+              onClose={onToggleGanPanel}
+            />
+          )}
 
         {/* Exclusive Floating NURBS Curvature Compensation Control Panel (0.0 - 1.0) */}
         {!compact && onChangeCurvatureFactor && curvatureHudOpen && (

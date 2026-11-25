@@ -96,6 +96,7 @@ import {
   analyzeCurvatureAndOptimizeWeight,
   applyNurbsCurvatureCompensationFactor,
 } from './kernel/curvatureOptimizer';
+import { runDeterministicGanConformity } from './kernel/ganConformityEngine';
 import { buildUserProfileWithRole } from './kernel/ecosystemErpLogistics';
 import { GRAPH_TEMPLATES, evaluateGraphPipeline } from './kernel/graphEngine';
 import {
@@ -263,6 +264,10 @@ export default function App() {
   const [mobileCamPane, setMobileCamPane] = useState<'viewport' | 'panel'>('viewport');
   const [mobileGraphMode, setMobileGraphMode] = useState<'split' | 'graph' | 'viewport'>('split');
   const [curvatureCompensationFactor, setCurvatureCompensationFactor] = useState(0);
+  const [ganStiffnessFactor, setGanStiffnessFactor] = useState(1);
+  const [ganPanelOpen, setGanPanelOpen] = useState(false);
+  const [ganAnimating, setGanAnimating] = useState(false);
+  const [ganEpochIndex, setGanEpochIndex] = useState(0);
   const [detectedWebglGpu, setDetectedWebglGpu] = useState<string>('');
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const [deliverables, setDeliverables] = useState<SessionDeliverable[]>([]);
@@ -794,7 +799,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [display.selectedComponentId]);
 
-  // 6. Evaluate Structural FEA with Certification Thresholds & Magic Pen Features
+  // 6. Evaluate Structural FEA with Certification Thresholds, Magic Pen & GAN Stiffness
   const feaResult = useMemo(
     () =>
       evaluateStructuralFea(
@@ -806,7 +811,8 @@ export default function App() {
         display.isolationTarget,
         partProfile,
         importedModel,
-        featureOps
+        featureOps,
+        ganStiffnessFactor
       ),
     [
       surface,
@@ -818,6 +824,7 @@ export default function App() {
       partProfile,
       importedModel,
       featureOps,
+      ganStiffnessFactor,
     ]
   );
 
@@ -872,6 +879,60 @@ export default function App() {
       }),
     [surface, layerToleranceSpecs, feaResult, partProfile]
   );
+
+  // 8b. Controlled Deterministic GAN Conformity Engine (Epoch 0..8 -> 100% Conforme)
+  const ganConformityReport = useMemo(
+    () =>
+      runDeterministicGanConformity({
+        designParams: baseDesignParams,
+        materialFinish: display.materialFinish,
+        feaSettings,
+        isolationTarget: display.isolationTarget,
+        partProfile,
+        specs: layerToleranceSpecs,
+        importedModel,
+        featureOps,
+        referenceCode:
+          activePresetId === 'preset-dh-fork' ||
+          importedModel?.filename.includes('RockShox_BoXXer')
+            ? 'GAN-REF-BOXXER-275'
+            : 'GAN-REF-PARAMETRIX',
+      }),
+    [
+      baseDesignParams,
+      display.materialFinish,
+      feaSettings,
+      display.isolationTarget,
+      partProfile,
+      layerToleranceSpecs,
+      importedModel,
+      featureOps,
+      activePresetId,
+    ]
+  );
+
+  useEffect(() => {
+    if (!ganAnimating || !ganPanelOpen) return;
+    const maxEpoch = ganConformityReport.totalEpochs;
+    const timer = window.setInterval(() => {
+      setGanEpochIndex((prev) => {
+        if (prev >= maxEpoch) {
+          setGanAnimating(false);
+          return prev;
+        }
+        const next = prev + 1;
+        const snap = ganConformityReport.epochs[next];
+        if (snap) {
+          setGanStiffnessFactor(snap.ganStiffnessFactor);
+        }
+        if (next >= maxEpoch) {
+          setGanAnimating(false);
+        }
+        return next;
+      });
+    }, 520);
+    return () => window.clearInterval(timer);
+  }, [ganAnimating, ganPanelOpen, ganConformityReport]);
 
   // 9. Deterministic SCOOBIII / VUC Mathematical Proof
   const scoobiiiProof = useMemo(
@@ -1027,6 +1088,10 @@ export default function App() {
     setImportedModel(model);
     setActivePresetId(undefined);
     setCurvatureCompensationFactor(0);
+    setGanStiffnessFactor(1);
+    setGanAnimating(false);
+    setGanEpochIndex(0);
+    setGanPanelOpen(false);
     setPartProfileOverride({});
     setFeaBaseline(null);
     setFeaComparison(null);
@@ -1084,6 +1149,10 @@ export default function App() {
   const handleApplyFullPreset = (preset: FullWorkspacePreset, openEditor = true) => {
     setActivePresetId(preset.id);
     setCurvatureCompensationFactor(0);
+    setGanStiffnessFactor(1);
+    setGanAnimating(false);
+    setGanEpochIndex(0);
+    setGanPanelOpen(false);
     setDesignParams({ ...preset.designParams });
     setActiveSegment(preset.segment);
     setPartProfileOverride(preset.partProfileOverride ?? {});
@@ -1299,6 +1368,85 @@ export default function App() {
       kind: 'REPORT',
       summary: `Compensação NURBS ${(curvatureCompensationPreview.factor * 100).toFixed(0)}%: ${curvatureCompensationPreview.weightBeforeKg}→${curvatureCompensationPreview.weightAfterKg} kg · SF ${curvatureCompensationPreview.safetyFactor}×`,
     });
+  };
+
+  const handleStartGanSimulation = () => {
+    setGanStiffnessFactor(1);
+    setGanEpochIndex(0);
+    setGanPanelOpen(true);
+    setGanAnimating(true);
+    setActiveTab('viewport');
+  };
+
+  const handleScrubGanEpoch = (index: number) => {
+    setGanAnimating(false);
+    const clamped = Math.max(0, Math.min(ganConformityReport.totalEpochs, index));
+    setGanEpochIndex(clamped);
+    const snap = ganConformityReport.epochs[clamped];
+    if (snap) {
+      setGanStiffnessFactor(snap.ganStiffnessFactor);
+    }
+  };
+
+  const handleCommitGanConformity = () => {
+    const beforeFea = feaResult;
+    const beforeParams = effectiveDesignParams;
+    const nextParams = ganConformityReport.recommendedParams;
+    const nextBoost = ganConformityReport.recommendedGanStiffnessFactor;
+
+    const afterSurface = buildNurbsSurfaceFromParams(nextParams);
+    const afterMesh = tessellateNurbsSurface(
+      afterSurface,
+      nextParams.ribCountU,
+      nextParams.ribCountV,
+      nextParams.ribHeightMm
+    );
+    const afterFea = evaluateStructuralFea(
+      afterSurface,
+      afterMesh,
+      nextParams,
+      display.materialFinish,
+      feaSettings,
+      display.isolationTarget,
+      partProfile,
+      importedModel,
+      featureOps,
+      nextBoost
+    );
+
+    const report = buildFeaComparisonReport(
+      beforeFea,
+      afterFea,
+      beforeParams,
+      nextParams,
+      `GAN Controlada (${ganConformityReport.referenceCode}): ${ganConformityReport.initialEpoch.conformeCount}/${ganConformityReport.initialEpoch.totalLayers} → ${ganConformityReport.finalEpoch.conformeCount}/${ganConformityReport.finalEpoch.totalLayers} CONFORME · δ ${ganConformityReport.initialEpoch.maxDeflectionMm}→${afterFea.maxDeflectionMm} mm · SF ${afterFea.safetyFactor}× · VUC ${ganConformityReport.vucHash.slice(0, 14)}.`,
+      partProfile
+    );
+    setFeaBaseline({ fea: beforeFea, params: beforeParams });
+    setFeaComparison(report);
+    setDesignParams(nextParams);
+    setGanStiffnessFactor(nextBoost);
+    setCurvatureCompensationFactor(0);
+    setGanAnimating(false);
+    setGanEpochIndex(ganConformityReport.totalEpochs);
+    recordDeliverable({
+      filename: `${afterSurface.id}_gan_conformidade_vuc.json`,
+      kind: 'REPORT',
+      summary: `GAN Controlada ${ganConformityReport.finalEpoch.conformeCount}/${ganConformityReport.finalEpoch.totalLayers} CONFORME · VUC ${ganConformityReport.vucHash.slice(0, 14)}`,
+    });
+    setLastVoiceStatus(
+      `GAN concluída: ${ganConformityReport.finalEpoch.conformeCount}/${ganConformityReport.finalEpoch.totalLayers} camadas conformes e FEA ${afterFea.safetyFactor}×.`
+    );
+    pushMcpEyeEvent(
+      'cam-output',
+      'GAN.ConformitySeal',
+      `GAN Determinística ${ganConformityReport.referenceCode} selada com VUC ${ganConformityReport.vucHash.slice(0, 14)}.`,
+      {
+        vucHash: ganConformityReport.vucHash,
+        conformeCount: ganConformityReport.finalEpoch.conformeCount,
+        totalLayers: ganConformityReport.finalEpoch.totalLayers,
+      }
+    );
   };
 
   const handleUpdateLayerTolerance = (
@@ -1794,7 +1942,8 @@ export default function App() {
       display.isolationTarget,
       partProfile,
       importedModel,
-      featureOps
+      featureOps,
+      ganStiffnessFactor
     );
     if (!feaBaseline) {
       setFeaBaseline({ fea: evaluatedFea, params: effectiveDesignParams });
@@ -1960,6 +2109,10 @@ export default function App() {
     setImportedModel(null);
     setActivePresetId(undefined);
     setCurvatureCompensationFactor(0);
+    setGanStiffnessFactor(1);
+    setGanAnimating(false);
+    setGanEpochIndex(0);
+    setGanPanelOpen(false);
     setFeatureOps([]);
     setCpOverrides({});
     setSelectedControlPoint(null);
@@ -1988,6 +2141,9 @@ export default function App() {
   };
 
   const handleResetCaeArea = () => {
+    setGanStiffnessFactor(1);
+    setGanAnimating(false);
+    setGanEpochIndex(0);
     setFeaBaseline(null);
     setFeaComparison(null);
     setLayerToleranceOverrides({});
@@ -2036,6 +2192,10 @@ export default function App() {
   };
 
   const handleResetPartAndProduction = () => {
+    setGanStiffnessFactor(1);
+    setGanAnimating(false);
+    setGanEpochIndex(0);
+    setGanPanelOpen(false);
     setFeatureOps([]);
     setCpOverrides({});
     setSelectedControlPoint(null);
@@ -2948,7 +3108,7 @@ export default function App() {
         body: JSON.stringify({
           agentId: activeAgent,
           offlineMode: sqliteProfile.offlineMode,
-          includeWeb: !sqliteProfile.offlineMode || /https?:\/\/|grabcad/i.test(prompt),
+          includeWeb: !sqliteProfile.offlineMode || /https?:\/\//i.test(prompt),
           userMessage: prompt,
           roleLabel: `${sqliteProfile.role} (${sqliteProfile.handleAt})`,
           eyeEvents: mcpEyeEvents.slice(0, 8),
@@ -3771,6 +3931,16 @@ export default function App() {
                 });
               }
             }}
+            onSimulateGanPreset={(preset) => {
+              handleApplyFullPreset(preset, true);
+              setGanEpochIndex(0);
+              setGanStiffnessFactor(1);
+              setGanPanelOpen(true);
+              setGanAnimating(true);
+              setLastVoiceStatus(
+                `Simulação GAN iniciada para "${preset.title}" (0/7 → 7/7 CONFORME).`
+              );
+            }}
             onLoadImportedCad={(model, target = 'cad') => {
               handleLoadImportedModel(model);
               if (target === 'erp') {
@@ -3858,6 +4028,8 @@ export default function App() {
                   setWizardOpen(true);
                 }}
                 onResetCaeArea={handleResetCaeArea}
+                detectedSegment={importedModel?.detectedProfile?.segment ?? null}
+                onStartGanSimulation={handleStartGanSimulation}
               />
             </div>
 
@@ -3924,6 +4096,27 @@ export default function App() {
                   handleRestartCamProcess(mt);
                   handleTabSwitch('cam');
                 }}
+                ganReport={ganConformityReport}
+                ganEpochIndex={ganEpochIndex}
+                ganAnimating={ganAnimating}
+                ganPanelOpen={ganPanelOpen}
+                onToggleGanPanel={() => setGanPanelOpen((v) => !v)}
+                onPlayPauseGan={() => {
+                  if (ganEpochIndex >= ganConformityReport.totalEpochs && !ganAnimating) {
+                    setGanEpochIndex(0);
+                    setGanStiffnessFactor(1);
+                    setGanAnimating(true);
+                  } else {
+                    setGanAnimating((v) => !v);
+                  }
+                }}
+                onRestartGan={() => {
+                  setGanEpochIndex(0);
+                  setGanStiffnessFactor(1);
+                  setGanAnimating(true);
+                }}
+                onScrubGanEpoch={handleScrubGanEpoch}
+                onCommitGan={handleCommitGanConformity}
               />
 
               {/* Left Screen-Edge Touch Handle (appears when menu is tucked away) */}
