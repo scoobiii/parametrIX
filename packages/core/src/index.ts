@@ -22,6 +22,40 @@ export interface ExecutionEvidence {
   details?: Record<string, unknown>;
 }
 
+export type BusinessEngineId = 'erpnext' | 'twenty' | 'metabase' | 'medusa';
+
+export interface EngineeringProductRef {
+  sku: string;
+  name: string;
+  revision: string;
+  sourceArea: 'CAD' | 'CAE' | 'CAM';
+  externalId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface EngineeringBomRef {
+  productSku: string;
+  revision: string;
+  lines: Array<{ sku: string; quantity: number; unit?: string }>;
+  sourceArea: 'CAD' | 'CAE' | 'CAM';
+  externalId?: string;
+}
+
+export interface ProductionOrderRef {
+  productSku: string;
+  revision: string;
+  quantity: number;
+  status: string;
+  externalId?: string;
+}
+
+export interface ExternalEngineCapability {
+  engine: BusinessEngineId;
+  operation: 'health' | 'product' | 'bom' | 'production-order' | 'customer-lead' | 'bi-indicator' | 'ecommerce-order';
+  available: boolean;
+  evidence: ExecutionEvidence;
+}
+
 export interface ParametrixAdapter {
   id: string;
   provider: 'mcp' | 'claude' | 'openai' | 'generic';

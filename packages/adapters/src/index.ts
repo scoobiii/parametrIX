@@ -1,5 +1,7 @@
 import type { ExecutionEvidence, ParametrixAdapter, RuntimeCapability } from '../../core/src/index.js';
 
+export * from './open-source-engines.js';
+
 export interface McpTransport {
   request(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
 }

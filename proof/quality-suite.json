@@ -2,15 +2,15 @@
   "schema": "parametrix.quality-suite.v1",
   "strict": true,
   "baseUrl": "http://127.0.0.1:3000",
-  "generatedAt": "2026-11-25T20:33:59.934Z",
+  "generatedAt": "2026-11-25T20:48:57.773Z",
   "inventory": {
-    "total": 195,
+    "total": 198,
     "byTopLevel": {
       ".github": 5,
       "README.md": 1,
       "SYSTEM_INSTRUCTION.md": 1,
       "deliverables": 8,
-      "docs": 10,
+      "docs": 11,
       "eslint.config.js": 1,
       "firebase-applet-config.json": 1,
       "firebase-blueprint.json": 1,
@@ -20,7 +20,7 @@
       "models": 1,
       "package-lock.json": 1,
       "package.json": 1,
-      "packages": 3,
+      "packages": 4,
       "plugins": 4,
       "proof": 6,
       "scripts": 27,
@@ -28,7 +28,7 @@
       "server.ts": 1,
       "serverCadParser.ts": 1,
       "src": 82,
-      "tests": 32,
+      "tests": 33,
       "tsconfig.json": 1,
       "vite.config.ts": 1,
       "vitest.config.ts": 1,
@@ -43,19 +43,19 @@
         "health": {
           "ok": true,
           "status": 200,
-          "ms": 96.85
+          "ms": 81.22
         },
         "requests": 20,
         "errors": 0,
-        "p95Ms": 8.17
+        "p95Ms": 5.69
       }
     },
     {
       "name": "stress-concurrency",
       "status": "PASS",
       "details": {
-        "concurrency": 48,
-        "elapsedMs": 131.66,
+        "concurrency": 24,
+        "elapsedMs": 43.9,
         "errors": 0
       }
     },
