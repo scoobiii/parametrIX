@@ -1,0 +1,7 @@
+{
+  "id": "parametrix",
+  "displayName": "ParametrIX CAD/CAE/CAM/VUC",
+  "transport": { "type": "stdio", "command": "python3", "args": ["scripts/hermes/parametrix_mcp_stdio.py"] },
+  "httpAlternative": { "url": "${PARAMETRIX_URL}/api/mcp", "auth": "Bearer ${MCP_TOKEN}" },
+  "safety": { "allowlistedToolsOnly": true, "shellFromPrompt": false, "requireExecutionEvidence": true }
+}

@@ -1,0 +1,64 @@
+{
+  "schema": "parametrix.environment.v1",
+  "maxAttempts": 1000,
+  "attempts": 8,
+  "mode": "ci",
+  "platform": {
+    "os": "linux",
+    "arch": "arm64",
+    "node": "v22.23.4"
+  },
+  "backends": [],
+  "checks": [
+    {
+      "command": "node",
+      "role": "runtime",
+      "available": true,
+      "output": "v22.23.4"
+    },
+    {
+      "command": "npm",
+      "role": "package-manager",
+      "available": true,
+      "output": "10.9.9"
+    },
+    {
+      "command": "python3",
+      "role": "bridge",
+      "available": true,
+      "output": "Python 3.12.3"
+    },
+    {
+      "command": "git",
+      "role": "source-control",
+      "available": true,
+      "output": "git version 2.43.0"
+    },
+    {
+      "command": "qwen",
+      "role": "optional-llm",
+      "available": false,
+      "reason": "not-installed"
+    },
+    {
+      "command": "bend",
+      "role": "optional-hvm",
+      "available": false,
+      "reason": "not-installed"
+    },
+    {
+      "command": "freecadcmd",
+      "role": "optional-cad",
+      "available": false,
+      "reason": "not-installed"
+    },
+    {
+      "command": "k6",
+      "role": "optional-load-test",
+      "available": false,
+      "reason": "not-installed"
+    }
+  ],
+  "status": "PASS",
+  "policy": "No blind installation or silent fallback. Optional binaries are reported and enabled only after real capability checks."
+}

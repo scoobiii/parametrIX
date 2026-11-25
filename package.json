@@ -1,7 +1,10 @@
 {
-  "name": "react-example",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@scoobiii/parametrix",
+  "private": false,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=24.12.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -22,7 +25,11 @@
     "llm:install-qwen": "bash scripts/install_qwen_local.sh",
     "hermes:setup": "bash scripts/hermes/setup_parametrix_hermes.sh",
     "claw:setup": "bash scripts/hermes/setup_parametrix_claw.sh",
-    "vuc:proof": "tsx scripts/generate_vuc_proof.ts"
+    "vuc:proof": "tsx scripts/generate_vuc_proof.ts",
+    "diagnose:env": "node scripts/diagnose-environment.mjs",
+    "classify:tests": "node scripts/classify-tests.mjs",
+    "package:check": "npm pack --dry-run",
+    "ci:contract": "npm run diagnose:env -- --ci && npm run classify:tests"
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
@@ -31,7 +38,6 @@
     "@types/d3": "^7.4.3",
     "@types/three": "^0.187.0",
     "@types/ws": "^8.18.2",
-    "@vitejs/plugin-react": "^6.1.1",
     "cfb": "^1.2.2",
     "d3": "^7.9.2",
     "dotenv": "^17.2.3",
@@ -45,7 +51,6 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "three": "^0.187.0",
-    "vite": "^8.3.0",
     "ws": "^8.23.0"
   },
   "devDependencies": {
@@ -53,13 +58,39 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "^5.1.1",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "jsdom": "^31.0.1",
+    "lightningcss": "^1.33.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "vitest": "^5.1.1"
+    "typescript": "^5.8.3",
+    "vite": "^7.3.8",
+    "vitest": "^3.2.7"
+  },
+  "description": "Parametric CAD/CAE/CAM runtime, MCP adapters and VUC-verifiable agent integrations.",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "packages",
+    "plugins",
+    "scripts/diagnose-environment.mjs",
+    "scripts/classify-tests.mjs",
+    "scripts/hermes/parametrix_mcp_stdio.py",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./packages/core/src/index.ts",
+    "./adapters": "./packages/adapters/src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "parametrix": "./packages/cli/bin/parametrix.mjs"
   }
 }

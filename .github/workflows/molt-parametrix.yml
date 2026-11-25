@@ -1,0 +1,78 @@
+name: Molt Parametrix MCP Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Operação MCP segura"
+        required: true
+        type: choice
+        options:
+          - tools-list
+          - vuc-proof
+          - structural-fea
+          - nurbs-metrics
+      prompt:
+        description: "Prompt opcional para Qwen/OpenAI-compatible; uma única tool call"
+        required: false
+        type: string
+      args_json:
+        description: "JSON de argumentos para operação direta"
+        required: false
+        default: "{}"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  molt-mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PORT: "3000"
+      MCP_TOKEN: ${{ secrets.PARAMETRIX_MCP_TOKEN }}
+      PARAMETRIX_ALLOWED_TOOLS: "cad_get_scoobiii_vuc_proof,cad_run_structural_fea,cad_evaluate_nurbs_metrics"
+      LLM_API_KEY: ${{ secrets.MOLT_LLM_API_KEY }}
+      LLM_BASE_URL: ${{ vars.MOLT_LLM_BASE_URL }}
+      LLM_MODEL: ${{ vars.MOLT_LLM_MODEL }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_BASE_URL: ${{ vars.QWEN_BASE_URL }}
+      QWEN_MODEL: ${{ vars.QWEN_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Start Parametrix locally
+        run: |
+          npm run dev > /tmp/parametrix.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:3000/api/agent/onboarding >/dev/null && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:3000/api/agent/onboarding >/dev/null
+      - name: Execute Molt/Qwen MCP request in real time
+        env:
+          OPERATION: ${{ inputs.operation }}
+          PROMPT: ${{ inputs.prompt }}
+          ARGS_JSON: ${{ inputs.args_json }}
+        run: |
+          if [ -n "$PROMPT" ]; then
+            python3 scripts/molt/parametrix_molt_runner.py --prompt "$PROMPT"
+          else
+            case "$OPERATION" in
+              tools-list) python3 scripts/molt/parametrix_molt_runner.py --list ;;
+              vuc-proof) python3 scripts/molt/parametrix_molt_runner.py --tool cad_get_scoobiii_vuc_proof ;;
+              structural-fea) python3 scripts/molt/parametrix_molt_runner.py --tool cad_run_structural_fea --args-json "$ARGS_JSON" ;;
+              nurbs-metrics) python3 scripts/molt/parametrix_molt_runner.py --tool cad_evaluate_nurbs_metrics --args-json "$ARGS_JSON" ;;
+            esac
+          fi
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parametrix-molt-server-log
+          path: /tmp/parametrix.log
