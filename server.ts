@@ -98,6 +98,16 @@ import {
   resolveMachineProcessAssociation,
   validateRealMachineEndpoint,
 } from './src/kernel/realMachineConnector';
+import {
+  HARNESS_OPTIONAL_API_PROVIDERS,
+  SIMPLE_TOOL_SCHEMAS,
+  executeQwenSimpleToolHarness,
+  listHarnessDynamicProjects,
+  type HarnessLayer,
+  type HarnessLiveWorkspaceContext,
+  type HarnessProjectDescriptor,
+} from './src/kernel/qwenSimpleToolHarness';
+import { WORKSPACE_PROJECT_PRESETS } from './src/kernel/workspacePresets';
 import type {
   AgentProviderId,
   ApplicationSegment,
@@ -2658,6 +2668,352 @@ ${ragBlock}`;
       reply,
       vucHash: proof.vucHash,
       formalVuc: formalCert,
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Qwen 0.5B + SimpleTool Harness (Default Zero-Download Engine + Dynamic Projects)
+  // ---------------------------------------------------------------------------
+  const HARNESS_ALLOWED_HTTPS_HOSTS = new Set([
+    'api.deepseek.com',
+    'api.openai.com',
+    'api.anthropic.com',
+    'api.x.ai',
+    'generativelanguage.googleapis.com',
+    'dashscope.aliyuncs.com',
+  ]);
+
+  const sanitizeHarnessBaseUrl = (
+    rawUrl: string | undefined,
+    fallbackUrl: string,
+    allowLocalhost: boolean
+  ): string => {
+    const candidate = (rawUrl || '').trim();
+    if (!candidate) return fallbackUrl;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === 'https:' && HARNESS_ALLOWED_HTTPS_HOSTS.has(parsed.hostname)) {
+        return candidate.replace(/\/$/, '');
+      }
+      if (
+        allowLocalhost &&
+        parsed.protocol === 'http:' &&
+        (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost')
+      ) {
+        return candidate.replace(/\/$/, '');
+      }
+    } catch {
+      // Invalid URL falls back safely
+    }
+    return fallbackUrl;
+  };
+
+  const buildHarnessDynamicProjectList = (): HarnessProjectDescriptor[] => {
+    const sqliteProjs = sqliteStore.listProjects().map((sp) => {
+      let machineType: MachineType = 'cnc-5axis';
+      try {
+        const parsedCam = JSON.parse(sp.camJson) as { machineType?: MachineType };
+        if (parsedCam.machineType) machineType = parsedCam.machineType;
+      } catch {
+        // default cnc-5axis
+      }
+      return {
+        id: sp.id,
+        name: sp.name,
+        segment: (sp.segment || 'industrial-cnc') as ApplicationSegment,
+        machineType,
+      };
+    });
+    return listHarnessDynamicProjects(sqliteProjs);
+  };
+
+  let activeBackendProjectId: string = WORKSPACE_PROJECT_PRESETS[0]?.id || 'preset-gear-m2-z24';
+
+  app.get('/api/harness/status', (_req, res) => {
+    const projects = buildHarnessDynamicProjectList();
+    const activeProject =
+      projects.find((p) => p.id === activeBackendProjectId) ?? projects[0] ?? null;
+
+    const providers = HARNESS_OPTIONAL_API_PROVIDERS.map((p) => ({
+      id: p.id,
+      label: p.label,
+      envVarName: p.envVarName,
+      envKeyConfigured: Boolean(p.envVarName && process.env[p.envVarName]?.trim()),
+      defaultBaseUrl: p.defaultBaseUrl,
+      defaultModel: p.defaultModel,
+      kind: p.kind,
+      description: p.description,
+    }));
+
+    return res.json({
+      defaultEngineId: 'local-llm',
+      zeroDownloadReady: true,
+      providers,
+      simpleToolSchemas: SIMPLE_TOOL_SCHEMAS,
+      activeProject,
+      projects,
+    });
+  });
+
+  app.get('/api/harness/projects', (_req, res) => {
+    const projects = buildHarnessDynamicProjectList();
+    const activeProject =
+      projects.find((p) => p.id === activeBackendProjectId) ?? projects[0] ?? null;
+    return res.json({ activeProject, projects });
+  });
+
+  app.post('/api/harness/projects/switch', (req, res) => {
+    const startedAt = Date.now();
+    const createNew = Boolean(req.body?.createNew);
+    const requestedId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim().slice(0, 120) : '';
+    const requestedLayer = typeof req.body?.layer === 'string' ? req.body.layer.trim() : 'cad';
+
+    if (createNew) {
+      const title =
+        typeof req.body?.name === 'string' && req.body.name.trim()
+          ? req.body.name.trim().slice(0, 100)
+          : `Projeto Dinâmico ${new Date().toLocaleTimeString('pt-BR')}`;
+      const presetBase =
+        WORKSPACE_PROJECT_PRESETS.find((p) => p.id === (req.body?.presetId || 'preset-gear-m2-z24')) ??
+        WORKSPACE_PROJECT_PRESETS[0];
+      const saved = sqliteStore.saveProject({
+        ownerId: 'harness-backend',
+        name: title,
+        presetId: presetBase.id,
+        segment: typeof req.body?.segment === 'string' ? req.body.segment : presetBase.segment,
+        paramsJson: JSON.stringify(presetBase.designParams),
+        camJson: JSON.stringify(presetBase.camSettings),
+      });
+      activeBackendProjectId = saved.id;
+    } else if (requestedId) {
+      activeBackendProjectId = requestedId;
+    }
+
+    const projects = buildHarnessDynamicProjectList();
+    const activeProject =
+      projects.find((p) => p.id === activeBackendProjectId) ?? projects[0] ?? null;
+
+    if (!activeProject) {
+      return res.status(404).json({ error: 'Projeto não encontrado no catálogo do backend.' });
+    }
+
+    const proof = sqliteStore.recordVucProof(
+      'HARNESS_PROJECT_SWITCH',
+      `Projeto ativo: ${activeProject.title} (${requestedLayer.toUpperCase()})`,
+      { projectId: activeProject.id, source: activeProject.source, layer: requestedLayer }
+    );
+    const formalVuc = createFormalVucCertificate({
+      domain: 'HARNESS_PROJECT_SWITCH',
+      status: 'PASS',
+      inputPayload: { requestedId, createNew, layer: requestedLayer },
+      outputPayload: { activeProjectId: activeProject.id, vucHash: proof.vucHash },
+      durationMs: Math.max(1, Date.now() - startedAt),
+    });
+    broadcastWs('workspace:project-switched', { activeProject, layer: requestedLayer });
+
+    return res.json({
+      ok: true,
+      activeProject,
+      projects,
+      vucHash: proof.vucHash,
+      formalVuc,
+    });
+  });
+
+  app.post('/api/harness/run', async (req, res) => {
+    const startedAt = Date.now();
+    const rawLayer = typeof req.body?.layer === 'string' ? req.body.layer.trim() : 'cad';
+    const layer: HarnessLayer =
+      rawLayer === 'cae' || rawLayer === 'cam' || rawLayer === 'erp' ? rawLayer : 'cad';
+    const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim().slice(0, 2000) : '';
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt obrigatório para execução no Harness.' });
+    }
+
+    const requestedEngineId =
+      typeof req.body?.engineId === 'string' ? req.body.engineId.trim() : 'local-llm';
+    const providerMeta =
+      HARNESS_OPTIONAL_API_PROVIDERS.find((p) => p.id === requestedEngineId) ??
+      HARNESS_OPTIONAL_API_PROVIDERS[0];
+
+    const projects = buildHarnessDynamicProjectList();
+    const bodyCtx = (req.body?.context ?? {}) as Partial<HarnessLiveWorkspaceContext>;
+    const currentProj =
+      projects.find((p) => p.id === (bodyCtx.activeProjectId || activeBackendProjectId)) ??
+      projects[0];
+
+    const liveContext: HarnessLiveWorkspaceContext = {
+      activeProjectId: bodyCtx.activeProjectId || currentProj?.id || activeBackendProjectId,
+      activeProjectTitle: bodyCtx.activeProjectTitle || currentProj?.title || 'ParametrIX Workspace',
+      segment: (bodyCtx.segment || currentProj?.segment || 'industrial-cnc') as ApplicationSegment,
+      partName: bodyCtx.partName || currentProj?.title || 'Peça Paramétrica Ativa',
+      triangleCount: Number(bodyCtx.triangleCount ?? 1536),
+      volumeCm3: Number(bodyCtx.volumeCm3 ?? 42.5),
+      safetyFactor: typeof bodyCtx.safetyFactor === 'number' ? bodyCtx.safetyFactor : 2.4,
+      maxStressMpa: typeof bodyCtx.maxStressMpa === 'number' ? bodyCtx.maxStressMpa : 48,
+      co2TotalKg: typeof bodyCtx.co2TotalKg === 'number' ? bodyCtx.co2TotalKg : 1.2,
+      machineType: (bodyCtx.machineType || currentProj?.machineType || 'cnc-5axis') as MachineType,
+      batchQty: Number(bodyCtx.batchQty ?? 10),
+      marginPct: Number(bodyCtx.marginPct ?? 28),
+      taxRegime:
+        bodyCtx.taxRegime === 'simples' || bodyCtx.taxRegime === 'real' ? bodyCtx.taxRegime : 'presumido',
+      parametrixPriceUnitBrl:
+        typeof bodyCtx.parametrixPriceUnitBrl === 'number' ? bodyCtx.parametrixPriceUnitBrl : null,
+      vucHash: typeof bodyCtx.vucHash === 'string' ? bodyCtx.vucHash : 'VUC-PENDING',
+    };
+
+    const harnessResult = executeQwenSimpleToolHarness({
+      layer,
+      prompt,
+      engineId: providerMeta.id as AgentProviderId | 'openai',
+      projects,
+      context: liveContext,
+    });
+
+    if (harnessResult.activeProject?.id) {
+      activeBackendProjectId = harnessResult.activeProject.id;
+    }
+
+    // Session-only header API key (never persisted, never logged)
+    const headerApiKey =
+      typeof req.headers['x-harness-api-key'] === 'string'
+        ? req.headers['x-harness-api-key'].trim().slice(0, 256)
+        : '';
+    const envApiKey = providerMeta.envVarName
+      ? (process.env[providerMeta.envVarName] || '').trim()
+      : '';
+    const effectiveApiKey = headerApiKey || envApiKey;
+
+    const customBaseUrlRaw =
+      typeof req.body?.customBaseUrl === 'string' ? req.body.customBaseUrl.trim() : '';
+    const safeBaseUrl = sanitizeHarnessBaseUrl(
+      customBaseUrlRaw,
+      providerMeta.defaultBaseUrl,
+      providerMeta.kind === 'local-endpoint' || providerMeta.id === 'local-llm'
+    );
+
+    if (providerMeta.id !== 'local-llm') {
+      const canCallExternal =
+        (providerMeta.kind === 'local-endpoint' && safeBaseUrl.startsWith('http://127.0.0.1')) ||
+        (providerMeta.kind === 'local-endpoint' && safeBaseUrl.startsWith('http://localhost')) ||
+        Boolean(effectiveApiKey);
+
+      if (canCallExternal) {
+        try {
+          const systemHarnessPrompt = `Você é o copiloto ParametrIX (${layer.toUpperCase()}) sobre o Harness SimpleTool. Projeto ativo: "${harnessResult.activeProject.title}". Resposta determinística do kernel já executada: "${harnessResult.reply}". Complemente em até 2 frases objetivas em português PT-BR sem inventar números.`;
+
+          if (providerMeta.id === 'gemini' && effectiveApiKey) {
+            const geminiClient = new GoogleGenAI({ apiKey: effectiveApiKey });
+            const { response, usedModel } = await generateContentWithFallback(geminiClient, {
+              systemInstruction: systemHarnessPrompt,
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            });
+            const extra = (response.text || '').trim();
+            if (extra) {
+              harnessResult.reply = `${harnessResult.reply}\n\n[${usedModel}]: ${extra}`;
+              harnessResult.trajectory.push({
+                stepIndex: harnessResult.trajectory.length + 1,
+                phase: 'KERNEL',
+                toolName: `frontier_${providerMeta.id}_refine`,
+                args: { model: usedModel, keySource: headerApiKey ? 'session-header' : 'server-env' },
+                resultSummary: `Refinamento opcional via ${usedModel} concluído sobre SimpleTool.`,
+                durationMs: Date.now() - startedAt,
+                status: 'ok',
+              });
+            }
+          } else if (providerMeta.id === 'claude' && effectiveApiKey) {
+            const claudeResp = await fetch(`${safeBaseUrl}/messages`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': effectiveApiKey,
+                'anthropic-version': '2023-06-01',
+              },
+              body: JSON.stringify({
+                model: providerMeta.defaultModel,
+                max_tokens: 220,
+                system: systemHarnessPrompt,
+                messages: [{ role: 'user', content: prompt }],
+              }),
+              signal: AbortSignal.timeout(5500),
+            });
+            if (claudeResp.ok) {
+              const payload = (await claudeResp.json()) as {
+                content?: { type?: string; text?: string }[];
+              };
+              const extra = payload.content?.find((c) => c.type === 'text')?.text?.trim();
+              if (extra) {
+                harnessResult.reply = `${harnessResult.reply}\n\n[${providerMeta.defaultModel}]: ${extra}`;
+              }
+            }
+          } else if (
+            safeBaseUrl.startsWith('https://') ||
+            safeBaseUrl.startsWith('http://127.0.0.1') ||
+            safeBaseUrl.startsWith('http://localhost')
+          ) {
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (effectiveApiKey) {
+              headers.Authorization = `Bearer ${effectiveApiKey}`;
+            }
+            const oaiResp = await fetch(`${safeBaseUrl}/chat/completions`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                model: providerMeta.defaultModel,
+                max_tokens: 220,
+                temperature: 0.2,
+                messages: [
+                  { role: 'system', content: systemHarnessPrompt },
+                  { role: 'user', content: prompt },
+                ],
+              }),
+              signal: AbortSignal.timeout(5500),
+            });
+            if (oaiResp.ok) {
+              const payload = (await oaiResp.json()) as {
+                choices?: { message?: { content?: string } }[];
+              };
+              const extra = payload.choices?.[0]?.message?.content?.trim();
+              if (extra) {
+                harnessResult.reply = `${harnessResult.reply}\n\n[${providerMeta.defaultModel}]: ${extra}`;
+              }
+            }
+          }
+        } catch {
+          // Graceful fallback: Qwen 0.5B + SimpleTool Harness already executed deterministically
+        }
+      }
+    }
+
+    const proof = sqliteStore.recordVucProof(
+      `HARNESS_${layer.toUpperCase()}`,
+      `Harness ${providerMeta.id} · ${harnessResult.activeProject.title}`,
+      {
+        engineId: harnessResult.engineId,
+        layer,
+        projectId: harnessResult.activeProject.id,
+        compressionRatio: harnessResult.compressionStats.compressionRatio,
+        vucHash: harnessResult.vucHash,
+      }
+    );
+    const formalVuc = createFormalVucCertificate({
+      domain: `HARNESS_QWEN05B_${layer.toUpperCase()}`,
+      status: 'PASS',
+      inputPayload: { engineId: providerMeta.id, layer, prompt, projectId: currentProj?.id },
+      outputPayload: {
+        activeProjectId: harnessResult.activeProject.id,
+        actionsCount: harnessResult.actionsToApply.length,
+        compressionRatio: harnessResult.compressionStats.compressionRatio,
+        vucHash: harnessResult.vucHash,
+      },
+      durationMs: Math.max(1, Date.now() - startedAt),
+    });
+
+    return res.json({
+      ...harnessResult,
+      serverVucHash: proof.vucHash,
+      formalVuc,
+      projects,
     });
   });
 

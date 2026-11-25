@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { AGENT_PROVIDER_CATALOG } from '../kernel/llmBootstrap';
 import { listDriveCadFiles } from '../services/googleDriveProjects';
+import { AgentHarnessDock, type AgentHarnessDockProps } from './AgentHarnessDock';
 import type {
   AgentProviderId,
   EngineeringArea,
@@ -81,6 +82,7 @@ interface AgentVoiceCommandBarProps {
   caeResetCount: number;
   camRestartCount: number;
   lastVoiceStatus: string | null;
+  harnessDockProps?: Omit<AgentHarnessDockProps, 'layer' | 'title'>;
 }
 
 export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
@@ -108,8 +110,10 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
   caeResetCount,
   camRestartCount,
   lastVoiceStatus,
+  harnessDockProps,
 }) => {
   const [barExpanded, setBarExpanded] = useState(false);
+  const [harnessDrawerOpen, setHarnessDrawerOpen] = useState(false);
   const [authConfigOpen, setAuthConfigOpen] = useState(false);
   const [eyeDrawerOpen, setEyeDrawerOpen] = useState(false);
   const [listening, setListening] = useState(false);
@@ -317,17 +321,21 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
             <span className="hidden sm:inline">Login Agente</span>
           </button>
 
-          {(offlineMode || selectedAgentId === 'local-llm') && (
-            <div
-              className="flex items-center gap-1.5 px-2 py-1 border border-emerald-400/45 bg-emerald-500/15 rounded text-[11px] font-mono-tabular text-emerald-200"
-              title="Agente Local ativo: Mordomo Hermes + Burrinhos OpenClaw/NanoClaw/PicoClaw + Qwen 2.5 0.5B Super-RAG"
-            >
-              <Sparkles className="w-3 h-3 shrink-0 text-emerald-300" />
-              <span>
-                {offlineMode ? 'Offline: ' : ''}Hermes + Burrinhos · Qwen 0.5B RT
-              </span>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setHarnessDrawerOpen((v) => !v)}
+            className={`flex items-center gap-1.5 px-2 py-1 border rounded text-[11px] font-mono-tabular cursor-pointer transition-colors ${
+              harnessDrawerOpen
+                ? 'border-emerald-300 bg-emerald-500/25 text-emerald-100'
+                : 'border-emerald-400/45 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200'
+            }`}
+            title="Abrir Qwen 0.5B + SimpleTool Harness (Chat, Trajetória e Troca Dinâmica de Projetos)"
+          >
+            <Sparkles className="w-3 h-3 shrink-0 text-emerald-300" />
+            <span>
+              {offlineMode ? 'Offline: ' : ''}Qwen 0.5B Harness
+            </span>
+          </button>
 
           {googleUserEmail && (
             <div
@@ -516,6 +524,7 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
               </form>
               <div className="flex flex-wrap gap-1.5">
                 {[
+                  { label: 'Desenha Peça CAD (M2 Z24)', cmd: 'desenha uma peça cad no scoobiii/parametrIX' },
                   { label: 'Reiniciar CAM', cmd: 'reiniciar cam' },
                   { label: 'Resetar Peça', cmd: 'resetar peça e limpar base' },
                   { label: 'Rhino ExtrudeCrv', cmd: 'ExtrudeCrv 16mm' },
@@ -716,6 +725,18 @@ export const AgentVoiceCommandBar: React.FC<AgentVoiceCommandBarProps> = ({
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Embedded Qwen 0.5B + SimpleTool Harness Drawer (CAD + Projeto Dinâmico) */}
+      {harnessDrawerOpen && harnessDockProps && (
+        <div className="mt-2">
+          <AgentHarnessDock
+            layer={activeArea}
+            title={`${activeArea.toUpperCase()} · Qwen 0.5B SimpleTool Harness`}
+            defaultExpanded
+            {...harnessDockProps}
+          />
         </div>
       )}
     </div>

@@ -20,6 +20,7 @@ import { triggerBlobDownload } from '../kernel/cadFormats';
 import { listCamProductionPrograms } from '../kernel/camProcessEngine';
 import { CAM_TOOLS, getDefaultAdditiveSettings } from '../kernel/camRobotics';
 import { AdditiveCamConfigPanel } from './AdditiveCamConfigPanel';
+import { AgentHarnessDock, type AgentHarnessDockProps } from './AgentHarnessDock';
 import type {
   AgentProvenanceMetadata,
   CamProcessVisualState,
@@ -70,6 +71,7 @@ interface CamRoboticsPanelProps {
   onSubmitCamService?: (payload: CamServiceSubmissionInput) => Promise<void>;
   onRestartServiceJob?: (jobId: string) => Promise<void>;
   onNewCamJob?: () => void;
+  harnessDockProps?: Omit<AgentHarnessDockProps, 'layer' | 'title'>;
 }
 
 const MACHINE_OPTIONS: {
@@ -112,6 +114,7 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
   onSubmitCamService,
   onRestartServiceJob,
   onNewCamJob,
+  harnessDockProps,
 }) => {
   const activeTool = CAM_TOOLS.find((t) => t.id === settings.toolId) ?? CAM_TOOLS[0];
   const [progCategory, setProgCategory] = useState<CamProgramTargetCategory>('datacenter');
@@ -249,6 +252,14 @@ export const CamRoboticsPanel: React.FC<CamRoboticsPanelProps> = ({
             </button>
           </div>
         </div>
+
+        {harnessDockProps && (
+          <AgentHarnessDock
+            layer="cam"
+            title="CAM · Qwen 0.5B Harness"
+            {...harnessDockProps}
+          />
+        )}
 
         {/* Machine Mode Selector (8 Processes) */}
         <section className="space-y-2">

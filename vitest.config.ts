@@ -51,6 +51,7 @@ export default defineConfig({
         'src/kernel/ringBuffer.ts',
         'src/kernel/magicPenToolsCatalog.ts',
         'src/kernel/mediaStudioEngine.ts',
+        'src/kernel/qwenSimpleToolHarness.ts',
         'src/server/hermesBridge.ts',
         'src/server/oauthAuthHandler.ts',
         'src/server/projectWorkspaceManager.ts',

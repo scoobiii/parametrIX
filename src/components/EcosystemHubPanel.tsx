@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AgentHarnessDock, type AgentHarnessDockProps } from './AgentHarnessDock';
 import {
   Activity,
   Briefcase,
@@ -171,6 +172,7 @@ interface EcosystemHubPanelProps {
   googleAccessToken?: string | null;
   onSaveErpSnapshotToDrive?: (snapshot: OpenErpWorkspaceSnapshot) => Promise<void>;
   onNavigateTab?: (tab: WorkspaceTab) => void;
+  harnessDockProps?: Omit<AgentHarnessDockProps, 'layer' | 'title'>;
 }
 
 type EcosystemSubTab = 'chat' | 'session' | 'logistics' | 'erp' | 'compute' | 'remote';
@@ -226,6 +228,7 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
   googleAccessToken = null,
   onSaveErpSnapshotToDrive,
   onNavigateTab,
+  harnessDockProps,
 }) => {
   const [subTab, setSubTab] = useState<EcosystemSubTab>(initialSubTab);
   const [erpSection, setErpSection] = useState<ErpInternalSection>('overview');
@@ -614,10 +617,18 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
               <div className="p-2.5 bg-emerald-500/10 border border-emerald-400/35 rounded-lg text-[11px] text-emerald-200 flex items-center justify-between gap-2">
                 <span>
                   <strong>Modo Offline / Agente Local Ativo:</strong> Mordomo{' '}
-                  <strong>Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) + Qwen 2.5 0.5B RT + Search Local/GrabCAD</strong>{' '}
+                  <strong>Hermes + Burrinhos (OpenClaw/NanoClaw/PicoClaw) + Qwen 2.5 0.5B SimpleTool Harness + Search Local/GrabCAD</strong>{' '}
                   respondem automaticamente neste chat e nos processos.
                 </span>
               </div>
+            )}
+
+            {harnessDockProps && (
+              <AgentHarnessDock
+                layer="erp"
+                title="ERP / Chat · Qwen 0.5B SimpleTool Harness"
+                {...harnessDockProps}
+              />
             )}
 
             {/* Themes Selector + Rules Toggle */}
@@ -1171,6 +1182,13 @@ export const EcosystemHubPanel: React.FC<EcosystemHubPanelProps> = ({
         {/* 3. Open-Source Manufacturing ERP + Real-Time CAD/CAE/CAM + BI & CRM */}
         {subTab === 'erp' && (
           <div className="space-y-4">
+            {harnessDockProps && (
+              <AgentHarnessDock
+                layer="erp"
+                title="ERP · Qwen 0.5B SimpleTool Harness"
+                {...harnessDockProps}
+              />
+            )}
             {/* ERP Executive Header + User Session Sync */}
             <div className="bg-[#111620] border border-white/10 rounded-xl p-4 space-y-4">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/10 pb-3">

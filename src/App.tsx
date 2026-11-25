@@ -81,6 +81,16 @@ import {
 } from './kernel/sessionPointerRecorder';
 import { parseRhinoCommandPrompt } from './kernel/rhinoGeometryEngine';
 import { parseExtendedMagicPenPrompt } from './kernel/magicPenToolsCatalog';
+import type { AgentHarnessDockProps, HarnessProviderEnvStatus } from './components/AgentHarnessDock';
+import {
+  executeQwenSimpleToolHarness,
+  listHarnessDynamicProjects,
+  type HarnessClientAction,
+  type HarnessLayer,
+  type HarnessLiveWorkspaceContext,
+  type HarnessProjectDescriptor,
+  type HarnessRunResult,
+} from './kernel/qwenSimpleToolHarness';
 import {
   LmaxRingBuffer,
   resolveAdaptiveRingCapacity,
@@ -276,7 +286,26 @@ export default function App() {
       'client'
     )
   );
-  const [selectedAgentId, setSelectedAgentId] = useState<AgentProviderId>('gemini');
+  const [selectedAgentId, setSelectedAgentId] = useState<AgentProviderId>('local-llm');
+  const [harnessEngineId, setHarnessEngineId] = useState<AgentProviderId | 'openai'>('local-llm');
+  const [harnessProjects, setHarnessProjects] = useState<HarnessProjectDescriptor[]>(() =>
+    listHarnessDynamicProjects()
+  );
+  const [harnessActiveProjectId, setHarnessActiveProjectId] = useState<string>('preset-gear-m2-z24');
+  const [harnessHistoryByLayer, setHarnessHistoryByLayer] = useState<
+    Record<HarnessLayer, { id: string; prompt: string; result: HarnessRunResult }[]>
+  >({
+    cad: [],
+    cae: [],
+    cam: [],
+    erp: [],
+  });
+  // Session-only in-memory API keys (never persisted to localStorage, disk, or SQLite)
+  const [harnessSessionKeys, setHarnessSessionKeys] = useState<Record<string, string>>({});
+  const [harnessCustomBaseUrls, setHarnessCustomBaseUrls] = useState<Record<string, string>>({});
+  const [harnessProviderEnvStatuses, setHarnessProviderEnvStatuses] = useState<
+    HarnessProviderEnvStatus[]
+  >([]);
   const [systemResources, setSystemResources] = useState<SystemResourceSnapshot | null>(null);
   const [localLlmRec, setLocalLlmRec] = useState<LocalLlmRecommendation | null>(null);
   const [localQwenStatus, setLocalQwenStatus] = useState<{
@@ -1432,8 +1461,26 @@ export default function App() {
       }
     };
 
+    const fetchHarnessStatus = async () => {
+      try {
+        const resp = await fetch('/api/harness/status');
+        if (!resp.ok || !active) return;
+        const data = (await resp.json()) as {
+          providers?: HarnessProviderEnvStatus[];
+          projects?: HarnessProjectDescriptor[];
+          activeProject?: HarnessProjectDescriptor | null;
+        };
+        if (data.providers) setHarnessProviderEnvStatuses(data.providers);
+        if (data.projects && data.projects.length > 0) setHarnessProjects(data.projects);
+        if (data.activeProject?.id) setHarnessActiveProjectId(data.activeProject.id);
+      } catch {
+        // Offline fallback preserves bundled presets
+      }
+    };
+
     void fetchResources();
     void fetchSqliteState();
+    void fetchHarnessStatus();
     const resTimer = window.setInterval(() => {
       void fetchResources();
     }, 15000);
@@ -2651,12 +2698,247 @@ export default function App() {
     return () => window.removeEventListener('offline', handleBrowserOffline);
   }, []);
 
+  const buildHarnessLiveContext = (): HarnessLiveWorkspaceContext => ({
+    activeProjectId: activePresetId || harnessActiveProjectId,
+    activeProjectTitle: partProfile.partName,
+    segment: activeSegment,
+    partName: partProfile.partName,
+    triangleCount: meshData.triangleCount,
+    volumeCm3: Number((meshData.volumeCm3 || 0).toFixed(2)),
+    safetyFactor: feaResult.safetyFactor,
+    maxStressMpa: feaResult.maxStressMpa,
+    co2TotalKg: carbonReport.totalCo2Kg,
+    machineType: effectiveCamSettings.machineType,
+    batchQty: erpBatchQty,
+    marginPct: erpMarginPct,
+    taxRegime: erpTaxRegime,
+    parametrixPriceUnitBrl: liveErpSnapshot?.pricingAndRoi?.parametrixPriceUnitBrl ?? null,
+    vucHash: camVisualState.vucProof.vucHash,
+  });
+
+  const applyHarnessActions = (actions: HarnessClientAction[]) => {
+    for (const act of actions) {
+      if (act.type === 'switch-project') {
+        const found = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === act.presetId);
+        if (found) {
+          handleApplyFullPreset(found, false);
+          setHarnessActiveProjectId(found.id);
+        }
+      } else if (act.type === 'switch-layer') {
+        handleTabSwitch(act.targetTab);
+      } else if (act.type === 'run-fea') {
+        handleRunFea(undefined, true);
+      } else if (act.type === 'optimize-curvature') {
+        handleApplyCurvatureOptimization();
+      } else if (act.type === 'set-cam-machine') {
+        if (act.restart) {
+          handleRestartCamProcess(act.machineType);
+        } else {
+          setCamSettings((prev) => ({
+            ...prev,
+            machineType: act.machineType,
+            postFormat: act.machineType === 'robot-6axis' ? 'kuka-krl' : 'fanuc-nc',
+          }));
+        }
+      } else if (act.type === 'update-erp') {
+        if (typeof act.batchQty === 'number') setErpBatchQty(act.batchQty);
+        if (typeof act.marginPct === 'number') setErpMarginPct(act.marginPct);
+        if (act.taxRegime) setErpTaxRegime(act.taxRegime);
+        if (act.logisticsModal) setErpLogisticsModal(act.logisticsModal);
+        if (typeof act.distanceKm === 'number') setErpDistanceKm(act.distanceKm);
+      } else if (act.type === 'record-erp-order') {
+        void handleAddErpRecord({
+          kind: 'order',
+          title: act.title,
+          status: 'aberto',
+          partyName: user?.displayName || sqliteProfile.displayName,
+          segment: activeSegment,
+          amountBrl: act.amountBrl,
+          modal: erpLogisticsModal,
+          ownerRole: sqliteProfile.role,
+        });
+      }
+    }
+  };
+
+  const handleSwitchDynamicProject = async (projectId: string, layer: HarnessLayer) => {
+    setHarnessActiveProjectId(projectId);
+    const localPreset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === projectId);
+    if (localPreset) {
+      handleApplyFullPreset(localPreset, layer === 'cad');
+    }
+    try {
+      const resp = await fetch('/api/harness/projects/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, layer }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          activeProject?: HarnessProjectDescriptor;
+          projects?: HarnessProjectDescriptor[];
+          vucHash?: string;
+        };
+        if (data.projects) setHarnessProjects(data.projects);
+        if (data.activeProject?.id) setHarnessActiveProjectId(data.activeProject.id);
+        if (data.activeProject?.presetId) {
+          const preset = WORKSPACE_PROJECT_PRESETS.find((p) => p.id === data.activeProject?.presetId);
+          if (preset) handleApplyFullPreset(preset, layer === 'cad');
+        }
+        setLastVoiceStatus(
+          `Projeto dinâmico ativo: "${data.activeProject?.title ?? projectId}" · VUC ${data.vucHash?.slice(0, 12) ?? ''}`
+        );
+      }
+    } catch {
+      // Offline optimistic switch already applied
+    }
+  };
+
+  const handleCreateDynamicProject = async (name: string, layer: HarnessLayer) => {
+    try {
+      const resp = await fetch('/api/harness/projects/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          createNew: true,
+          name,
+          presetId: activePresetId || 'preset-gear-m2-z24',
+          segment: activeSegment,
+          layer,
+        }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          activeProject?: HarnessProjectDescriptor;
+          projects?: HarnessProjectDescriptor[];
+          vucHash?: string;
+        };
+        if (data.projects) setHarnessProjects(data.projects);
+        if (data.activeProject?.id) setHarnessActiveProjectId(data.activeProject.id);
+        setLastVoiceStatus(
+          `Projeto "${name}" criado no SQLite e selecionado · VUC ${data.vucHash?.slice(0, 12) ?? ''}`
+        );
+      }
+    } catch {
+      // Offline ignore
+    }
+  };
+
+  const handleRunHarness = async (
+    layer: HarnessLayer,
+    prompt: string
+  ): Promise<HarnessRunResult> => {
+    const engineToUse = sqliteProfile.offlineMode ? 'local-llm' : harnessEngineId;
+    const liveContext = buildHarnessLiveContext();
+    pushMcpEyeEvent('mcp-input', `Harness.${layer}.${engineToUse}`, prompt, {
+      projectId: liveContext.activeProjectId,
+    });
+
+    const sessionKey = (harnessSessionKeys[engineToUse] || '').trim();
+    const customBaseUrl = (harnessCustomBaseUrls[engineToUse] || '').trim();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (sessionKey) {
+      headers['x-harness-api-key'] = sessionKey;
+    }
+
+    let result: HarnessRunResult | null = null;
+    try {
+      const resp = await fetch('/api/harness/run', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          layer,
+          prompt,
+          engineId: engineToUse,
+          customBaseUrl: customBaseUrl || undefined,
+          context: liveContext,
+        }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as HarnessRunResult & {
+          projects?: HarnessProjectDescriptor[];
+        };
+        if (data.projects) setHarnessProjects(data.projects);
+        result = data;
+      }
+    } catch {
+      // Fall back cleanly to embedded client kernel
+    }
+
+    if (!result) {
+      result = executeQwenSimpleToolHarness({
+        layer,
+        prompt,
+        engineId: engineToUse,
+        projects: harnessProjects,
+        context: liveContext,
+      });
+    }
+
+    if (result.activeProject?.id) {
+      setHarnessActiveProjectId(result.activeProject.id);
+    }
+    applyHarnessActions(result.actionsToApply);
+
+    const entryId = `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    setHarnessHistoryByLayer((prev) => ({
+      ...prev,
+      [layer]: [{ id: entryId, prompt, result: result! }, ...prev[layer]].slice(0, 20),
+    }));
+
+    setLastVoiceStatus(`${result.reply.slice(0, 140)} · VUC ${result.vucHash.slice(0, 12)}`);
+    pushMcpEyeEvent('agent-feedback', `Harness.${layer}.${result.engineId}`, result.reply, {
+      compressionRatio: result.compressionStats.compressionRatio,
+      vucHash: result.vucHash,
+    });
+    return result;
+  };
+
+  const makeHarnessDockProps = (
+    layer: HarnessLayer
+  ): Omit<AgentHarnessDockProps, 'layer' | 'title'> => ({
+    selectedEngineId: harnessEngineId,
+    onSelectEngine: (id) => {
+      setHarnessEngineId(id);
+      if (id !== 'openai') setSelectedAgentId(id as AgentProviderId);
+    },
+    projects: harnessProjects,
+    activeProjectId: activePresetId || harnessActiveProjectId,
+    onSwitchDynamicProject: handleSwitchDynamicProject,
+    onCreateDynamicProject: handleCreateDynamicProject,
+    onRunHarness: handleRunHarness,
+    history: harnessHistoryByLayer[layer],
+    sessionApiKeys: harnessSessionKeys,
+    onChangeSessionApiKey: (providerId, keyValue) =>
+      setHarnessSessionKeys((prev) => ({ ...prev, [providerId]: keyValue })),
+    customBaseUrls: harnessCustomBaseUrls,
+    onChangeCustomBaseUrl: (providerId, baseUrl) =>
+      setHarnessCustomBaseUrls((prev) => ({ ...prev, [providerId]: baseUrl })),
+    providerEnvStatuses: harnessProviderEnvStatuses,
+  });
+
   const handleSendMultiAgentPrompt = async (
     prompt: string,
     externalEndpoint: string,
     modelId?: string
   ): Promise<string> => {
     const activeAgent = sqliteProfile.offlineMode ? 'local-llm' : selectedAgentId;
+    if (
+      activeAgent === 'local-llm' ||
+      /(desenh|constru|cria).*(peca|cad|engrenagem)|scoobiii\/parametrix|trocar projeto/i.test(prompt)
+    ) {
+      const targetLayer: HarnessLayer =
+        activeTab === 'cam'
+          ? 'cam'
+          : activeTab === 'ecosystem'
+            ? 'erp'
+            : activeTab === 'sustainability'
+              ? 'cae'
+              : 'cad';
+      const harnessRes = await handleRunHarness(targetLayer, prompt);
+      return `${harnessRes.reply} [${harnessRes.compressionStats.compressionRatio}× SimpleTool · VUC ${harnessRes.vucHash.slice(0, 12)}]`;
+    }
+
     pushMcpEyeEvent('mcp-input', `Agent.${activeAgent}`, prompt, {
       modelId,
       offlineMode: sqliteProfile.offlineMode,
@@ -2691,7 +2973,7 @@ export default function App() {
       });
       return text;
     } catch {
-      return `[${activeAgent}] Bridge offline: Hermes + Burrinhos observando ${camVisualState.processLabel} · VUC ${camVisualState.vucProof.vucHash.slice(0, 14)}.`;
+      return `[${activeAgent}] Bridge offline: Qwen 0.5B Harness observando ${camVisualState.processLabel} · VUC ${camVisualState.vucProof.vucHash.slice(0, 14)}.`;
     }
   };
 
@@ -3308,7 +3590,10 @@ export default function App() {
 
       <AgentVoiceCommandBar
         selectedAgentId={selectedAgentId}
-        onSelectAgent={setSelectedAgentId}
+        onSelectAgent={(id) => {
+          setSelectedAgentId(id);
+          setHarnessEngineId(id);
+        }}
         offlineMode={sqliteProfile.offlineMode}
         googleUserEmail={
           user?.email || (backendProfile?.provider === 'google' ? backendProfile.email : null)
@@ -3357,6 +3642,7 @@ export default function App() {
         caeResetCount={caeResetCount}
         camRestartCount={camRestartCount}
         lastVoiceStatus={lastVoiceStatus}
+        harnessDockProps={makeHarnessDockProps(activeEngineeringArea)}
       />
 
       {/* Main Active Workspace */}
@@ -3895,6 +4181,7 @@ export default function App() {
                     setWizardArea('cam');
                     setWizardOpen(true);
                   }}
+                  harnessDockProps={makeHarnessDockProps('cam')}
                 />
               </div>
               <div
@@ -4039,6 +4326,7 @@ export default function App() {
             googleAccessToken={googleAccessToken}
             onSaveErpSnapshotToDrive={handleSaveErpSnapshotToDrive}
             onNavigateTab={handleTabSwitch}
+            harnessDockProps={makeHarnessDockProps('erp')}
           />
         )}
 
@@ -4074,6 +4362,7 @@ export default function App() {
               setWizardOpen(true);
             }}
             onResetCaeArea={handleResetCaeArea}
+            harnessDockProps={makeHarnessDockProps('cae')}
           />
         )}
 

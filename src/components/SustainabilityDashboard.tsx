@@ -23,6 +23,7 @@ import {
   type FatigueRegime,
 } from '../kernel/fatigueAnalysis';
 import { FatigueCyclesChartD3 } from './FatigueCyclesChartD3';
+import { AgentHarnessDock, type AgentHarnessDockProps } from './AgentHarnessDock';
 import type {
   CadFeatureOperation,
   CamServiceJob,
@@ -64,6 +65,7 @@ interface SustainabilityDashboardProps {
   onNavigate: (tab: WorkspaceTab) => void;
   onNewCaeStudy?: () => void;
   onResetCaeArea?: () => void;
+  harnessDockProps?: Omit<AgentHarnessDockProps, 'layer' | 'title'>;
 }
 
 const GRID_PROFILES: { id: string; label: string; factor: number }[] = [
@@ -112,6 +114,7 @@ export const SustainabilityDashboard: React.FC<SustainabilityDashboardProps> = (
   onNavigate,
   onNewCaeStudy,
   onResetCaeArea,
+  harnessDockProps,
 }) => {
   const [activeView, setActiveView] = useState<SustainabilityViewMode>('lca');
   const [gridId, setGridId] = useState<string>('br-sin');
@@ -180,6 +183,13 @@ export const SustainabilityDashboard: React.FC<SustainabilityDashboardProps> = (
   return (
     <div className="w-full h-full overflow-y-auto bg-[#0b0e14] text-slate-100 p-4 sm:p-6 lg:p-8">
       <div className="max-w-6xl mx-auto space-y-6">
+        {harnessDockProps && (
+          <AgentHarnessDock
+            layer="cae"
+            title="CAE · Qwen 0.5B SimpleTool Harness"
+            {...harnessDockProps}
+          />
+        )}
         {/* Header + View Switcher */}
         <div className="flex flex-wrap items-start justify-between gap-4 pb-5 border-b border-white/10">
           <div className="space-y-1 max-w-2xl">
