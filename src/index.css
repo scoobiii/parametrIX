@@ -83,11 +83,42 @@ input[type='range'].cad-slider::-webkit-slider-thumb:hover {
   transform: scale(1.18);
 }
 
+:root {
+  --font-editorial: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+}
+
+.font-editorial {
+  font-family: var(--font-editorial);
+}
+
+@keyframes editorial-marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-editorial-marquee {
+  display: flex;
+  width: max-content;
+  animation: editorial-marquee 42s linear infinite;
+}
+
+.animate-editorial-marquee:hover,
+.animate-editorial-marquee:focus-within {
+  animation-play-state: paused;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+  .animate-editorial-marquee {
+    animation: none !important;
   }
 }

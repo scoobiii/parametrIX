@@ -4,6 +4,7 @@ import {
   BookOpen,
   Briefcase,
   Calendar,
+  ChevronRight,
   Cloud,
   Cpu,
   Download,
@@ -12,6 +13,7 @@ import {
   FolderOpen,
   Layers,
   Loader2,
+  Lock,
   LogIn,
   LogOut,
   Palette,
@@ -20,7 +22,6 @@ import {
   Puzzle,
   Save,
   ShieldCheck,
-  Sigma,
   Sparkles,
   Square,
   Terminal,
@@ -29,6 +30,10 @@ import {
   Workflow,
   Wrench,
 } from 'lucide-react';
+import pwcCadTeamImg from '../assets/images/pwc_cad_design_team_1795606940628.jpg';
+import pwcCaeStudioImg from '../assets/images/pwc_cae_sustainable_studio_1795606941481.jpg';
+import pwcCamFloorImg from '../assets/images/pwc_cam_floor_engineers_1795606942749.jpg';
+import runnersCoupleImg from '../assets/images/runners_parametrix_couple_1795606941690.jpg';
 import { useAuth } from '../contexts/AuthContext';
 import { triggerBlobDownload } from '../kernel/cadFormats';
 import { buildLocalIcsCalendarBlob } from '../kernel/mcpServer';
@@ -66,71 +71,55 @@ interface OnboardingHelpViewProps {
   liveErpSnapshot?: OpenErpWorkspaceSnapshot;
   activeUserLabel?: string;
   onOpenErpEntry?: () => void;
+  isAuthenticatedSession?: boolean;
+  onOpenLoginModal?: () => void;
 }
 
 interface VoiceGuideTopic {
   id: string;
   title: string;
   targetTab: WorkspaceTab;
+  thumbSrc: string;
+  thumbAlt: string;
   script: string;
 }
 
 const VOICE_GUIDE_TOPICS: VoiceGuideTopic[] = [
   {
     id: 'cad_3d_editor',
-    title: '01. Visualizador & Editor 3D Paramétrico',
+    title: '01. Modelagem 3D Paramétrica & NURBS Fidedigna',
     targetTab: 'viewport',
+    thumbSrc: pwcCadTeamImg,
+    thumbAlt: 'Equipe de engenharia colaborando sobre projetos CAD',
     script:
-      'Módulo 1: Visualizador e Editor 3D Paramétrico. Sempre que você envia ou importa um arquivo STEP, STP, IPT, SVG, STL, OBJ, DXF, 3DM, IFC ou imagens PNG, JPG e WEBP, o sistema converte em geometria 3D fidedigna, abre automaticamente o editor 3D e enquadra a peça. Na barra superior você pode abrir a árvore de modelos, ativar o Corte em Seção X, Y ou Z, ajustar o controle Explodir e medir distâncias em tempo real.',
+      'Módulo 1: Visualizador e Editor 3D Paramétrico. Sempre que você envia ou importa um arquivo STEP, STP, IPT, SVG, STL, OBJ, DXF, 3DM, IFC ou imagens PNG, JPG e WEBP, o sistema converte em geometria 3D fidedigna, abre automaticamente o editor 3D e enquadra a peça.',
   },
   {
     id: 'object_mask',
-    title: '02. Object Mask (Classificação por Família e Subcomponente)',
+    title: '02. Classificação por Família, PBR & Máscara de Objetos',
     targetTab: 'viewport',
+    thumbSrc: runnersCoupleImg,
+    thumbAlt: 'Casal de corredores usando camisetas oficiais ParametrIX',
     script:
-      'Módulo 2: Máscara de Objetos e Classificação Contextual. Ao carregar um conjunto mecânico, como um garfo de suspensão ou estrutura BIM, o sistema detecta automaticamente famílias como Suspensão, Coroa, Estrutura, Eixo, Casca e Fixação, atribuindo uma cor única para cada família e subcomponente. Clique em Máscara Obj na barra 3D ou clique diretamente sobre qualquer peça para inspecionar, ocultar ou isolar.',
+      'Módulo 2: Máscara de Objetos e Renderização PBR por componente. Cada subcomponente mecânico ou estrutural recebe material e cor contextual individual para inspeção precisa.',
   },
   {
     id: 'part_context_fea',
-    title: '03. Identidade da Peça, Certificações & FEA Antes/Depois',
-    targetTab: 'viewport',
+    title: '03. Simulação CAE, Fadiga, Von Mises & Carbono LCA',
+    targetTab: 'sustainability',
+    thumbSrc: pwcCaeStudioImg,
+    thumbAlt: 'Engenheiros avaliando eficiência estrutural e sustentabilidade',
     script:
-      'Módulo 3: Identidade de Engenharia e Cálculo Estrutural FEA. No painel lateral esquerdo, o ambiente reconhece fabricante, modelo, especificações técnicas, normas como ISO 4210 e ASTM F2043, uso pretendido e fator de segurança mínimo. Clique em Exibir Mapa de Calor de Estresse para visualizar a tensão de Von Mises em megapascals, e utilize os botões de gerar nova geometria para comparar a resistência Antes e Depois com verificação automática de norma.',
+      'Módulo 3: Análise CAE e Sustentabilidade LCA. Calcule tensão de Von Mises, fator de segurança contra norma e pegada de carbono com comparação Antes e Depois sem sair da plataforma.',
   },
   {
-    id: 'component_pbr',
-    title: '04. Renderização PBR por Componente',
-    targetTab: 'viewport',
+    id: 'cam_robotics_real',
+    title: '04. Manufatura CAM, Robótica 6-Eixos & Despacho Real',
+    targetTab: 'cam',
+    thumbSrc: pwcCamFloorImg,
+    thumbAlt: 'Engenheiros na planta de manufatura CNC e robótica',
     script:
-      'Módulo 4: Renderização por Material e Customização Individual. No modo PBR por Peça, cada componente recebe o material inferido do seu contexto, como alumínio forjado nas coroas, titânio nas bengalas, fibra de carbono em carenagens e polímero fosco nos retentores. Para alterar o material de apenas um componente, clique na peça na cena 3D ou na árvore lateral e escolha Alumínio, Titânio, Fibra de Carbono, Vidro, Plástico Fosco, Argila ou Madeira.',
-  },
-  {
-    id: 'rag_mcp_segment',
-    title: '05. Agente RAG + MCP por Segmento de Aplicação',
-    targetTab: 'mcp',
-    script:
-      'Módulo 5: Agente de Engenharia RAG e Ferramentas MCP por Segmento. Na aba MCP Tools, selecione o segmento industrial aplicável, como Ciclismo e Downhill, Automotivo, Aeroespacial, Arquitetura BIM, Usinagem CNC, Robótica ou Médico. Suba arquivos ou links do Google Drive na base RAG e peça em português para o agente explodir a vista, rotacionar componentes, rodar FEA Antes e Depois ou exportar arquivos isolados.',
-  },
-  {
-    id: 'grasshopper_cam',
-    title: '06. Grasshopper, Plugins SDK & CAM / Robótica',
-    targetTab: 'grasshopper',
-    script:
-      'Módulo 6: Automação Grasshopper, SDK de Plugins e Fabricação Digital CAM. Conecte nós paramétricos no grafo visual para deformar superfícies NURBS em tempo real, escreva modificadores JavaScript em Plugins SDK e configure fresa, avanço e pós-processamento para CNC 3 ou 5 eixos, usinagem manual ou robô KUKA de 6 eixos, exportando em 3DM, STL, DXF, NC ou SRC.',
-  },
-  {
-    id: 'magic_pen_menu',
-    title: '07. Caneta Mágica, Rasgo Paramétrico & Parafuso ISO',
-    targetTab: 'viewport',
-    script:
-      'Módulo 7: Caneta Mágica na Barra IX. Ative a Caneta Mágica no Editor 3D IX e clique ou arraste sobre qualquer região da peça ou imagem convertida para abrir o menu suspenso translúcido. Nele você aplica recortes e rasgos paramétricos, furos passantes, parafusos métricos ISO M3 a M12 com rosca helicoidal real, nervuras estruturais, troca de material ou digita um comando direto para execução via agente MCP.',
-  },
-  {
-    id: 'scoobiii_vuc',
-    title: '08. SCOOBIII / VUC — Prova Matemática Determinística',
-    targetTab: 'viewport',
-    script:
-      'Módulo 8: Motor SCOOBIII VUC sem chute. Cada cálculo de superfície e resistência estrutural gera uma certificação matemática explícita com partição da unidade Cox-de Boor, determinante Jacobiano, curvatura Gaussiana, tensão de Von Mises, fator de concentração geométrica Kt de furos e rasgos, passo de rosca ISO e verificação contra a norma selecionada, exportável em Markdown e JSON.',
+      'Módulo 4: CAM e Robótica em Tempo Real. Simule e exporte trajetórias para CNC 3 e 5 eixos, robô KUKA, pó metálico LPBF, resina SLA, solda MIG/TIG e corte a laser 4 kW com prova VUC verificável.',
   },
 ];
 
@@ -160,17 +149,19 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
   liveErpSnapshot,
   activeUserLabel,
   onOpenErpEntry,
+  isAuthenticatedSession = false,
+  onOpenLoginModal,
 }) => {
-  const { user, authReady, authBusy, authError, signInWithGoogle, logout, clearAuthError } =
-    useAuth();
+  const { user, authBusy, authError, logout, clearAuthError } = useAuth();
   const [projectNameInput, setProjectNameInput] = useState(surface.name);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Voice synthesis guidance state
   const speechSupported =
-    typeof window !== 'undefined' && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+    typeof window !== 'undefined' &&
+    'speechSynthesis' in window &&
+    'SpeechSynthesisUtterance' in window;
   const [speakingTopicId, setSpeakingTopicId] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [speechRate, setSpeechRate] = useState<number>(1.0);
@@ -251,13 +242,13 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
     onRecordDeliverable({
       filename,
       kind: 'ICS',
-      summary: `Evento de agenda local (${formatDuration(sessionSeconds)}, ${deliverables.length} entregáveis)`,
+      summary: `Agenda local (${formatDuration(sessionSeconds)}, ${deliverables.length} entregáveis)`,
     });
   };
 
   const handleDownloadMarkdownSummary = () => {
     const lines = [
-      `# Resumo da Sessão — Parametrix CAD Studio`,
+      `# Resumo da Sessão — ParametrIX`,
       ``,
       `- **Tempo de Sessão**: ${formatDuration(sessionSeconds)}`,
       `- **Modelo Ativo**: ${surface.name}`,
@@ -276,518 +267,699 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
     onRecordDeliverable({
       filename,
       kind: 'REPORT',
-      summary: `Relatório Markdown de sessão (${formatDuration(sessionSeconds)})`,
+      summary: `Relatório Markdown (${formatDuration(sessionSeconds)})`,
     });
   };
 
   const activeVoiceTopic = VOICE_GUIDE_TOPICS.find((t) => t.id === speakingTopicId) ?? null;
-  const biPct = liveErpSnapshot?.biSummary.techReadinessPct ?? (scoobiiiProof.allPassed ? 94 : 68);
   const vucPassedCount = scoobiiiProof.checks.filter((c) => c.passed).length;
   const vucTotalCount = Math.max(1, scoobiiiProof.checks.length);
-  const vucPct = Math.round((vucPassedCount / vucTotalCount) * 100);
-  const biDash = `${Math.max(8, Math.round((biPct / 100) * 100))}, 100`;
-  const vucDash = `${Math.max(8, Math.round((vucPct / 100) * 100))}, 100`;
+
+  // Seamless continuous infinite editorial track cards
+  const marqueeCards = [
+    ...WORKSPACE_PROJECT_PRESETS.map((preset) => ({
+      key: preset.id,
+      eyebrow: preset.badge,
+      title: preset.title,
+      desc: preset.subtitle,
+      onClick: () => onApplyPreset(preset, true),
+    })),
+    {
+      key: 'track-cae',
+      eyebrow: 'CAE · Sustentabilidade',
+      title: 'Análise Von Mises & Carbono LCA',
+      desc: `Prova VUC ${vucPassedCount}/${vucTotalCount} validada para ${surface.name}.`,
+      onClick: () => onNavigate('sustainability'),
+    },
+    {
+      key: 'track-cam',
+      eyebrow: 'CAM · 8 Células',
+      title: 'CNC 5-Eixos, KUKA, Pó Metálico & Laser',
+      desc: 'Geração ISO G-Code e monitoramento MQTT em chão de fábrica.',
+      onClick: () => onNavigate('cam'),
+    },
+    {
+      key: 'track-media',
+      eyebrow: 'Media Studio 1.0',
+      title: 'Identidade ParametrIX & Estamparia Esportiva',
+      desc: 'Uniformes técnicos, cartões e branding com malha CAD real.',
+      onClick: () => onNavigate('media-studio'),
+    },
+  ];
+
+  const cyclingPreset =
+    WORKSPACE_PROJECT_PRESETS.find((p) => p.id.includes('fork') || p.segment === 'ciclismo-mobilidade') ??
+    WORKSPACE_PROJECT_PRESETS[0];
 
   return (
-    <div className="w-full h-full overflow-y-auto overflow-x-hidden bg-[#0b0e14] text-slate-100">
-      <div className="max-w-6xl mx-auto px-3.5 sm:px-6 py-4 sm:py-6 space-y-6">
-        {/* Top Fold: Graphics-First Studio Cockpit + SVG Live Gauges + Primary Actions */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch pb-5 border-b border-white/10">
-          {/* Left: Interactive Visual Telemetry Cards & Micro-Charts (Leads at Top!) */}
-          <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            <button
-              type="button"
-              onClick={() => onNavigate('viewport')}
-              className="p-3 bg-[#111620] border border-sky-500/30 hover:border-sky-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-sky-300">CAD 3D IX</span>
-                <svg viewBox="0 0 36 36" className="w-8 h-8 -rotate-90" aria-hidden="true">
-                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
-                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="#38bdf8" strokeWidth="3.5" strokeDasharray="82, 100" strokeLinecap="round" />
-                </svg>
-              </div>
-              <div>
-                <div className="text-base font-bold font-mono-tabular text-slate-100">
-                  {meshData.triangleCount.toLocaleString('pt-BR')}
-                </div>
-                <div className="text-[10px] text-slate-400 truncate">
-                  tri · {meshData.volumeCm3} cm³
-                </div>
-              </div>
-            </button>
+    <div className="w-full h-full overflow-y-auto overflow-x-hidden bg-[#fafaf8] text-[#191919]">
+      {/* Hidden unified CAD/Image input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ACCEPTED_CAD_EXTENSIONS}
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (!file) return;
+          setUploadError(null);
+          setUploadBusy(true);
+          try {
+            await onUploadFile(file);
+          } catch (err) {
+            setUploadError(
+              err instanceof Error ? err.message : 'Falha ao processar o arquivo.'
+            );
+          } finally {
+            setUploadBusy(false);
+          }
+        }}
+      />
 
-            <button
-              type="button"
-              onClick={() => onNavigate('sustainability')}
-              className="p-3 bg-[#111620] border border-emerald-500/30 hover:border-emerald-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-emerald-300">CAE / VUC</span>
-                <svg viewBox="0 0 36 36" className="w-8 h-8 -rotate-90" aria-hidden="true">
-                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
-                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="#34d399" strokeWidth="3.5" strokeDasharray={vucDash} strokeLinecap="round" />
-                </svg>
-              </div>
-              <div>
-                <div className="text-base font-bold font-mono-tabular text-slate-100">
-                  {vucPassedCount}/{vucTotalCount}
-                </div>
-                <div className="text-[10px] text-slate-400 truncate">
-                  Prova Matemática {scoobiiiProof.allPassed ? 'OK' : 'Pendente'}
-                </div>
-              </div>
-            </button>
+      {/* 1. PwC-Inspired Hero Section (Crisp Serif Editorial Headline + Bold Action Banner + People Photo) */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 pt-6 sm:pt-10 pb-8 space-y-6">
+        <div className="max-w-4xl space-y-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#0284c7]">
+            ParametrIX · Engenharia Paramétrica para Pessoas &amp; Indústria
+          </p>
+          <h1
+            className="font-editorial font-semibold text-[#111827] leading-[1.12] tracking-tight"
+            style={{ fontSize: 'clamp(2.05rem, 4.4vw, 3.5rem)', textWrap: 'balance' }}
+          >
+            Do esboço 3D à fábrica real: engenharia onde decisões humanas e cálculo exato caminham juntos
+          </h1>
+          <p className="text-base sm:text-lg text-[#3f3f46] leading-relaxed max-w-3xl">
+            Projete superfícies NURBS fidedignas em CAD, valide resistência estrutural em CAE e programe oito processos de manufatura CAM com certificação criptográfica VUC em tempo real.
+          </p>
+        </div>
 
-            <button
-              type="button"
-              onClick={() => (onOpenErpEntry ? onOpenErpEntry() : onNavigate('ecosystem'))}
-              className="p-3 bg-[#111620] border border-indigo-500/30 hover:border-indigo-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-indigo-300">ERP / BI</span>
-                <svg viewBox="0 0 36 36" className="w-8 h-8 -rotate-90" aria-hidden="true">
-                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
-                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="#818cf8" strokeWidth="3.5" strokeDasharray={biDash} strokeLinecap="round" />
-                </svg>
-              </div>
-              <div>
-                <div className="text-base font-bold font-mono-tabular text-slate-100">
-                  {biPct}%
-                </div>
-                <div className="text-[10px] text-slate-400 truncate">
-                  {liveErpSnapshot && !liveErpSnapshot.pricingAndRoi.commercialDisclosureBlocked
-                    ? `R$ ${liveErpSnapshot.pricingAndRoi.parametrixPriceUnitBrl.toFixed(0)} · ROI ${(liveErpSnapshot.pricingAndRoi.roiPct ?? 0).toFixed(0)}%`
-                    : 'Prontidão Operacional'}
-                </div>
-              </div>
-            </button>
+        {/* Bold PwC-Style Full/Wide Warm Action Banner + Secondary Real CAD Upload */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch">
+          <button
+            type="button"
+            onClick={() => onNavigate('viewport')}
+            className="md:col-span-7 min-h-[64px] px-6 py-4 bg-[#d04a02] hover:bg-[#b83f00] text-white flex items-center justify-between gap-4 text-left transition-colors cursor-pointer"
+          >
+            <div>
+              <span className="block text-base sm:text-lg font-semibold leading-snug">
+                Entenda e explore no Editor 3D IX agora
+              </span>
+              <span className="block text-xs text-orange-100 mt-0.5">
+                {surface.name} · {meshData.triangleCount.toLocaleString('pt-BR')} triângulos · {meshData.volumeCm3} cm³
+              </span>
+            </div>
+            <ChevronRight className="w-6 h-6 shrink-0" />
+          </button>
 
+          <button
+            type="button"
+            disabled={uploadBusy}
+            onClick={() => fileInputRef.current?.click()}
+            className="md:col-span-5 min-h-[64px] px-6 py-4 bg-[#111620] hover:bg-[#1b2434] text-white flex items-center justify-between gap-3 text-left transition-colors disabled:opacity-60 cursor-pointer"
+          >
+            <div className="min-w-0">
+              <span className="block text-sm sm:text-base font-semibold leading-snug">
+                {uploadBusy ? 'Processando arquivo CAD...' : 'Subir arquivo CAD ou Imagem'}
+              </span>
+              <span className="block text-xs text-slate-300 truncate mt-0.5">
+                .STEP, .STP, .IPT, .DXF, .STL, .3DM, .IFC ou foto técnica
+              </span>
+            </div>
+            {uploadBusy ? (
+              <Loader2 className="w-5 h-5 animate-spin shrink-0 text-sky-400" />
+            ) : (
+              <FileUp className="w-5 h-5 shrink-0 text-sky-400" />
+            )}
+          </button>
+        </div>
+
+        {uploadError && (
+          <div className="p-3.5 bg-rose-50 border border-rose-200 text-xs text-rose-800">
+            {uploadError}
+          </div>
+        )}
+
+        {/* Full-Width Documentary Team Photograph */}
+        <div className="relative overflow-hidden bg-slate-200 aspect-[16/9] max-h-[520px] w-full">
+          <img
+            src={pwcCadTeamImg}
+            alt="Equipe de engenharia colaborando em mesa de projeto CAD com tablet e plantas técnicas"
+            className="w-full h-full object-cover object-center"
+            referrerPolicy="no-referrer"
+          />
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 via-black/35 to-transparent p-4 sm:p-6 text-white flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <span className="text-xs font-medium text-sky-300">Colaboração Técnica Real</span>
+              <p className="font-editorial text-lg sm:text-xl font-medium">
+                Equipes multidisciplinares conectadas sobre a mesma geometria paramétrica
+              </p>
+            </div>
             <button
               type="button"
-              onClick={() => onNavigate('cam')}
-              className="p-3 bg-[#111620] border border-amber-500/30 hover:border-amber-400 rounded-xl text-left flex flex-col justify-between gap-2 transition-colors cursor-pointer"
+              onClick={() => onNavigate('library')}
+              className="min-h-[44px] px-4 py-2 bg-white/95 hover:bg-white text-slate-950 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-amber-300">CAM Tempo Real</span>
-                <svg viewBox="0 0 36 36" className="w-8 h-8" aria-hidden="true">
-                  <rect x="4" y="20" width="5" height="10" rx="1" fill="#fbbf24" opacity="0.55" />
-                  <rect x="12" y="13" width="5" height="17" rx="1" fill="#fbbf24" opacity="0.8" />
-                  <rect x="20" y="7" width="5" height="23" rx="1" fill="#38bdf8" />
-                  <rect x="28" y="11" width="5" height="19" rx="1" fill="#34d399" />
-                </svg>
-              </div>
-              <div>
-                <div className="text-base font-bold font-mono-tabular text-slate-100 truncate">
-                  {formatDuration(sessionSeconds)}
-                </div>
-                <div className="text-[10px] text-slate-400 truncate">
-                  {deliverables.length} entregáveis · 8 processos
-                </div>
-              </div>
+              Explorar Biblioteca CAD <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+      </section>
 
-          {/* Right: Crisp Studio Header + 4 Touch Actions */}
-          <div className="lg:col-span-5 p-4 bg-[#111620] border border-white/10 rounded-xl flex flex-col justify-between gap-3">
-            <div className="space-y-1">
-              <div className="text-[11px] text-sky-400 font-medium truncate">
-                {activeUserLabel || user?.email || 'Operador Local'} · {surface.name}
-              </div>
-              <h1
-                className="font-display text-lg sm:text-xl font-bold tracking-tight text-slate-100 leading-snug"
-                style={{ textWrap: 'balance' }}
+      {/* 2. Continuous Infinite Sliding Strip ("Deslizante Infinito" across CAD / CAE / CAM) */}
+      <section
+        aria-label="Fluxo contínuo de projetos e capacidades CAD, CAE e CAM"
+        className="w-full bg-[#111620] text-white py-5 border-y border-slate-800 overflow-hidden"
+      >
+        <div className="max-w-6xl mx-auto px-4 sm:px-8 mb-3 flex items-center justify-between text-xs text-slate-400">
+          <span className="font-medium text-sky-300">
+            Deslizamento contínuo · Passe o mouse ou toque para abrir qualquer projeto
+          </span>
+          <span className="hidden sm:inline font-mono-tabular">
+            CAD NURBS · CAE FEA · CAM 8 Células · Prova VUC {vucPassedCount}/{vucTotalCount}
+          </span>
+        </div>
+
+        <div className="overflow-x-auto sm:overflow-hidden">
+          <div className="animate-editorial-marquee gap-4 px-4">
+            {[...marqueeCards, ...marqueeCards].map((card, idx) => (
+              <button
+                key={`${card.key}-${idx}`}
+                type="button"
+                onClick={card.onClick}
+                className="w-[270px] sm:w-[300px] shrink-0 text-left p-4 bg-[#18202f] hover:bg-[#1f293d] border border-white/10 hover:border-sky-400/60 transition-colors cursor-pointer flex flex-col justify-between gap-2"
               >
-                Parametrix CAD, CAE, CAM & ERP em Tempo Real
-              </h1>
-            </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono-tabular text-sky-300 truncate">
+                    {card.eyebrow}
+                  </span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-white line-clamp-1">
+                    {card.title}
+                  </div>
+                  <p className="text-xs text-slate-300 line-clamp-2 mt-1 leading-relaxed">
+                    {card.desc}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
 
-            <div className="grid grid-cols-2 gap-2">
+      {/* 3. Theme Interleave 01: CAD 3D Fidedigno + Presets em 1 Clique */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 py-12 sm:py-16 border-b border-neutral-200 space-y-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <div className="lg:col-span-5 space-y-4">
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#0284c7]">
+              01. CAD Paramétrico &amp; Geometria Fidedigna
+            </span>
+            <h2
+              className="font-editorial font-semibold text-[#111827] leading-[1.18]"
+              style={{ fontSize: 'clamp(1.65rem, 3vw, 2.35rem)' }}
+            >
+              Precisão matemática do esboço inicial à malha estanque
+            </h2>
+            <p className="text-sm sm:text-base text-[#3f3f46] leading-relaxed">
+              Superfícies NURBS avaliadas pelo algoritmo determinístico Cox-de Boor, inspeção de peças isoladas com Object Mask e leitura direta de conjuntos industriais sem chute estatístico.
+            </p>
+            <div className="pt-2 flex flex-wrap gap-3">
               <button
                 type="button"
                 onClick={() => onNavigate('viewport')}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap cursor-pointer"
+                className="min-h-[44px] px-5 py-2.5 bg-[#111620] hover:bg-[#1f293d] text-white text-xs font-semibold inline-flex items-center gap-2 cursor-pointer"
               >
-                Editor 3D IX
-                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+                Abrir Editor 3D IX <ArrowRight className="w-4 h-4" />
               </button>
               <button
                 type="button"
-                disabled={uploadBusy}
-                onClick={() => fileInputRef.current?.click()}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-60 transition-colors whitespace-nowrap cursor-pointer"
+                onClick={() => onNavigate('grasshopper')}
+                className="min-h-[44px] px-5 py-2.5 border border-neutral-300 hover:border-neutral-900 text-[#191919] text-xs font-semibold inline-flex items-center gap-2 cursor-pointer"
               >
-                {uploadBusy ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                ) : (
-                  <FileUp className="w-3.5 h-3.5 shrink-0" />
-                )}
-                <span>{uploadBusy ? 'Importando...' : 'Subir CAD / Img'}</span>
+                <Workflow className="w-4 h-4 text-[#0284c7]" />
+                Grafo Grasshopper DAG
               </button>
-              <button
-                type="button"
-                onClick={() => (onOpenErpEntry ? onOpenErpEntry() : onNavigate('ecosystem'))}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg whitespace-nowrap cursor-pointer"
-              >
-                <Briefcase className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                <span>ERP Open & BI</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigate('library')}
-                className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-emerald-400/50 rounded-lg whitespace-nowrap cursor-pointer"
-              >
-                <BookOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>Lib / Biblioteca</span>
-              </button>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] pt-1 border-t border-white/8">
-              <button
-                type="button"
-                onClick={() => onNavigate('media-studio')}
-                className="text-cyan-300 hover:text-cyan-200 font-medium flex items-center gap-1 cursor-pointer"
-              >
-                <Palette className="w-3 h-3" /> Media Studio 1.0
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigate('mcp')}
-                className="text-amber-300 hover:text-amber-200 font-medium flex items-center gap-1 cursor-pointer"
-              >
-                <Terminal className="w-3 h-3" /> Agente MCP
-              </button>
-              <a
-                href="/gitpage/"
-                target="_blank"
-                rel="noreferrer"
-                className="text-sky-300 hover:text-sky-200 font-medium inline-flex items-center gap-1"
-              >
-                GitPage Dinâmica <ArrowRight className="w-3 h-3" />
-              </a>
             </div>
           </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={ACCEPTED_CAD_EXTENSIONS}
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              e.target.value = '';
-              if (!file) return;
-              setUploadError(null);
-              setUploadBusy(true);
-              try {
-                await onUploadFile(file);
-              } catch (err) {
-                setUploadError(
-                  err instanceof Error ? err.message : 'Falha ao processar o arquivo.'
-                );
-              } finally {
-                setUploadBusy(false);
-              }
-            }}
-          />
-
-          {uploadError && (
-            <div className="lg:col-span-12 p-3 bg-rose-500/10 border border-rose-500/35 rounded-lg text-xs text-rose-300">
-              {uploadError}
-            </div>
-          )}
-        </section>
-
-        {/* Quick Full-Workspace Preset Auto-Fill Section */}
-        <section className="p-4 sm:p-6 bg-[#111620] border border-emerald-500/25 rounded-xl space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-display text-sm sm:text-base font-semibold text-slate-100 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
-                Projetos Completos em 1 Clique
-              </h2>
-              <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                Preenche automaticamente parâmetros NURBS, segmento, normas, critérios FEA, ferramentas CAM e abre o Editor 3D IX.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {WORKSPACE_PROJECT_PRESETS.map((preset) => (
+          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            {WORKSPACE_PROJECT_PRESETS.slice(0, 6).map((preset) => (
               <button
                 key={preset.id}
                 type="button"
                 onClick={() => onApplyPreset(preset, true)}
-                className="min-h-[44px] text-left p-4 bg-[#0c1017] border border-white/10 hover:border-emerald-400/60 rounded-xl space-y-2 transition-colors cursor-pointer group"
+                className="min-h-[88px] text-left p-4 bg-white border border-neutral-200 hover:border-[#0284c7] transition-colors cursor-pointer group flex flex-col justify-between gap-2"
               >
-                <div className="flex items-center justify-between gap-2 text-[11px] font-mono-tabular text-sky-300">
-                  <span>{preset.badge}</span>
-                  <ArrowRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-emerald-400 transition-colors shrink-0" />
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono-tabular text-[#0284c7] font-medium">
+                    {preset.badge}
+                  </span>
+                  <ArrowRight className="w-4 h-4 text-neutral-400 group-hover:text-[#0284c7] transition-colors shrink-0" />
                 </div>
-                <div className="font-display text-xs font-semibold text-slate-100">
-                  {preset.title}
+                <div>
+                  <h3 className="text-sm font-semibold text-[#111827]">{preset.title}</h3>
+                  <p className="text-xs text-[#52525b] mt-1 line-clamp-2 leading-relaxed">
+                    {preset.subtitle}
+                  </p>
                 </div>
-                <p className="text-[11px] text-slate-400 leading-relaxed">{preset.subtitle}</p>
               </button>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
 
-        {/* Interactive Voice-Guided Help Center */}
-        <section className="p-5 sm:p-6 bg-[#111620] border border-sky-500/30 rounded-xl space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-white/10">
-            <div className="space-y-1 max-w-2xl">
-              <div className="flex items-center gap-2">
-                <Volume2 className="w-4 h-4 text-sky-400 shrink-0" />
-                <h2 className="font-display text-base font-semibold text-slate-100">
-                  Guia Interativo por Voz (Como Usar Cada Recurso)
-                </h2>
+      {/* 4. Humanized Culture & Sport Section: Couple of Runners Wearing ParametrIX Jerseys */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 py-12 sm:py-16 border-b border-neutral-200">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div className="lg:col-span-7 space-y-3">
+            <div className="relative overflow-hidden bg-slate-200 aspect-[16/9] w-full">
+              <img
+                src={runnersCoupleImg}
+                alt="Casal de corredores no parque usando camisetas técnicas pretas e azul ciano da ParametrIX"
+                className="w-full h-full object-cover object-center"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+            <p className="text-xs text-[#52525b]">
+              Movimento ParametrIX — Tecnologia, Inovação e Liberdade aplicadas ao esporte, ergonomia e identidade visual.
+            </p>
+          </div>
+
+          <div className="lg:col-span-5 space-y-5">
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#d04a02]">
+              Pessoas, Esporte &amp; Identidade ParametrIX
+            </span>
+            <h2
+              className="font-editorial font-semibold text-[#111827] leading-[1.15]"
+              style={{ fontSize: 'clamp(1.65rem, 3vw, 2.4rem)' }}
+            >
+              Tecnologia que sai da tela e ganha as ruas com quem cria
+            </h2>
+            <p className="text-sm sm:text-base text-[#3f3f46] leading-relaxed">
+              Engenharia paramétrica para um mundo melhor significa projetar peças mais leves, seguras e sustentáveis para a vida real — de componentes de ciclismo de alta performance aos uniformes oficiais gerados no Media Studio 1.0.
+            </p>
+
+            {/* Official Jersey Reference Card */}
+            <div className="flex items-center gap-4 p-3.5 bg-white border border-neutral-200">
+              <img
+                src="/assets/aistudio/file_000000007ba4820ebf2d75e6abc6f767_2f5dd762.png"
+                alt="Camiseta oficial ParametrIX Tecnologia Inovação Liberdade"
+                className="w-20 h-20 object-contain bg-slate-50 shrink-0"
+                referrerPolicy="no-referrer"
+              />
+              <div className="min-w-0 space-y-1">
+                <div className="text-xs font-bold text-[#111827]">
+                  Camiseta Oficial ParametrIX 1.0
+                </div>
+                <p className="text-xs text-[#52525b] leading-snug">
+                  Personalize camisas, cartões e linhas de produto com malhas CAD reais e motor criativo no Media Studio.
+                </p>
               </div>
-              <p className="text-xs text-slate-400">
-                Acione a narração em português (Web Speech API) para ouvir o funcionamento completo do ambiente ou toque em qualquer recurso abaixo para explicação passo a passo.
-              </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                aria-label="Velocidade da explicação por voz"
-                value={speechRate}
-                onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-                className="px-2.5 py-1.5 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-200"
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => onNavigate('media-studio')}
+                className="min-h-[44px] px-5 py-2.5 bg-[#d04a02] hover:bg-[#b83f00] text-white text-xs font-semibold inline-flex items-center gap-2 cursor-pointer"
               >
-                <option value={0.9}>Voz 0.9x</option>
-                <option value={1.0}>Voz 1.0x</option>
-                <option value={1.2}>Voz 1.2x</option>
-              </select>
+                <Palette className="w-4 h-4" />
+                Abrir Media Studio 1.0
+              </button>
+              <button
+                type="button"
+                onClick={() => onApplyPreset(cyclingPreset, true)}
+                className="min-h-[44px] px-4 py-2.5 border border-neutral-300 hover:border-neutral-900 text-[#191919] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                Abrir Projeto Esportivo 3D <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
 
-              {!speakingTopicId ? (
-                <button
-                  type="button"
-                  disabled={!speechSupported}
-                  onClick={handleStartFullTour}
-                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 disabled:opacity-50 cursor-pointer"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  Ouvir Tour Completo
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleTogglePause}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-amber-500 text-slate-950 rounded-lg hover:bg-amber-400 cursor-pointer"
-                  >
-                    {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                    {isPaused ? 'Retomar' : 'Pausar'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stopSpeech}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-rose-500/20 border border-rose-400/50 text-rose-200 rounded-lg hover:bg-rose-500/30 cursor-pointer"
-                  >
-                    <Square className="w-3 h-3" />
-                    Parar
-                  </button>
-                </>
-              )}
+      {/* 5. Theme Interleave 02: CAE Estrutural, Fadiga & Sustentabilidade LCA */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 py-12 sm:py-16 border-b border-neutral-200 space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div className="lg:col-span-5 space-y-4 order-2 lg:order-1">
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">
+              02. CAE, Fadiga &amp; Sustentabilidade LCA
+            </span>
+            <h2
+              className="font-editorial font-semibold text-[#111827] leading-[1.15]"
+              style={{ fontSize: 'clamp(1.65rem, 3vw, 2.4rem)' }}
+            >
+              Produzimos resultados sustentáveis que fazem a diferença
+            </h2>
+            <p className="text-sm sm:text-base text-[#3f3f46] leading-relaxed">
+              Nossa abordagem une engenharia estrutural rigorosa com responsabilidade ambiental: otimize massa com compensação de curvatura NURBS, simule tensões de Von Mises e acompanhe o balanço completo de carbono antes de cortar o primeiro bloco de material.
+            </p>
+            <div className="flex flex-wrap items-center gap-4 pt-2 text-xs text-[#3f3f46]">
+              <div>
+                <span className="block text-[11px] text-[#71717a]">Prova Matemática VUC</span>
+                <strong className="font-mono-tabular text-base text-[#111827]">
+                  {vucPassedCount}/{vucTotalCount} verificados
+                </strong>
+              </div>
+              <div className="h-8 w-px bg-neutral-300" />
+              <div>
+                <span className="block text-[11px] text-[#71717a]">Malha Avaliada</span>
+                <strong className="font-mono-tabular text-base text-[#111827]">
+                  {meshData.surfaceAreaCm2} cm²
+                </strong>
+              </div>
+            </div>
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => onNavigate('sustainability')}
+                className="min-h-[44px] px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center gap-2 cursor-pointer"
+              >
+                Analisar CAE / Sustentabilidade <ArrowRight className="w-4 h-4" />
+              </button>
             </div>
           </div>
 
-          {!speechSupported && (
-            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-200">
-              Seu navegador atual não disponibiliza síntese de voz (Web Speech API). Leia os roteiros completos abaixo.
+          <div className="lg:col-span-7 order-1 lg:order-2">
+            <div className="relative overflow-hidden bg-slate-200 aspect-[16/9] w-full">
+              <img
+                src={pwcCaeStudioImg}
+                alt="Engenheiros em escritório sustentável com parede verde viva discutindo análise de ciclo de vida"
+                className="w-full h-full object-cover object-center"
+                referrerPolicy="no-referrer"
+              />
             </div>
-          )}
+          </div>
+        </div>
+      </section>
 
-          {activeVoiceTopic && (
-            <div className="p-3.5 bg-sky-500/12 border border-sky-400/40 rounded-lg space-y-1 text-xs">
-              <div className="flex items-center justify-between gap-2 font-semibold text-sky-300">
-                <span>Reproduzindo agora: {activeVoiceTopic.title}</span>
-                <span className="font-mono-tabular text-[11px] text-slate-300">
-                  {isPaused ? 'PAUSADO' : 'EM NARRAÇÃO'}
-                </span>
-              </div>
-              <p className="text-slate-300 leading-relaxed">{activeVoiceTopic.script}</p>
+      {/* 6. Theme Interleave 03: CAM & Robótica de Chão de Fábrica */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 py-12 sm:py-16 border-b border-neutral-200 space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div className="lg:col-span-7">
+            <div className="relative overflow-hidden bg-slate-200 aspect-[16/9] w-full">
+              <img
+                src={pwcCamFloorImg}
+                alt="Engenheiras industriais revisando telemetria CAM em tablet diante de centro de usinagem CNC"
+                className="w-full h-full object-cover object-center"
+                referrerPolicy="no-referrer"
+              />
             </div>
-          )}
+          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {VOICE_GUIDE_TOPICS.map((topic) => {
-              const isPlayingThis = speakingTopicId === topic.id;
-              return (
-                <div
-                  key={topic.id}
-                  className={`p-4 rounded-xl border space-y-2.5 transition-colors ${
-                    isPlayingThis
-                      ? 'bg-sky-500/10 border-sky-400/60'
-                      : 'bg-[#0c1017] border-white/8'
-                  }`}
+          <div className="lg:col-span-5 space-y-4">
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#0284c7]">
+              03. CAM &amp; Manufatura Digital em Tempo Real
+            </span>
+            <h2
+              className="font-editorial font-semibold text-[#111827] leading-[1.15]"
+              style={{ fontSize: 'clamp(1.65rem, 3vw, 2.4rem)' }}
+            >
+              Da modelagem à máquina com 8 células CAM integradas
+            </h2>
+            <p className="text-sm sm:text-base text-[#3f3f46] leading-relaxed">
+              Opere CNC 3 e 5 eixos, robô KUKA 6-eixos, manufatura aditiva LPBF em pó metálico, resina UV SLA, solda robotizada MIG/TIG, corte a laser 4 kW e usinagem manual DRO com despacho MQTT e OPC-UA verificado.
+            </p>
+            <div className="flex flex-wrap gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => onNavigate('cam')}
+                className="min-h-[44px] px-5 py-2.5 bg-[#0284c7] hover:bg-[#0369a1] text-white text-xs font-semibold inline-flex items-center gap-2 cursor-pointer"
+              >
+                <Wrench className="w-4 h-4" />
+                Abrir CAM &amp; Robótica
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('frostbite')}
+                className="min-h-[44px] px-4 py-2.5 border border-neutral-300 hover:border-neutral-900 text-[#191919] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Cpu className="w-4 h-4 text-[#d04a02]" />
+                Rack Frostbite 1MW
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 7. Publicações & Guia Interativo por Voz (PwC "Publicações" Editorial Rows) */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 py-12 sm:py-16 border-b border-neutral-200 space-y-6">
+        <div className="flex flex-wrap items-end justify-between gap-4 pb-4 border-b border-neutral-200">
+          <div className="space-y-1">
+            <h2
+              className="font-editorial font-semibold text-[#111827]"
+              style={{ fontSize: 'clamp(1.5rem, 2.8vw, 2.1rem)' }}
+            >
+              Publicações &amp; Guia por Voz em Português
+            </h2>
+            <p className="text-sm text-[#52525b]">
+              Ouça o tour guiado em português ou navegue diretamente para cada fluxo técnico.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="Velocidade da explicação por voz"
+              value={speechRate}
+              onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
+              className="min-h-[44px] px-3 text-xs bg-white border border-neutral-300 text-[#191919]"
+            >
+              <option value={0.9}>Voz 0.9x</option>
+              <option value={1.0}>Voz 1.0x</option>
+              <option value={1.2}>Voz 1.2x</option>
+            </select>
+
+            {!speakingTopicId ? (
+              <button
+                type="button"
+                disabled={!speechSupported}
+                onClick={handleStartFullTour}
+                className="min-h-[44px] px-4 py-2 text-xs font-semibold bg-[#111620] hover:bg-[#1f293d] text-white inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5" />
+                Ouvir Tour Completo
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleTogglePause}
+                  className="min-h-[44px] px-3.5 py-2 text-xs font-semibold bg-amber-500 text-slate-950 inline-flex items-center gap-1.5 cursor-pointer"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="font-display text-xs font-semibold text-slate-100">
-                      {topic.title}
-                    </h3>
+                  {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                  {isPaused ? 'Retomar' : 'Pausar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={stopSpeech}
+                  className="min-h-[44px] px-3.5 py-2 text-xs font-semibold bg-rose-600 text-white inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Square className="w-3 h-3" />
+                  Parar
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {activeVoiceTopic && (
+          <div className="p-4 bg-sky-50 border border-sky-200 text-xs text-slate-800 space-y-1">
+            <div className="flex items-center justify-between font-semibold text-sky-900">
+              <span>Narrando agora: {activeVoiceTopic.title}</span>
+              <span className="font-mono-tabular">{isPaused ? 'PAUSADO' : 'REPRODUZINDO'}</span>
+            </div>
+            <p className="leading-relaxed text-slate-700">{activeVoiceTopic.script}</p>
+          </div>
+        )}
+
+        <div className="divide-y divide-neutral-200">
+          {VOICE_GUIDE_TOPICS.map((topic) => {
+            const isPlayingThis = speakingTopicId === topic.id;
+            return (
+              <article
+                key={topic.id}
+                className="py-5 grid grid-cols-1 sm:grid-cols-12 gap-4 items-center"
+              >
+                <div className="sm:col-span-8 space-y-2">
+                  <h3 className="font-editorial text-lg font-semibold text-[#111827]">
+                    {topic.title}
+                  </h3>
+                  <p className="text-sm text-[#52525b] leading-relaxed">{topic.script}</p>
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
                     <button
                       type="button"
                       disabled={!speechSupported}
                       onClick={() =>
                         isPlayingThis ? stopSpeech() : speakSingleTopic(topic, false)
                       }
-                      className={`flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md border shrink-0 cursor-pointer ${
+                      className={`min-h-[40px] px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5 border cursor-pointer ${
                         isPlayingThis
-                          ? 'bg-rose-500/20 border-rose-400/50 text-rose-200'
-                          : 'bg-sky-500/15 border-sky-400/40 text-sky-200 hover:bg-sky-500/25'
+                          ? 'bg-rose-600 border-rose-600 text-white'
+                          : 'bg-white border-neutral-300 text-[#191919] hover:border-neutral-900'
                       }`}
                     >
                       {isPlayingThis ? (
                         <>
-                          <Square className="w-3 h-3" /> Parar
+                          <Square className="w-3 h-3" /> Parar áudio
                         </>
                       ) : (
                         <>
-                          <Volume2 className="w-3 h-3" /> Ouvir Voz
+                          <Volume2 className="w-3.5 h-3.5 text-[#0284c7]" /> Ouvir em voz
                         </>
                       )}
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onNavigate(topic.targetTab)}
+                      className="min-h-[40px] px-2 text-xs font-semibold text-[#0284c7] hover:text-[#0369a1] inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      Acessar módulo <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">{topic.script}</p>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate(topic.targetTab)}
-                    className="text-[11px] font-medium text-sky-300 hover:text-sky-200 inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    Ir para este recurso <ArrowRight className="w-3 h-3" />
-                  </button>
                 </div>
-              );
-            })}
-          </div>
-        </section>
 
-        {/* End-User Google Login & Isolated Personal Cloud Workspace */}
-        <section className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-5">
-          <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-white/8">
-            <div className="space-y-1 max-w-2xl">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <h2 className="font-display text-base font-semibold text-slate-100">
-                  Acesso de Usuário Final (Login Google Isolado)
-                </h2>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Cada usuário entra com sua própria conta Google via Firebase Authentication. Nenhum dado do desenvolvedor/PO do Google AI Studio ou permissões de Drive/Calendar é acessado ou exposto.
-              </p>
-            </div>
-
-            {authReady && !user && (
-              <button
-                type="button"
-                disabled={authBusy}
-                onClick={() => void signInWithGoogle()}
-                className="flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-white text-slate-950 rounded-lg hover:bg-slate-200 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                {authBusy ? 'Autenticando...' : 'Entrar com Google'}
-              </button>
-            )}
-
-            {user && (
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2.5 px-3 py-1.5 bg-[#0c1017] border border-white/10 rounded-lg">
-                  {user.photoURL ? (
+                <div className="sm:col-span-4">
+                  <div className="aspect-[16/10] w-full overflow-hidden bg-slate-200">
                     <img
-                      src={user.photoURL}
-                      alt={user.displayName || 'Avatar'}
-                      className="w-6 h-6 rounded-full object-cover"
+                      src={topic.thumbSrc}
+                      alt={topic.thumbAlt}
+                      className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                     />
-                  ) : (
-                    <Cloud className="w-4 h-4 text-sky-400" />
-                  )}
-                  <div className="text-left">
-                    <div className="text-xs font-medium text-slate-100 leading-tight">
-                      {user.displayName || 'Usuário Conectado'}
-                    </div>
-                    <div className="text-[11px] text-slate-400 leading-tight">{user.email}</div>
                   </div>
                 </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* 8. ERP, CRM & BI Integrated Operations — Strictly Unlocked After User Login */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 py-12 sm:py-16 border-b border-neutral-200">
+        {!isAuthenticatedSession ? (
+          <div className="p-6 sm:p-8 bg-[#111620] text-white grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+            <div className="lg:col-span-8 space-y-2.5">
+              <div className="inline-flex items-center gap-2 text-xs font-semibold text-sky-300">
+                <Lock className="w-4 h-4" />
+                <span>Gestão Empresarial Pós-Login</span>
+              </div>
+              <h2
+                className="font-editorial font-semibold text-white leading-tight"
+                style={{ fontSize: 'clamp(1.5rem, 2.8vw, 2.15rem)' }}
+              >
+                ERP, CRM &amp; BI disponíveis após iniciar sessão
+              </h2>
+              <p className="text-sm text-slate-300 leading-relaxed max-w-2xl">
+                Entre com sua conta Google em pop-up único ou use seu e-mail e senha para liberar custos unitários reais, CRM de clientes, logística multimodal, chat do ecossistema e salvamento privado dos seus projetos na nuvem e SQLite local.
+              </p>
+            </div>
+            <div className="lg:col-span-4 flex lg:justify-end">
+              <button
+                type="button"
+                onClick={() => onOpenLoginModal?.()}
+                className="min-h-[48px] w-full lg:w-auto px-6 py-3 bg-[#0091ff] hover:bg-[#0284c7] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 cursor-pointer transition-colors"
+              >
+                <LogIn className="w-4 h-4" />
+                Iniciar sessão agora
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-6 sm:p-8 bg-white border border-neutral-200 space-y-6">
+            <div className="flex flex-wrap items-start justify-between gap-4 pb-5 border-b border-neutral-200">
+              <div className="space-y-1 max-w-2xl">
+                <div className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Sessão Autenticada · ERP, CRM &amp; BI Liberados</span>
+                </div>
+                <h2 className="font-editorial text-2xl font-semibold text-[#111827]">
+                  Central Operacional de {activeUserLabel || user?.email || 'Usuário Conectado'}
+                </h2>
+                <p className="text-xs text-[#52525b]">
+                  Prontidão BI atual:{' '}
+                  <strong className="font-mono-tabular text-[#111827]">
+                    {liveErpSnapshot?.biSummary.techReadinessPct ?? (scoobiiiProof.allPassed ? 94 : 68)}%
+                  </strong>{' '}
+                  · Gerencie pedidos, logística GPS e projetos isolados na sua conta.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => (onOpenErpEntry ? onOpenErpEntry() : onNavigate('ecosystem'))}
+                  className="min-h-[44px] px-5 py-2.5 bg-[#0091ff] hover:bg-[#0284c7] text-white text-xs font-semibold inline-flex items-center gap-2 cursor-pointer"
+                >
+                  <Briefcase className="w-4 h-4" />
+                  Abrir ERP, CRM &amp; BI
+                </button>
                 <button
                   type="button"
                   disabled={authBusy}
                   onClick={() => void logout()}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-300 hover:text-white hover:border-white/25 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="min-h-[44px] px-4 py-2.5 border border-neutral-300 hover:border-neutral-900 text-[#191919] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
-                  Sair
+                  Encerrar sessão
+                </button>
+              </div>
+            </div>
+
+            {authError && (
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-rose-50 border border-rose-200 text-xs text-rose-800">
+                <span>{authError}</span>
+                <button
+                  type="button"
+                  onClick={clearAuthError}
+                  className="text-xs underline cursor-pointer"
+                >
+                  Fechar
                 </button>
               </div>
             )}
-          </div>
 
-          {authError && (
-            <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-rose-500/10 border border-rose-500/30 rounded-lg text-xs text-rose-300">
-              <span>{authError}</span>
-              <button
-                type="button"
-                onClick={clearAuthError}
-                className="text-[11px] underline hover:text-rose-200 cursor-pointer"
-              >
-                Fechar
-              </button>
-            </div>
-          )}
-
-          {user ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <input
-                  type="text"
-                  value={projectNameInput}
-                  onChange={(e) => setProjectNameInput(e.target.value)}
-                  maxLength={120}
-                  placeholder="Nome do projeto paramétrico..."
-                  className="flex-1 min-w-[220px] px-3 py-2 text-xs bg-[#0c1017] border border-white/12 rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
-                />
-                <button
-                  type="button"
-                  disabled={cloudBusy}
-                  onClick={() => void onSaveCloudProject(projectNameInput)}
-                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 rounded-lg hover:bg-emerald-400 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  {cloudBusy ? 'Salvando...' : 'Salvar Projeto na Minha Conta'}
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-slate-300">
-                    Meus Projetos Privados ({savedProjects.length})
-                  </span>
-                  <span className="text-[11px] font-mono-tabular text-slate-500">
-                    Escopo isolado: users/{user.uid.slice(0, 8)}…
-                  </span>
+            {user && (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    type="text"
+                    value={projectNameInput}
+                    onChange={(e) => setProjectNameInput(e.target.value)}
+                    maxLength={120}
+                    placeholder="Nome do projeto paramétrico..."
+                    className="flex-1 min-w-[220px] min-h-[44px] px-3.5 text-sm bg-neutral-50 border border-neutral-300 text-[#111827] focus:outline-none focus:border-[#0284c7]"
+                  />
+                  <button
+                    type="button"
+                    disabled={cloudBusy}
+                    onClick={() => void onSaveCloudProject(projectNameInput)}
+                    className="min-h-[44px] px-5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    {cloudBusy ? 'Salvando...' : 'Salvar Projeto na Minha Conta'}
+                  </button>
                 </div>
 
-                {savedProjects.length > 0 ? (
-                  <div className="divide-y divide-white/6 border border-white/8 rounded-lg bg-[#0c1017]">
+                {savedProjects.length > 0 && (
+                  <div className="divide-y divide-neutral-200 border border-neutral-200">
                     {savedProjects.map((proj) => {
                       const isActive = proj.id === activeProjectId;
                       return (
                         <div
                           key={proj.id}
-                          className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-xs"
+                          className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-xs"
                         >
                           <div className="min-w-0">
-                            <div className="font-medium text-slate-100 truncate">
+                            <div className="font-semibold text-[#111827] truncate">
                               {proj.name}{' '}
                               {isActive && (
-                                <span className="text-[11px] text-sky-400 font-normal">
-                                  (Ativo)
-                                </span>
+                                <span className="text-[#0284c7] font-normal">(Ativo)</span>
                               )}
                             </div>
-                            <div className="text-[11px] text-slate-400 font-mono-tabular">
+                            <div className="text-[11px] text-[#52525b] font-mono-tabular">
                               {proj.preset.toUpperCase()} · {proj.materialFinish} ·{' '}
                               {proj.camSettings.machineType} · {formatDuration(proj.sessionSeconds)}
                             </div>
@@ -796,261 +968,162 @@ export const OnboardingHelpView: React.FC<OnboardingHelpViewProps> = ({
                             <button
                               type="button"
                               onClick={() => onLoadCloudProject(proj)}
-                              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium bg-sky-500/15 border border-sky-400/30 text-sky-300 hover:bg-sky-500/25 rounded-md cursor-pointer"
+                              className="min-h-[36px] px-3 py-1 bg-sky-50 border border-sky-200 text-sky-900 font-semibold inline-flex items-center gap-1 cursor-pointer"
                             >
-                              <FolderOpen className="w-3 h-3" />
+                              <FolderOpen className="w-3.5 h-3.5" />
                               Carregar
                             </button>
                             <button
                               type="button"
                               onClick={() => void onDeleteCloudProject(proj.id)}
-                              className="p-1.5 text-slate-400 hover:text-rose-400 rounded-md cursor-pointer"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center text-neutral-500 hover:text-rose-600 cursor-pointer"
                               title="Excluir projeto"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                ) : (
-                  <div className="p-3.5 bg-[#0c1017] border border-white/8 rounded-lg text-xs text-slate-400">
-                    Nenhum projeto salvo na sua conta ainda. Clique em <strong className="text-slate-200">Salvar Projeto na Minha Conta</strong> para persistir os parâmetros NURBS e CAM atuais.
-                  </div>
                 )}
               </div>
-            </div>
-          ) : (
-            <div className="p-3.5 bg-[#0c1017] border border-white/8 rounded-lg text-xs text-slate-400">
-              Você está operando em modo local no navegador. Faça login com sua própria conta Google acima para salvar projetos paramétricos e histórico de entregáveis exclusivamente no seu espaço privado.
-            </div>
-          )}
-        </section>
+            )}
+          </div>
+        )}
+      </section>
 
-        {/* Role-oriented Onboarding Tracks: Developers vs Agents */}
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4">
-            <div className="flex items-center gap-2.5">
-              <Cpu className="w-4 h-4 text-sky-400" />
-              <h2 className="font-display text-base font-semibold text-slate-100">
-                Para Desenvolvedores (SDK & CAD Kernel)
-              </h2>
+      {/* 9. Developers, Automação MCP, Entregáveis & Quiet Editorial Footer */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-8 py-12 space-y-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="p-6 bg-white border border-neutral-200 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[#0284c7]">
+              <Layers className="w-4 h-4" />
+              <span>SDK &amp; Kernel Matemático</span>
             </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Estenda o kernel matemático Cox-de Boor escrevendo modificadores em JavaScript
-              sandboxed sobre pontos de controle 4D, importe malhas externas e exporte binários
-              industriais sem dependências externas.
+            <h3 className="font-editorial text-xl font-semibold text-[#111827]">
+              Extensibilidade aberta em JavaScript &amp; Plugins
+            </h3>
+            <p className="text-xs text-[#52525b] leading-relaxed">
+              Estenda o kernel Cox-de Boor sobre pontos de controle 4D, manipule camadas de tolerância e utilize as bibliotecas padrão.
             </p>
-            <div className="pt-2 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => onNavigate('plugins')}
-                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 hover:border-sky-400/50 text-slate-200 rounded-lg transition-colors cursor-pointer"
+                className="min-h-[40px] px-3.5 py-2 border border-neutral-300 hover:border-neutral-900 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
-                Abrir Plugins SDK
+                <Puzzle className="w-3.5 h-3.5" /> Plugins SDK
               </button>
               <button
                 type="button"
-                onClick={() => onNavigate('files')}
-                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 hover:border-sky-400/50 text-slate-200 rounded-lg transition-colors cursor-pointer"
+                onClick={() => onNavigate('library')}
+                className="min-h-[40px] px-3.5 py-2 border border-neutral-300 hover:border-neutral-900 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
-                Importar / Exportar CAD
+                <BookOpen className="w-3.5 h-3.5" /> Biblioteca CAD
               </button>
             </div>
           </div>
 
-          <div className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5">
-                <Terminal className="w-4 h-4 text-amber-400" />
-                <h2 className="font-display text-base font-semibold text-slate-100">
-                  Para Agentes &amp; Automação (MCP, /llms.txt &amp; .IPT/.STEP)
-                </h2>
-              </div>
-              <span className="px-2 py-0.5 text-[10px] font-mono-tabular bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded">
-                Agent-Ready HTTP
-              </span>
+          <div className="p-6 bg-white border border-neutral-200 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[#d04a02]">
+              <Terminal className="w-4 h-4" />
+              <span>Automação MCP &amp; Qwen 0.5B Harness</span>
             </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Agentes externos descobrem a plataforma via <code className="text-sky-300">/llms.txt</code>{' '}
-              e <code className="text-sky-300">/api/agent/onboarding</code>. Ao receber{' '}
-              <strong className="text-slate-200">.IPT ou .STEP</strong>, envie para{' '}
-              <code className="text-emerald-300">POST /api/cad/llm-briefing</code> ou{' '}
-              <code className="text-amber-300">POST /api/mcp</code> (<code className="text-slate-200">cad_inspect_ipt_step_briefing</code>)
-              para traduzir OpenCASCADE / OLE2+ACIS em dimensões (mm), componentes e normas sem explodir tokens.
+            <h3 className="font-editorial text-xl font-semibold text-[#111827]">
+              Integração de agentes via /llms.txt e HTTP JSON-RPC
+            </h3>
+            <p className="text-xs text-[#52525b] leading-relaxed">
+              Inspecione modelos .IPT e .STEP com briefing compacto e acione ferramentas MCP diretamente pela camada visual ou terminal.
             </p>
-            <div className="pt-2 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => onNavigate('mcp')}
-                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 hover:border-amber-400/50 text-slate-200 rounded-lg transition-colors cursor-pointer"
+                className="min-h-[40px] px-3.5 py-2 border border-neutral-300 hover:border-neutral-900 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
-                Agente RAG + MCP
+                <Sparkles className="w-3.5 h-3.5" /> Agente RAG + MCP
               </button>
               <a
                 href="/llms.txt"
                 target="_blank"
                 rel="noreferrer"
-                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-sky-400/30 hover:border-sky-400 text-sky-300 rounded-lg transition-colors"
+                className="min-h-[40px] px-3.5 py-2 border border-neutral-300 hover:border-neutral-900 text-xs font-semibold inline-flex items-center"
               >
                 /llms.txt
               </a>
               <a
-                href="/api/agent/onboarding"
+                href="/gitpage/"
                 target="_blank"
                 rel="noreferrer"
-                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-emerald-400/30 hover:border-emerald-400 text-emerald-300 rounded-lg transition-colors"
+                className="min-h-[40px] px-3.5 py-2 border border-neutral-300 hover:border-neutral-900 text-xs font-semibold inline-flex items-center"
               >
-                JSON Onboarding
+                GitPage Dinâmica
               </a>
-              <button
-                type="button"
-                onClick={() => onNavigate('cam')}
-                className="px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 hover:border-amber-400/50 text-slate-200 rounded-lg transition-colors cursor-pointer"
-              >
-                Simular CAM &amp; Robô
-              </button>
             </div>
           </div>
-        </section>
+        </div>
 
-        {/* Reference Help Menu Grid */}
-        <section className="space-y-4">
-          <h2 className="font-display text-lg font-semibold text-slate-100">
-            Mapa Rápido dos Módulos (Menu Ajuda)
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <HelpTile
-              icon={<Layers className="w-4 h-4 text-sky-400" />}
-              title="01. Modelagem 3D IX"
-              desc="Explodir/Rotacionar, Caneta Mágica, Máscara de Objetos, PBR por componente, Tolerâncias GD&T e FEA."
-              onClick={() => onNavigate('viewport')}
-            />
-            <HelpTile
-              icon={<Workflow className="w-4 h-4 text-emerald-400" />}
-              title="02. Grasshopper DAG"
-              desc="Grafo de nós paramétricos conectáveis com avaliação topológica instantânea."
-              onClick={() => onNavigate('grasshopper')}
-            />
-            <HelpTile
-              icon={<Wrench className="w-4 h-4 text-amber-400" />}
-              title="03. CAM & Robótica"
-              desc="Seleção de fresas, folha manual DRO, G-Code ISO e cinemática inversa 6-eixos."
-              onClick={() => onNavigate('cam')}
-            />
-            <HelpTile
-              icon={<Puzzle className="w-4 h-4 text-indigo-400" />}
-              title="04. MCP & Plugins"
-              desc="15 Ferramentas MCP por segmento e editor JS sandboxed para extensões."
-              onClick={() => onNavigate('mcp')}
-            />
-          </div>
-        </section>
-
-        {/* Session Summary & Deliverables Tracker */}
-        <section className="p-6 bg-[#111620] border border-white/10 rounded-xl space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-white/8">
+        {/* Session Deliverables Log */}
+        <div className="p-6 bg-white border border-neutral-200 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="font-display text-base font-semibold text-slate-100">
-                Resumo da Sessão & Entregáveis
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Acompanhe o tempo decorrido, sincronize com seu histórico privado ao entrar com Google ou baixe agenda local (.ICS) e relatório Markdown.
+              <h3 className="font-editorial text-lg font-semibold text-[#111827]">
+                Entregáveis da Sessão ({deliverables.length})
+              </h3>
+              <p className="text-xs text-[#52525b]">
+                Tempo ativo: {formatDuration(sessionSeconds)} · Exporte agenda (.ICS) ou resumo técnico (.MD).
               </p>
             </div>
-
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleDownloadIcs}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-sky-500/15 border border-sky-400/40 text-sky-300 hover:bg-sky-500/25 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="min-h-[40px] px-3.5 py-2 border border-neutral-300 hover:border-neutral-900 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
-                <Calendar className="w-3.5 h-3.5" />
-                Exportar Agenda (.ICS)
+                <Calendar className="w-3.5 h-3.5" /> Agenda (.ICS)
               </button>
               <button
                 type="button"
                 onClick={handleDownloadMarkdownSummary}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-200 hover:border-white/25 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="min-h-[40px] px-3.5 py-2 border border-neutral-300 hover:border-neutral-900 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
-                <FileText className="w-3.5 h-3.5" />
-                Relatório (.MD)
+                <FileText className="w-3.5 h-3.5" /> Relatório (.MD)
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-            <div className="p-3.5 bg-[#0c1017] border border-white/8 rounded-lg">
-              <div className="text-slate-500">Tempo da Sessão</div>
-              <div className="font-mono-tabular text-lg font-semibold text-sky-400 mt-0.5">
-                {formatDuration(sessionSeconds)}
-              </div>
-            </div>
-            <div className="p-3.5 bg-[#0c1017] border border-white/8 rounded-lg">
-              <div className="text-slate-500">Geometria Ativa</div>
-              <div className="text-sm font-medium text-slate-100 mt-1 truncate">
-                {surface.name}
-              </div>
-            </div>
-            <div className="p-3.5 bg-[#0c1017] border border-white/8 rounded-lg">
-              <div className="text-slate-500">Entregáveis na Sessão</div>
-              <div className="font-mono-tabular text-lg font-semibold text-emerald-400 mt-0.5">
-                {deliverables.length}
-              </div>
-            </div>
-          </div>
-
-          {deliverables.length > 0 ? (
-            <div className="divide-y divide-white/6 border border-white/8 rounded-lg bg-[#0c1017]">
+          {deliverables.length > 0 && (
+            <div className="divide-y divide-neutral-200 border border-neutral-200">
               {deliverables.map((item) => (
                 <div
                   key={item.id}
                   className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-xs"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="font-mono-tabular text-slate-100 truncate">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Download className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                    <span className="font-mono-tabular font-medium text-[#111827] truncate">
                       {item.filename}
                     </span>
-                    <span className="text-slate-500">·</span>
-                    <span className="text-slate-400 truncate">{item.summary}</span>
+                    <span className="text-[#52525b] truncate">{item.summary}</span>
                   </div>
-                  <span className="font-mono-tabular text-[11px] text-slate-500 shrink-0">
+                  <span className="font-mono-tabular text-[11px] text-[#71717a] shrink-0">
                     {item.kind} · {item.timestamp}
                   </span>
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="p-4 bg-[#0c1017] border border-white/8 rounded-lg text-xs text-slate-400">
-              Nenhum artefato exportado ainda. Utilize <strong className="text-slate-200">Exportar CAD / NC</strong> ou
-              os comandos <strong className="text-slate-200">MCP Tools</strong> para gerar arquivos .3DM, .STL, .DXF ou código NC/KRL.
-            </div>
           )}
-        </section>
-      </div>
+        </div>
+
+        <footer className="pt-4 border-t border-neutral-200 flex flex-wrap items-center justify-between gap-3 text-xs text-[#71717a]">
+          <span>ParametrIX · Tecnologia, Inovação e Liberdade</span>
+          <span className="inline-flex items-center gap-1.5">
+            <Cloud className="w-3.5 h-3.5" />
+            Certificação determinística VUC Ed25519
+          </span>
+        </footer>
+      </section>
     </div>
   );
 };
-
-interface HelpTileProps {
-  icon: React.ReactNode;
-  title: string;
-  desc: string;
-  onClick: () => void;
-}
-
-const HelpTile: React.FC<HelpTileProps> = ({ icon, title, desc, onClick }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className="text-left p-4 bg-[#111620] border border-white/10 hover:border-sky-400/50 rounded-xl transition-colors space-y-2 cursor-pointer"
-  >
-    <div className="flex items-center gap-2">
-      {icon}
-      <span className="font-display text-xs font-semibold text-slate-100">{title}</span>
-    </div>
-    <p className="text-[11px] text-slate-400 leading-relaxed">{desc}</p>
-  </button>
-);

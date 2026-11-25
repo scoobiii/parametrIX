@@ -1,30 +1,27 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
-  Boxes,
   Briefcase,
   ChevronDown,
   Cpu,
   ExternalLink,
   Flame,
   FolderOpen,
-  Globe,
-  Home,
-  KeyRound,
   Leaf,
+  Lock,
   LogIn,
   LogOut,
-  MoreHorizontal,
+  Menu,
   Network,
   Palette,
   Puzzle,
   RotateCcw,
   Save,
-  Send,
   ShieldCheck,
   Sigma,
   SlidersHorizontal,
   Terminal,
+  User,
   X,
 } from 'lucide-react';
 import { AgentVoiceCommandBar } from './components/AgentVoiceCommandBar';
@@ -237,7 +234,6 @@ export default function App() {
     googleAccessToken,
     authReady,
     authBusy,
-    signInWithGoogle,
     connectGoogleDrive,
     logout,
   } = useAuth();
@@ -247,9 +243,10 @@ export default function App() {
     () => typeof window !== 'undefined' && window.innerWidth < 1200
   );
   const [rightEdgeDrawerOpen, setRightEdgeDrawerOpen] = useState(false);
-  const [exportModalOpen, setExportModalOpen] = useState(false);
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [offlineAuthOpen, setOfflineAuthOpen] = useState(false);
+  const [explicitLocalAuthActive, setExplicitLocalAuthActive] = useState(false);
+  const [pendingErpAfterAuth, setPendingErpAfterAuth] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardArea, setWizardArea] = useState<EngineeringArea>('cad');
   const [cadResetCount, setCadResetCount] = useState(0);
@@ -261,7 +258,7 @@ export default function App() {
   const [erpLogisticsModal, setErpLogisticsModal] = useState<LogisticsModal>('road');
   const [erpDistanceKm, setErpDistanceKm] = useState<number>(220);
   const [scoobiiiModalOpen, setScoobiiiModalOpen] = useState(false);
-  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [desktopModulesOpen, setDesktopModulesOpen] = useState(false);
   const [mobileCamPane, setMobileCamPane] = useState<'viewport' | 'panel'>('viewport');
   const [mobileGraphMode, setMobileGraphMode] = useState<'split' | 'graph' | 'viewport'>('split');
@@ -422,7 +419,6 @@ export default function App() {
   // RAG + Agent MCP + Magic Pen & Per-Layer GD&T state
   const [ragDocs, setRagDocs] = useState<RagSourceDocument[]>([]);
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
-  const [exportIsolatedOnly, setExportIsolatedOnly] = useState(true);
   const [featureOps, setFeatureOps] = useState<CadFeatureOperation[]>([]);
   const [layerToleranceOverrides, setLayerToleranceOverrides] = useState<
     Record<string, LayerToleranceSpec>
@@ -2519,6 +2515,7 @@ export default function App() {
         const profData = (await profResp.json()) as { profile?: AuthUserProfile };
         if (profData.profile) {
           setSqliteProfile(profData.profile);
+          setExplicitLocalAuthActive(true);
           pushMcpEyeEvent(
             'agent-feedback',
             `Auth.${payload.provider}`,
@@ -2541,6 +2538,7 @@ export default function App() {
       throw new Error(data.error || 'Falha na autenticação SQLite.');
     }
     setSqliteProfile(data.profile);
+    setExplicitLocalAuthActive(true);
     if (data.profile.offlineMode || payload.offlineMode) {
       setSelectedAgentId('local-llm');
       setLastVoiceStatus(
@@ -3377,49 +3375,61 @@ export default function App() {
     };
   }, []);
 
+  const isAuthenticatedSession = Boolean(
+    user || (backendProfile && backendProfile.id !== 'local-default-op') || explicitLocalAuthActive
+  );
+
+  useEffect(() => {
+    if (pendingErpAfterAuth && isAuthenticatedSession) {
+      setPendingErpAfterAuth(false);
+      setActiveTab('ecosystem');
+    }
+  }, [pendingErpAfterAuth, isAuthenticatedSession]);
+
   const navItems: { id: WorkspaceTab; label: string }[] = [
     { id: 'onboarding', label: 'Início' },
     { id: 'viewport', label: 'CAD 3D' },
+    { id: 'sustainability', label: 'CAE / LCA' },
     { id: 'cam', label: 'CAM & Robô' },
-    { id: 'ecosystem', label: 'ERP / BI' },
-    { id: 'library', label: 'Lib' },
+    { id: 'ecosystem', label: 'ERP / CRM / BI' },
+    { id: 'library', label: 'Biblioteca' },
     { id: 'frostbite', label: 'Frostbite 1MW' },
     { id: 'grasshopper', label: 'Grasshopper' },
-    { id: 'sustainability', label: 'CAE / CO₂' },
     { id: 'mcp', label: 'MCP Tools' },
     { id: 'plugins', label: 'Plugins SDK' },
     { id: 'files', label: 'Arquivos CAD' },
     { id: 'media-studio', label: 'Media Studio 1.0' },
   ];
 
-  const primaryDesktopNavIds: WorkspaceTab[] = [
-    'onboarding',
-    'viewport',
-    'cam',
-    'ecosystem',
-    'library',
-  ];
+  const primaryDesktopNavIds: WorkspaceTab[] = isAuthenticatedSession
+    ? ['onboarding', 'viewport', 'sustainability', 'cam', 'ecosystem']
+    : ['onboarding', 'viewport', 'sustainability', 'cam'];
   const secondaryDesktopNavIds: WorkspaceTab[] = [
     'media-studio',
+    'library',
     'frostbite',
     'grasshopper',
-    'sustainability',
     'mcp',
     'plugins',
     'files',
   ];
 
   const handleTabSwitch = (tab: WorkspaceTab) => {
+    if (tab === 'ecosystem' && !isAuthenticatedSession) {
+      setMobileMenuOpen(false);
+      setDesktopModulesOpen(false);
+      setPendingErpAfterAuth(true);
+      setOfflineAuthOpen(true);
+      return;
+    }
     setActiveTab(tab);
-    setMobileMoreOpen(false);
+    setMobileMenuOpen(false);
     setDesktopModulesOpen(false);
     recordSessionDiscreteAction('tab-switch', `Navegou para aba ${tab}`, { tab });
     if (tab === 'cam') {
       setDisplay((d) => ({ ...d, showToolpath: true, showMachine: true }));
     }
   };
-
-  const activeNavLabel = navItems.find((item) => item.id === activeTab)?.label ?? 'Início';
 
   return (
     <div
@@ -3456,18 +3466,37 @@ export default function App() {
         }
       }}
     >
-      {/* Top Navigation Bar (Clean 3-zone contract, zero clipped desktop tabs) */}
-      <header className="h-12 px-3 sm:px-5 border-b border-white/10 bg-[#0f141d] flex items-center justify-between gap-2 sm:gap-6 shrink-0 relative z-30">
+      {/* Top Navigation Bar (Clean 3-zone contract: Single 3-Bar Mobile Trigger + Wordmark | Desktop Links | Single Iniciar Sessão Icon) */}
+      <header className="h-14 px-3 sm:px-6 border-b border-white/10 bg-[#0f141d] flex items-center justify-between gap-4 sm:gap-8 shrink-0 relative z-30">
         <div className="flex items-center gap-2 min-w-0 shrink-0">
-          <span className="font-display text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
-            Parametrix CAD
-          </span>
-          <span className="md:hidden text-[11px] font-medium text-sky-300 bg-sky-500/10 border border-sky-400/25 rounded px-1.5 py-0.5 truncate max-w-[104px]">
-            {activeNavLabel}
-          </span>
+          <button
+            type="button"
+            aria-label="Abrir menu principal"
+            onClick={() => setMobileMenuOpen(true)}
+            className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-100 hover:bg-white/10 transition-colors cursor-pointer"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleTabSwitch('onboarding')}
+            className="flex items-center gap-2 text-left cursor-pointer"
+          >
+            <svg viewBox="0 0 32 32" className="w-6 h-6 shrink-0" aria-hidden="true">
+              <rect width="32" height="32" rx="7" fill="#172030" />
+              <path
+                d="M10 8h8.5c3.2 0 5.5 2.1 5.5 5.1s-2.3 5.1-5.5 5.1H14v5.8h-4V8Zm4 3.4v3.4h4.1c1.2 0 2-.7 2-1.7s-.8-1.7-2-1.7H14Z"
+                fill="#0091ff"
+              />
+            </svg>
+            <span className="font-display text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
+              ParametrIX
+            </span>
+          </button>
         </div>
 
-        <nav className="hidden md:flex items-center gap-4 lg:gap-5 min-w-0 flex-1">
+        <nav className="hidden lg:flex items-center gap-5 min-w-0 flex-1">
           {primaryDesktopNavIds.map((id) => {
             const item = navItems.find((n) => n.id === id)!;
             const active = activeTab === item.id;
@@ -3476,7 +3505,7 @@ export default function App() {
                 key={item.id}
                 type="button"
                 onClick={() => handleTabSwitch(item.id)}
-                className={`py-3 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`py-3.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   active
                     ? 'border-sky-400 text-slate-100'
                     : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -3491,7 +3520,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setDesktopModulesOpen((v) => !v)}
-              className={`py-3 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
+              className={`py-3.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer ${
                 secondaryDesktopNavIds.includes(activeTab)
                   ? 'border-sky-400 text-sky-200'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -3530,120 +3559,108 @@ export default function App() {
           </div>
         </nav>
 
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setOfflineAuthOpen(true)}
-            className="min-h-[38px] flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#141a24] border border-emerald-400/35 text-emerald-200 hover:border-emerald-400 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer font-mono-tabular"
-            title={`Login Real Multi-Provedor + Sessão SQLite (${sqliteProfile.provider}) · ${sqliteProfile.role}`}
-          >
-            <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden lg:inline">
-              {user || backendProfile || !sqliteProfile.offlineMode ? sqliteProfile.handleAt : 'Login / Auth'}
-            </span>
-            <span className="lg:hidden hidden sm:inline">Login</span>
-          </button>
-
-          {authReady &&
-            (user || (backendProfile && !backendProfile.offlineMode) ? (
-              <button
-                type="button"
-                onClick={() => setAccountModalOpen(true)}
-                className="min-h-[38px] flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-sky-400/50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                title={`Conta autenticada: ${user?.email || backendProfile?.email || ''} (${backendProfile?.provider || 'firebase'})`}
-              >
-                {user?.photoURL ? (
-                  <img
-                    src={user.photoURL}
-                    alt={user.displayName || 'Usuário'}
-                    className="w-4 h-4 rounded-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                )}
-                <span className="max-w-[70px] sm:max-w-[110px] truncate hidden sm:inline">
-                  {(user?.displayName || backendProfile?.displayName)?.split(' ')[0] || 'Conta'}
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={authBusy}
-                onClick={() => void signInWithGoogle()}
-                className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium bg-[#141a24] border border-white/12 text-slate-200 hover:border-white/30 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <LogIn className="w-3.5 h-3.5 text-sky-400" />
-                <span className="hidden xl:inline">{authBusy ? 'Entrando...' : 'Google Cloud'}</span>
-              </button>
-            ))}
-
-          <button
-            type="button"
-            onClick={() => setExportModalOpen(true)}
-            className="min-h-[38px] px-3 sm:px-4 py-1.5 text-xs font-semibold bg-sky-500 text-slate-950 rounded-lg hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Exportar / Máquina
-          </button>
+        <div className="flex items-center shrink-0">
+          {authReady && isAuthenticatedSession ? (
+            <button
+              type="button"
+              onClick={() => setAccountModalOpen(true)}
+              aria-label="Abrir minha conta autenticada"
+              className="min-h-[44px] flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-[#141a24] border border-white/15 text-slate-100 hover:border-sky-400/60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              title={`Sessão ativa: ${user?.email || backendProfile?.email || sqliteProfile.email}`}
+            >
+              {user?.photoURL ? (
+                <img
+                  src={user.photoURL}
+                  alt={user.displayName || 'Usuário'}
+                  className="w-5 h-5 rounded-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              )}
+              <span className="max-w-[90px] sm:max-w-[130px] truncate hidden sm:inline">
+                {(
+                  user?.displayName ||
+                  backendProfile?.displayName ||
+                  sqliteProfile.displayName
+                )?.split(' ')[0] || 'Conta'}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setOfflineAuthOpen(true)}
+              aria-label="Iniciar sessão"
+              className="min-h-[44px] flex items-center gap-2 px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-slate-100 hover:bg-white/10 border border-white/15 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              title="Iniciar sessão (Google Pop-up ou E-mail e Senha)"
+            >
+              <User className="w-4 h-4 text-sky-400 shrink-0" />
+              <span className="hidden sm:inline">Iniciar sessão</span>
+            </button>
+          )}
         </div>
       </header>
 
-      <AgentVoiceCommandBar
-        selectedAgentId={selectedAgentId}
-        onSelectAgent={(id) => {
-          setSelectedAgentId(id);
-          setHarnessEngineId(id);
-        }}
-        offlineMode={sqliteProfile.offlineMode}
-        googleUserEmail={
-          user?.email || (backendProfile?.provider === 'google' ? backendProfile.email : null)
-        }
-        googleAccessToken={googleAccessToken}
-        sessionToken={sessionToken}
-        onConnectGoogleDrive={connectGoogleDrive}
-        onOpenDriveMatch={async (driveFile: GoogleDriveFolderFile) => {
-          if (!googleAccessToken) return;
-          const { arrayBuffer, mimeType } = await downloadDriveFileContent(
-            googleAccessToken,
-            driveFile.id,
-            driveFile.name
-          );
-          if (driveFile.name.toLowerCase().endsWith('.parametrix.json')) {
-            const parsed = JSON.parse(new TextDecoder().decode(arrayBuffer)) as {
-              surfaceName?: string;
-              designParams?: ParametricDesignParams;
-              camSettings?: CamSettings;
-            };
-            if (parsed.designParams) setDesignParams(parsed.designParams);
-            if (parsed.camSettings) setCamSettings(parsed.camSettings);
-            setActiveTab('viewport');
-            setLastVoiceStatus(`Snapshot "${parsed.surfaceName || driveFile.name}" carregado do Google Drive.`);
-            return;
+      {activeTab !== 'onboarding' && (
+        <AgentVoiceCommandBar
+          selectedAgentId={selectedAgentId}
+          onSelectAgent={(id) => {
+            setSelectedAgentId(id);
+            setHarnessEngineId(id);
+          }}
+          offlineMode={sqliteProfile.offlineMode}
+          googleUserEmail={
+            user?.email || (backendProfile?.provider === 'google' ? backendProfile.email : null)
           }
-          const importedFile = new File([arrayBuffer], driveFile.name, { type: mimeType });
-          await handleUnifiedFileUpload(importedFile);
-        }}
-        systemResources={systemResources}
-        localLlmRec={localLlmRec}
-        localQwenStatus={localQwenStatus}
-        onSyncQwenRag={handleSyncQwenRag}
-        mcpEyeEvents={mcpEyeEvents}
-        onSendAgentPrompt={handleSendMultiAgentPrompt}
-        onVoiceTranscript={handleVoiceTranscript}
-        activeArea={activeEngineeringArea}
-        onOpenWizard={(area) => {
-          setWizardArea(area);
-          setWizardOpen(true);
-        }}
-        onResetCadArea={handleResetCadArea}
-        onResetCaeArea={handleResetCaeArea}
-        onRestartCam={() => handleRestartCamProcess()}
-        cadResetCount={cadResetCount}
-        caeResetCount={caeResetCount}
-        camRestartCount={camRestartCount}
-        lastVoiceStatus={lastVoiceStatus}
-        harnessDockProps={makeHarnessDockProps(activeEngineeringArea)}
-      />
+          googleAccessToken={googleAccessToken}
+          sessionToken={sessionToken}
+          onConnectGoogleDrive={connectGoogleDrive}
+          onOpenDriveMatch={async (driveFile: GoogleDriveFolderFile) => {
+            if (!googleAccessToken) return;
+            const { arrayBuffer, mimeType } = await downloadDriveFileContent(
+              googleAccessToken,
+              driveFile.id,
+              driveFile.name
+            );
+            if (driveFile.name.toLowerCase().endsWith('.parametrix.json')) {
+              const parsed = JSON.parse(new TextDecoder().decode(arrayBuffer)) as {
+                surfaceName?: string;
+                designParams?: ParametricDesignParams;
+                camSettings?: CamSettings;
+              };
+              if (parsed.designParams) setDesignParams(parsed.designParams);
+              if (parsed.camSettings) setCamSettings(parsed.camSettings);
+              setActiveTab('viewport');
+              setLastVoiceStatus(
+                `Snapshot "${parsed.surfaceName || driveFile.name}" carregado do Google Drive.`
+              );
+              return;
+            }
+            const importedFile = new File([arrayBuffer], driveFile.name, { type: mimeType });
+            await handleUnifiedFileUpload(importedFile);
+          }}
+          systemResources={systemResources}
+          localLlmRec={localLlmRec}
+          localQwenStatus={localQwenStatus}
+          onSyncQwenRag={handleSyncQwenRag}
+          mcpEyeEvents={mcpEyeEvents}
+          onSendAgentPrompt={handleSendMultiAgentPrompt}
+          onVoiceTranscript={handleVoiceTranscript}
+          activeArea={activeEngineeringArea}
+          onOpenWizard={(area) => {
+            setWizardArea(area);
+            setWizardOpen(true);
+          }}
+          onResetCadArea={handleResetCadArea}
+          onResetCaeArea={handleResetCaeArea}
+          onRestartCam={() => handleRestartCamProcess()}
+          cadResetCount={cadResetCount}
+          caeResetCount={caeResetCount}
+          camRestartCount={camRestartCount}
+          lastVoiceStatus={lastVoiceStatus}
+          harnessDockProps={makeHarnessDockProps(activeEngineeringArea)}
+        />
+      )}
 
       {/* Main Active Workspace */}
       <main className="flex-1 min-h-0 flex overflow-hidden relative">
@@ -3665,7 +3682,13 @@ export default function App() {
             onApplyPreset={handleApplyFullPreset}
             scoobiiiProof={scoobiiiProof}
             liveErpSnapshot={liveErpSnapshot}
-            activeUserLabel={user?.email || `${sqliteProfile.displayName} (${sqliteProfile.handleAt})`}
+            activeUserLabel={
+              user?.email ||
+              backendProfile?.email ||
+              `${sqliteProfile.displayName} (${sqliteProfile.handleAt})`
+            }
+            isAuthenticatedSession={isAuthenticatedSession}
+            onOpenLoginModal={() => setOfflineAuthOpen(true)}
             onOpenErpEntry={() => {
               setEcosystemInitialSubTab('erp');
               handleTabSwitch('ecosystem');
@@ -4457,137 +4480,206 @@ export default function App() {
         )}
       </main>
 
-      {/* Mobile Thumb-Zone Bottom Navigation Bar (< 768px) */}
-      <nav
-        aria-label="Navegação Mobile"
-        className="md:hidden grid grid-cols-5 h-14 shrink-0 border-t border-white/10 bg-[#0f141d] z-30"
-      >
-        {(
-          [
-            { id: 'onboarding', label: 'Início', icon: Home },
-            { id: 'viewport', label: 'CAD 3D', icon: Boxes },
-            { id: 'cam', label: 'CAM', icon: Cpu },
-            { id: 'ecosystem', label: 'ERP', icon: Briefcase },
-          ] as const
-        ).map((item) => {
-          const Icon = item.icon;
-          const active = activeTab === item.id && !mobileMoreOpen;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => handleTabSwitch(item.id)}
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                active ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => setMobileMoreOpen((v) => !v)}
-          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-            mobileMoreOpen ||
-            activeTab === 'library' ||
-            activeTab === 'frostbite' ||
-            activeTab === 'sustainability' ||
-            activeTab === 'grasshopper' ||
-            activeTab === 'mcp' ||
-            activeTab === 'plugins' ||
-            activeTab === 'files' ||
-            activeTab === 'media-studio'
-              ? 'text-sky-400'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <MoreHorizontal className="w-4 h-4" />
-          <span>Mais</span>
-        </button>
-      </nav>
-
-      {/* Mobile Slide-Up Modules Sheet Drawer */}
-      {mobileMoreOpen && (
-        <div className="md:hidden fixed inset-0 z-40 flex flex-col justify-end">
+      {/* Single Unified "3 Barrinhas" Mobile Navigation Drawer (< 1024px) */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
           <div
-            className="absolute inset-0 bg-black/65"
-            onClick={() => setMobileMoreOpen(false)}
+            className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            onClick={() => setMobileMenuOpen(false)}
           />
-          <div className="relative bg-[#111620] border-t border-white/15 rounded-t-2xl p-4 space-y-3 shadow-2xl max-h-[82vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-2 border-b border-white/10">
-              <span className="font-display text-sm font-semibold text-slate-100">
-                Módulos & Ferramentas
-              </span>
-              <button
-                type="button"
-                aria-label="Fechar menu de módulos"
-                onClick={() => setMobileMoreOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+          <aside
+            aria-label="Menu principal mobile"
+            className="relative w-[86vw] max-w-sm h-full bg-[#0f141d] border-r border-white/12 flex flex-col justify-between shadow-2xl overflow-y-auto"
+          >
+            <div className="p-4 space-y-5">
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <svg viewBox="0 0 32 32" className="w-6 h-6 shrink-0" aria-hidden="true">
+                    <rect width="32" height="32" rx="7" fill="#172030" />
+                    <path
+                      d="M10 8h8.5c3.2 0 5.5 2.1 5.5 5.1s-2.3 5.1-5.5 5.1H14v5.8h-4V8Zm4 3.4v3.4h4.1c1.2 0 2-.7 2-1.7s-.8-1.7-2-1.7H14Z"
+                      fill="#0091ff"
+                    />
+                  </svg>
+                  <span className="font-display text-base font-bold text-slate-100">
+                    ParametrIX
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Fechar menu"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-white/10 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  { id: 'media-studio', label: 'Media Studio 1.0', icon: Palette },
-                  { id: 'library', label: 'Lib / Biblioteca', icon: BookOpen },
-                  { id: 'frostbite', label: 'Frostbite 1MW', icon: Flame },
-                  { id: 'sustainability', label: 'CAE / CO₂', icon: Leaf },
-                  { id: 'grasshopper', label: 'Grasshopper Nodal', icon: Network },
-                  { id: 'mcp', label: 'Agente RAG + MCP', icon: Terminal },
-                  { id: 'plugins', label: 'Plugins SDK', icon: Puzzle },
-                  { id: 'files', label: 'Arquivos CAD', icon: FolderOpen },
-                ] as const
-              ).map((mod) => {
-                const Icon = mod.icon;
-                const active = activeTab === mod.id;
-                return (
+              {/* Mobile Auth Box */}
+              {isAuthenticatedSession ? (
+                <div className="p-3 bg-[#151c28] border border-white/10 rounded-xl flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-white truncate">
+                      {user?.displayName || backendProfile?.displayName || sqliteProfile.displayName}
+                    </div>
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {user?.email || backendProfile?.email || sqliteProfile.email}
+                    </div>
+                  </div>
                   <button
-                    key={mod.id}
                     type="button"
-                    onClick={() => handleTabSwitch(mod.id)}
-                    className={`min-h-[48px] px-3 py-2.5 rounded-xl border flex items-center gap-2.5 text-left text-xs font-medium transition-colors cursor-pointer ${
-                      active
-                        ? 'bg-sky-500/15 border-sky-400/50 text-sky-200'
-                        : 'bg-[#0c1017] border-white/10 text-slate-200 hover:border-white/25'
+                    disabled={authBusy}
+                    onClick={async () => {
+                      await logout();
+                      setExplicitLocalAuthActive(false);
+                      setMobileMenuOpen(false);
+                      if (activeTab === 'ecosystem') setActiveTab('onboarding');
+                    }}
+                    className="min-h-[38px] px-2.5 py-1.5 text-xs font-medium bg-[#0c1017] border border-white/15 rounded-lg text-slate-200 hover:text-white shrink-0 cursor-pointer"
+                  >
+                    Sair
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setOfflineAuthOpen(true);
+                  }}
+                  className="w-full min-h-[46px] px-4 py-2.5 bg-[#0091ff] hover:bg-[#0284c7] text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" />
+                  Iniciar sessão (Google / E-mail)
+                </button>
+              )}
+
+              {/* Primary Domains */}
+              <div className="space-y-1">
+                <div className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Engenharia &amp; Operações
+                </div>
+                {(
+                  [
+                    { id: 'onboarding', label: 'Início (Apresentação)', icon: Sigma },
+                    { id: 'viewport', label: 'Editor 3D IX (CAD)', icon: Network },
+                    { id: 'sustainability', label: 'CAE / Fadiga & LCA', icon: Leaf },
+                    { id: 'cam', label: 'CAM & Robótica (8 Células)', icon: Cpu },
+                  ] as const
+                ).map((item) => {
+                  const Icon = item.icon;
+                  const active = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleTabSwitch(item.id)}
+                      className={`w-full min-h-[46px] px-3 py-2.5 rounded-xl flex items-center gap-3 text-left text-sm font-medium transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-sky-500/20 text-sky-200 border border-sky-400/40'
+                          : 'text-slate-200 hover:bg-white/8'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4 text-sky-400 shrink-0" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+
+                {isAuthenticatedSession ? (
+                  <button
+                    type="button"
+                    onClick={() => handleTabSwitch('ecosystem')}
+                    className={`w-full min-h-[46px] px-3 py-2.5 rounded-xl flex items-center gap-3 text-left text-sm font-medium transition-colors cursor-pointer ${
+                      activeTab === 'ecosystem'
+                        ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
+                        : 'text-emerald-200 hover:bg-emerald-500/10'
                     }`}
                   >
-                    <Icon className="w-4 h-4 text-sky-400 shrink-0" />
-                    <span className="truncate">{mod.label}</span>
+                    <Briefcase className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>ERP, CRM &amp; BI Integrados</span>
                   </button>
-                );
-              })}
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setPendingErpAfterAuth(true);
+                      setOfflineAuthOpen(true);
+                    }}
+                    className="w-full min-h-[46px] px-3 py-2.5 rounded-xl flex items-center justify-between text-left text-sm font-medium text-slate-300 hover:bg-white/8 border border-dashed border-white/15 cursor-pointer"
+                  >
+                    <span className="flex items-center gap-3">
+                      <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>ERP, CRM &amp; BI (Após login)</span>
+                    </span>
+                    <span className="text-[11px] text-sky-300">Entrar</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Studios & Tools */}
+              <div className="space-y-1">
+                <div className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Estúdios &amp; Ferramentas
+                </div>
+                {(
+                  [
+                    { id: 'media-studio', label: 'Media Studio 1.0', icon: Palette },
+                    { id: 'library', label: 'Biblioteca CAD', icon: BookOpen },
+                    { id: 'frostbite', label: 'Frostbite 1MW', icon: Flame },
+                    { id: 'grasshopper', label: 'Grasshopper Nodal', icon: Network },
+                    { id: 'mcp', label: 'Agente RAG + MCP', icon: Terminal },
+                    { id: 'plugins', label: 'Plugins SDK', icon: Puzzle },
+                    { id: 'files', label: 'Arquivos CAD', icon: FolderOpen },
+                  ] as const
+                ).map((mod) => {
+                  const Icon = mod.icon;
+                  const active = activeTab === mod.id;
+                  return (
+                    <button
+                      key={mod.id}
+                      type="button"
+                      onClick={() => handleTabSwitch(mod.id)}
+                      className={`w-full min-h-[44px] px-3 py-2 rounded-xl flex items-center gap-3 text-left text-xs font-medium transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-sky-500/20 text-sky-200 border border-sky-400/40'
+                          : 'text-slate-300 hover:bg-white/8 hover:text-white'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4 text-sky-400 shrink-0" />
+                      <span className="truncate">{mod.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-1">
+            <div className="p-4 border-t border-white/10 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => {
-                  setMobileMoreOpen(false);
+                  setMobileMenuOpen(false);
                   setScoobiiiModalOpen(true);
                 }}
-                className="min-h-[44px] px-3 py-2 rounded-xl border border-emerald-400/35 bg-emerald-500/10 text-emerald-200 text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+                className="min-h-[44px] px-3 py-2 rounded-xl border border-emerald-400/35 bg-emerald-500/10 text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Sigma className="w-4 h-4 shrink-0" />
-                <span>Prova SCOOBIII/VUC</span>
+                <span>Prova VUC</span>
               </button>
 
               <a
                 href="/gitpage/"
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={() => setMobileMoreOpen(false)}
-                className="min-h-[44px] px-3 py-2 rounded-xl border border-sky-400/35 bg-sky-500/10 text-sky-200 text-xs font-semibold flex items-center justify-center gap-2"
+                onClick={() => setMobileMenuOpen(false)}
+                className="min-h-[44px] px-3 py-2 rounded-xl border border-sky-400/35 bg-sky-500/10 text-sky-200 text-xs font-semibold flex items-center justify-center gap-1.5"
               >
                 <ExternalLink className="w-4 h-4 shrink-0" />
-                <span>GitPage Dinâmica</span>
+                <span>GitPage</span>
               </a>
             </div>
-          </div>
+          </aside>
         </div>
       )}
 
@@ -4634,172 +4726,6 @@ export default function App() {
             }
           }}
         />
-      )}
-
-      {/* Quick Export + Remote Machine Dispatch Modal */}
-      {exportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md bg-[#111620] border border-white/12 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
-            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
-              <h3 className="font-display text-base font-semibold text-slate-100">
-                Exportar Projeto & Executar em Máquina
-              </h3>
-              <button
-                type="button"
-                onClick={() => setExportModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-2.5">
-              {display.isolationTarget !== 'all' && (
-                <div className="flex items-center justify-between gap-2 px-3 py-2 bg-amber-500/10 border border-amber-400/30 rounded-xl text-xs">
-                  <span className="text-amber-200">
-                    Peça isolada: <strong>{display.isolationTarget}</strong>
-                  </span>
-                  <label className="flex items-center gap-1.5 text-slate-200 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={exportIsolatedOnly}
-                      onChange={(e) => setExportIsolatedOnly(e.target.checked)}
-                      className="accent-amber-400"
-                    />
-                    Exportar só isolada
-                  </label>
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  handleExportFormat(
-                    '3dm',
-                    exportIsolatedOnly && display.isolationTarget !== 'all'
-                      ? 'isolated'
-                      : 'assembly'
-                  );
-                  setExportModalOpen(false);
-                }}
-                className="w-full flex items-center justify-between px-4 py-3 bg-[#0c1017] hover:border-sky-400/60 border border-white/10 rounded-xl text-left transition-colors cursor-pointer"
-              >
-                <div>
-                  <div className="text-xs font-semibold text-slate-100">
-                    OpenNURBS Rhino (.3DM)
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {exportIsolatedOnly && display.isolationTarget !== 'all'
-                      ? `Somente geometria isolada (${display.isolationTarget})`
-                      : 'Superfície NURBS completa + malha sólida'}
-                  </div>
-                </div>
-                <span className="text-xs font-mono-tabular text-sky-400">.3dm</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  handleExportFormat(
-                    'stl',
-                    exportIsolatedOnly && display.isolationTarget !== 'all'
-                      ? 'isolated'
-                      : 'assembly'
-                  );
-                  setExportModalOpen(false);
-                }}
-                className="w-full flex items-center justify-between px-4 py-3 bg-[#0c1017] hover:border-sky-400/60 border border-white/10 rounded-xl text-left transition-colors cursor-pointer"
-              >
-                <div>
-                  <div className="text-xs font-semibold text-slate-100">
-                    Malha Binária Sólida (.STL)
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {exportIsolatedOnly && display.isolationTarget !== 'all'
-                      ? `Exportação isolada: ${display.isolationTarget}`
-                      : `${meshData.triangleCount.toLocaleString('pt-BR')} triângulos estanques`}
-                  </div>
-                </div>
-                <span className="text-xs font-mono-tabular text-sky-400">.stl</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  handleExportFormat(
-                    'dxf',
-                    exportIsolatedOnly && display.isolationTarget !== 'all'
-                      ? 'isolated'
-                      : 'assembly'
-                  );
-                  setExportModalOpen(false);
-                }}
-                className="w-full flex items-center justify-between px-4 py-3 bg-[#0c1017] hover:border-sky-400/60 border border-white/10 rounded-xl text-left transition-colors cursor-pointer"
-              >
-                <div>
-                  <div className="text-xs font-semibold text-slate-100">
-                    AutoCAD DXF R2000 (.DXF)
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {exportIsolatedOnly && display.isolationTarget !== 'all'
-                      ? `Camada 3DFACE isolada (${display.isolationTarget})`
-                      : 'Camadas 3DFACE, Isocurvas e Toolpath CAM'}
-                  </div>
-                </div>
-                <span className="text-xs font-mono-tabular text-sky-400">.dxf</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const fmt = camSettings.postFormat === 'kuka-krl' ? 'src' : 'nc';
-                  handleExportFormat(fmt, 'assembly');
-                  setExportModalOpen(false);
-                }}
-                className="w-full flex items-center justify-between px-4 py-3 bg-[#0c1017] hover:border-emerald-400/60 border border-white/10 rounded-xl text-left transition-colors cursor-pointer"
-              >
-                <div>
-                  <div className="text-xs font-semibold text-slate-100">
-                    Programa CNC / Robô / Pó / Resina
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {toolpath.spindleRpm} RPM · {toolpath.feedRateMmMin} mm/min
-                  </div>
-                </div>
-                <span className="text-xs font-mono-tabular text-emerald-400">
-                  .{camSettings.postFormat === 'kuka-krl' ? 'src' : 'nc'}
-                </span>
-              </button>
-
-              {remoteMachines.length > 0 && (
-                <div className="pt-2 border-t border-white/10 space-y-2">
-                  <div className="text-[11px] font-semibold text-slate-300">
-                    Logar & Executar Diretamente em Máquina Remota:
-                  </div>
-                  {remoteMachines.map((rm) => (
-                    <button
-                      key={rm.id}
-                      type="button"
-                      onClick={() => {
-                        void handleDispatchRemoteMachine(rm.id);
-                        setExportModalOpen(false);
-                      }}
-                      className="w-full flex items-center justify-between px-3 py-2.5 bg-[#090c11] border border-white/10 hover:border-amber-400/60 rounded-xl text-left text-xs cursor-pointer"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-semibold text-slate-100 truncate">{rm.name}</div>
-                        <div className="text-[10px] font-mono-tabular text-slate-400 truncate">
-                          {rm.protocol} · {rm.endpointUrl}
-                        </div>
-                      </div>
-                      <Send className="w-3.5 h-3.5 text-amber-400 shrink-0 ml-2" />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Offline Proprietary SQLite Auth Modal */}
@@ -4870,15 +4796,15 @@ export default function App() {
         }}
       />
 
-      {/* Account & Isolated User Workspace Modal (Firebase & OAuth2 Backend Sessions) */}
-      {accountModalOpen && (user || backendProfile) && (
+      {/* Account & Isolated User Workspace Modal */}
+      {accountModalOpen && isAuthenticatedSession && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-md bg-[#111620] border border-white/12 rounded-2xl shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
                 <h3 className="font-display text-base font-semibold text-slate-100">
-                  Conta Autenticada (Sessão Backend Real)
+                  Conta Autenticada
                 </h3>
               </div>
               <button
@@ -4902,20 +4828,20 @@ export default function App() {
                 )}
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-slate-100 truncate">
-                    {user?.displayName || backendProfile?.displayName || 'Usuário Autenticado'}
+                    {user?.displayName || backendProfile?.displayName || sqliteProfile.displayName}
                   </div>
                   <div className="text-[11px] text-slate-400 truncate">
-                    {user?.email || backendProfile?.email}
+                    {user?.email || backendProfile?.email || sqliteProfile.email}
                   </div>
                   <div className="text-[10px] font-mono-tabular text-slate-500 truncate mt-0.5">
-                    Provedor: {(backendProfile?.provider || 'firebase').toUpperCase()} · ID:{' '}
-                    {user?.uid || backendProfile?.id}
+                    Provedor: {(backendProfile?.provider || sqliteProfile.provider).toUpperCase()} · ID:{' '}
+                    {user?.uid || backendProfile?.id || sqliteProfile.id}
                   </div>
                 </div>
               </div>
 
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Sessão verificada criptograficamente no servidor ({sessionToken ? 'HMAC-SHA256 + Cookie HttpOnly' : 'Firebase ID Token'}) com isolamento por usuário e prova VUC no SQLite local.
+                Sessão autenticada ativa com acesso liberado ao módulo ERP, CRM &amp; BI e salvamento isolado na sua conta.
               </p>
 
               <div className="flex items-center justify-between gap-2 pt-1">
@@ -4938,7 +4864,9 @@ export default function App() {
                   disabled={authBusy}
                   onClick={async () => {
                     await logout();
+                    setExplicitLocalAuthActive(false);
                     setAccountModalOpen(false);
+                    if (activeTab === 'ecosystem') setActiveTab('onboarding');
                   }}
                   className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0c1017] border border-white/12 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
                 >
