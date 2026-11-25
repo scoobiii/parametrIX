@@ -4,7 +4,7 @@ Atualizado em 2026-11-25.
 
 ## Cobertura unitária
 
-A suíte Vitest instrumenta 44 arquivos e, no escopo configurado, atingiu 100% de statements, branches, functions e lines. Isso não equivale a 100% do repositório: a contagem atual é de 86 arquivos em `src`, 24 em `scripts` e 32 arquivos de teste, totalizando 142 arquivos de código/teste. Excluindo dependências e artefatos gerados, o projeto contém 300 arquivos relevantes no workspace.
+A suíte Vitest instrumenta o escopo kernel/servidor configurado e, nesse escopo, pode atingir 100% de statements, branches, functions e lines. Isso não equivale a 100% do repositório. O inventário automatizado `npm run quality:static` é a fonte de verdade do total atual, excluindo `.git`, `node_modules`, `dist`, coverage, caches e artefatos temporários; no último run local foram contados **195 arquivos relevantes**. A matriz completa também cobre GUI, UX, acessibilidade, performance, stress e balanceamento.
 
 A integração MCP completa pode depender do binding nativo `lightningcss` no ARM64 do Sandbox. O gate CI roda em `ubuntu-latest` com Node 24, onde o backend e a matriz k6 são inicializados de forma reproduzível.
 
@@ -50,3 +50,7 @@ Com os bindings opcionais ARM64 instalados explicitamente no ambiente, o backend
 ## Interpretação
 
 A matriz k6 mede cobertura funcional de endpoints, cobertura de branches de protocolo/segurança, concorrência observada e WebSocket. Ela não substitui a cobertura V8 de código: k6 não deve ser usado para declarar 100% dos arquivos TypeScript cobertos.
+
+## Quality gate multidimensional
+
+O executor `scripts/quality-suite.mjs` gera `proof/quality-suite.json` com estados `PASS`, `FAIL` e `BLOCKED` para inventário, Scrum/Agile, GUI, UX responsivo, acessibilidade estática, p95 HTTP, concorrência e contrato de balanceamento. O workflow `.github/workflows/quality-suite.yml` separa qualidade estática de runtime. `--strict` falha em qualquer `FAIL` ou dependência externa `BLOCKED`; nenhum binário ausente é contado como sucesso.

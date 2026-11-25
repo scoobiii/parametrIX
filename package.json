@@ -29,7 +29,10 @@
     "diagnose:env": "node scripts/diagnose-environment.mjs",
     "classify:tests": "node scripts/classify-tests.mjs",
     "package:check": "npm pack --dry-run",
-    "ci:contract": "npm run diagnose:env -- --ci && npm run classify:tests"
+    "ci:contract": "npm run diagnose:env -- --ci && npm run classify:tests",
+    "quality:static": "node scripts/quality-suite.mjs --checks=inventory,scrum,gui,ux,a11y,load-balance --strict",
+    "quality:runtime": "node scripts/quality-suite.mjs --checks=performance,stress,load-balance --strict",
+    "quality:strict": "node scripts/quality-suite.mjs --strict"
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
