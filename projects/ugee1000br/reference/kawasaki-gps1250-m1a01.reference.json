@@ -1,0 +1,81 @@
+{
+  "schema": "parametrix-reference-record/1.0",
+  "projectId": "ugee1000br-rotor-1mw-ethanol",
+  "referenceId": "KAWASAKI-GPS1250-M1A01-2023",
+  "status": "REFERENCE_ONLY_PARTIAL",
+  "source": {
+    "manufacturer": "Kawasaki Heavy Industries, Ltd.",
+    "document": "Kawasaki GPS Product Lineup",
+    "catalogNumber": "KTK-0100-F",
+    "publication": "2023-09",
+    "pdf": "https://global.kawasaki.com/en/energy/pdf/202309Standby.pdf",
+    "productPage": "https://global.kawasaki.com/en/energy/equipment/gas_turbines/emergency.html"
+  },
+  "publishedData": {
+    "generatorSet": "GPS1250",
+    "turbineModel": "M1A-01",
+    "electricalOutputKw": 1000,
+    "duty": "STANDBY",
+    "turbineSpeedRpm": 22000,
+    "outputSpeedRpm": {
+      "50Hz": 1500,
+      "60Hz": 1800
+    },
+    "turbineDryWeightTonnes": 3,
+    "lubeOilTankApproxLitres": 100,
+    "lubeOilConsumptionLitresPerHour": 0.08,
+    "indoorPackageDimensionsMetres": {
+      "length": 4.9,
+      "width": 1.7,
+      "height": 2.5
+    },
+    "indoorPackageWeightTonnes": 10.4,
+    "alternatorOutputKva": 1250,
+    "startingTime": "within 40 seconds",
+    "fuelOptions": [
+      "kerosene",
+      "diesel",
+      "gas option"
+    ],
+    "dieselConsumptionLitresPerHour": 525,
+    "dieselConsumptionConditions": "Full load, 15 C; catalog note specifies diesel fuel oil."
+  },
+  "fuelCompatibility": {
+    "naturalGasOption": "DOCUMENTED_FOR_GPS1250",
+    "ethanol": "NOT_DOCUMENTED",
+    "ethanolCompatibility": "NOT_CONFIRMED",
+    "dualFuelDoesNotImplyEthanol": true
+  },
+  "applicability": {
+    "exact1MwNameplateMatch": true,
+    "standbyOnlyEvidence": true,
+    "continuousDutyEquivalence": "NOT_ESTABLISHED",
+    "directTransferOfGeometryOrDesignData": false,
+    "scaleTransfer": false
+  },
+  "unresolvedRequirements": [
+    "continuous-duty rating and operating envelope",
+    "natural-gas composition, pressure and flow requirements",
+    "ethanol compatibility confirmation",
+    "compressor and turbine performance maps",
+    "mass flow and pressure ratio",
+    "inlet and exhaust temperature limits",
+    "approved materials and service-life limits",
+    "emissions data for the proposed fuel",
+    "manufacturer-controlled interface and maintenance data"
+  ],
+  "gates": {
+    "sourceProvenance": "PASS",
+    "standbyNameplatePowerMatch": "PASS",
+    "continuousDutyEquivalence": "BLOCKED",
+    "ethanolCompatibility": "BLOCKED",
+    "completeEngineeringRequirements": "BLOCKED",
+    "manufacturingRelease": "BLOCKED"
+  },
+  "release": {
+    "lifecycle": "DOCUMENTARY_REFERENCE_ONLY",
+    "manufacturingRelease": false,
+    "functionalGeometry": false,
+    "procurementSpecification": false
+  }
+}
