@@ -2,6 +2,9 @@
   "name": "react-example",
   "private": true,
   "version": "0.0.0",
+  "engines": {
+    "node": ">=24.12.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -22,7 +25,9 @@
     "llm:install-qwen": "bash scripts/install_qwen_local.sh",
     "hermes:setup": "bash scripts/hermes/setup_parametrix_hermes.sh",
     "claw:setup": "bash scripts/hermes/setup_parametrix_claw.sh",
-    "vuc:proof": "tsx scripts/generate_vuc_proof.ts"
+    "vuc:proof": "tsx scripts/generate_vuc_proof.ts",
+    "ugee:validate": "node scripts/validate_ugee1000br.mjs",
+    "ugee:kernel-gate": "tsx scripts/ugee1000br_kernel_gate.ts"
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
