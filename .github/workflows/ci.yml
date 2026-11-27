@@ -6,8 +6,18 @@ on:
   pull_request:
     branches: [main, master]
 
+# Read-only by default. Grant write permissions only to workflows that need them.
+permissions:
+  contents: read
+
+# Avoid duplicate CI consumption for repeated pushes to the same PR/ref.
+concurrency:
+  group: parametrix-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci-gate:
+    name: ci-gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
