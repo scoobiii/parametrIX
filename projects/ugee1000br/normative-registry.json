@@ -1,0 +1,19 @@
+{
+  "schema": "parametrix-normative-registry/0.1",
+  "project": "ugee1000br-rotor-1mw-ethanol",
+  "status": "INDEX_ONLY_NOT_ASSESSED",
+  "entries": [
+    {"id":"AS9100D","scope":"quality-management-aerospace","status":"REVIEW_REQUIRED","note":"Use controlled licensed text and organization QMS evidence."},
+    {"id":"ISO-12100","scope":"machine-risk-assessment","status":"REVIEW_REQUIRED","note":"Risk assessment required for manufacturing cell and operation."},
+    {"id":"ISO-16090-1","scope":"machining-centres-safety","status":"REVIEW_REQUIRED","note":"Does not validate this rotor or its process by itself."},
+    {"id":"ISO-6336-SERIES","scope":"cylindrical-gear-load-capacity","status":"NOT_APPLICABLE_UNCONFIRMED","note":"Do not apply to a turbine rotor without engineering applicability review."},
+    {"id":"SAE-AIR-4787","scope":"rotor-dynamics-reference-candidate","status":"REVIEW_REQUIRED","note":"Candidate reference only; confirm applicability with responsible engineer."},
+    {"id":"ANAC-AIRWORTHINESS-BASIS","scope":"aeronautical-authority-basis","status":"REVIEW_REQUIRED","note":"The certification basis must be defined by the responsible organization and authority."}
+  ],
+  "prohibitedClaims": [
+    "certified-aeronautical-part",
+    "airworthiness-approved",
+    "manufacturing-release",
+    "formal-proof-of-physical-safety"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "parametrix-ui-walkthrough/0.1",
+  "projectId": "ugee1000br-rotor-1mw-ethanol",
+  "projectTitle": "Rotor da turbina UGEE1000BR — Aero Concepts — 1 MW a etanol",
+  "video": "parametrix_ugee1000br_ui_walkthrough.mp4",
+  "capture": {
+    "method": "X11 screen capture of the running ParametrIX UI",
+    "display": ":99.0",
+    "resolution": "1920x1080",
+    "frameRate": "30/1",
+    "pointer": "visible; ffmpeg x11grab draw_mouse=1",
+    "browser": "Chromium visible window via Playwright",
+    "audio": false
+  },
+  "uiSequence": [
+    {"phase": "CAD", "action": "open CAD 3D, move pointer across the centered production viewport and run the visible FEA shortcut"},
+    {"phase": "CAE", "action": "open CAE / LCA and move pointer across the analysis controls/results"},
+    {"phase": "CAM", "action": "open CAM & Robô, show CNC 5-eixos, toolpath and SCOOBIII/VUC controls"},
+    {"phase": "HARNESS", "action": "show the Qwen 0.5B SimpleTool Harness bar and the SQLite UGEE1000BR project selector in the lower CAM workspace"}
+  ],
+  "observedProjectBinding": {
+    "source": "SQLite harness project",
+    "titleVisibleInUI": "UGEE1000BR — Aero Concepts — Rotor 1 MW a etanol",
+    "formalVuc": "PASS",
+    "note": "The UI recording demonstrates interaction and project binding; it is not a physical safety, turbomachinery, aeronavigability, or manufacturing certification test."
+  },
+  "relatedEvidence": [
+    "projects/ugee1000br/ugee1000br.kernel-gate.json",
+    "projects/ugee1000br/ugee1000br.rotor.spec.json",
+    "projects/ugee1000br/harness-route.md",
+    "UGEE1000BR_PREPARACAO.md"
+  ],
+  "verification": {
+    "ffprobe": "h264, 1920x1080, 30 fps, 78.000 s",
+    "representativeFrames": ["8s CAD entry", "35s CAE/LCA", "58s CAM", "72s CAM + harness"],
+    "pointerVisibleInRepresentativeFrames": true
+  }
+}
