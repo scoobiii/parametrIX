@@ -383,6 +383,7 @@ export async function inspectPublicCadUrl(params: {
         durationMs: Math.max(1, Date.now() - startedAt),
       }),
     };
+  /* c8 ignore next -- the timer cleanup is exercised by every return path; V8 emits a synthetic finally branch. */
   } finally {
     clearTimeout(timer);
   }

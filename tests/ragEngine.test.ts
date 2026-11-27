@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   base64ToArrayBuffer,
   chunkTextForRag,
@@ -210,6 +210,43 @@ describe('ragEngine kernel', () => {
       byteSize: 0,
     });
     expect(asyncIptNoBuf.importedCad).toBeNull();
+
+    const asyncIptNullBuf = await tryBuildCadAndRagDocAsync({
+      title: 'null_buf.ipt',
+      kind: 'upload',
+      mimeType: 'application/octet-stream',
+      byteSize: 0,
+      buffer: null as unknown as ArrayBuffer,
+    });
+    expect(asyncIptNullBuf.importedCad).toBeNull();
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    } as Response);
+    const asyncIptFallback = await tryBuildCadAndRagDocAsync({
+      title: 'fallback.ipt',
+      kind: 'upload',
+      mimeType: 'application/octet-stream',
+      byteSize: 64,
+      buffer: new Uint8Array(64).buffer,
+    });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/cad/parse-ipt', expect.any(Object));
+    expect(asyncIptFallback.ragDoc.formatTag).toBe('IPT');
+    fetchSpy.mockRestore();
+
+    const rejectedFetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('IPT service offline'));
+    const asyncIptNetworkFallback = await tryBuildCadAndRagDocAsync({
+      title: 'network_fallback.ipt',
+      kind: 'upload',
+      mimeType: 'application/octet-stream',
+      byteSize: 64,
+      buffer: new Uint8Array(64).buffer,
+    });
+    expect(rejectedFetchSpy).toHaveBeenCalled();
+    expect(asyncIptNetworkFallback.importedCad).toBeNull();
+    rejectedFetchSpy.mockRestore();
 
     const gappedChunks = chunkTextForRag('g1', 'Gapped', 'start ' + ' '.repeat(2400) + 'end');
     expect(gappedChunks.length).toBeGreaterThanOrEqual(2);
