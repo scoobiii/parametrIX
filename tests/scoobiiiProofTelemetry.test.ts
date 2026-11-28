@@ -214,8 +214,13 @@ describe('SCOOBIII/VUC Multi-Domain Proof Telemetry & D3 Correlation Kernel', ()
   });
 
   it('caches and evaluates all 10 CAD/CAE/CAM presets across SCOOBIII, GD&T, CAM, and CO2', () => {
+    const firstPresetBuilder = WORKSPACE_PROJECT_PRESETS[0].buildImportedModel;
+    const importedWithoutProfile = firstPresetBuilder!();
+    delete importedWithoutProfile.detectedProfile;
+    WORKSPACE_PROJECT_PRESETS[0].buildImportedModel = () => importedWithoutProfile;
     const first = getPresetBenchmarkScatterPoints();
     const second = getPresetBenchmarkScatterPoints();
+    WORKSPACE_PROJECT_PRESETS[0].buildImportedModel = firstPresetBuilder;
     expect(first).toBe(second);
     expect(first.length).toBe(WORKSPACE_PROJECT_PRESETS.length);
     for (const pt of first) {

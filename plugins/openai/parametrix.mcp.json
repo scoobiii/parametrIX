@@ -1,0 +1,8 @@
+{
+  "name": "parametrix",
+  "protocol": "mcp-jsonrpc-2.0",
+  "transport": "http",
+  "url": "${PARAMETRIX_URL}/api/mcp",
+  "headers": { "Authorization": "Bearer ${MCP_TOKEN}" },
+  "capabilities": ["tools"]
+}

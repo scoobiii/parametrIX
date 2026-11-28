@@ -1,0 +1,60 @@
+name: Full Quality Matrix
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.12.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test -- --run
+      - run: npm run build
+      - run: npm run quality:static
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parametrix-static-quality
+          path: proof/quality-suite.json
+  runtime-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: static-quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.12.0'
+          cache: npm
+      - run: npm ci
+      - name: Start server
+        env:
+          PORT: 3000
+          MCP_TOKEN: quality-token
+          MCP_MAX_INFLIGHT: 8
+        run: |
+          nohup npm run dev >/tmp/parametrix-quality.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/agent/onboarding >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3000/api/agent/onboarding >/dev/null
+      - run: npm run quality:runtime
+        env:
+          PARAMETRIX_URL: http://127.0.0.1:3000
+          QUALITY_CONCURRENCY: 48
+          PARAMETRIX_BACKENDS: local-a,local-b,local-c
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parametrix-runtime-quality
+          path: |
+            proof/quality-suite.json
+            /tmp/parametrix-quality.log

@@ -987,4 +987,22 @@ describe('OAuthCallbackManager multi-provider flows', () => {
       oEmptyBothMgr.handleCallback({ state: 'o-empty-both', code: 'c', store, env: oEnvFull })
     ).rejects.toThrow('endereço de e-mail válido');
   });
+
+  it('aplica defaults do perfil ao registrar usuário sem telefone ou endereço', () => {
+    const store = createTempStore();
+    const profile = store.loginOrRegister({
+      email: 'defaults@parametrix.test',
+      provider: 'email',
+      role: 'client',
+      displayName: '   ',
+      handleAt: '   ',
+      phone: '   ',
+      address: '   ',
+    });
+
+    expect(profile.displayName).toBe('defaults');
+    expect(profile.handleAt).toMatch(/^@/);
+    expect(profile.phone).toBeTruthy();
+    expect(profile.address).toBeTruthy();
+  });
 });

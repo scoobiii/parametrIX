@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, ChildProcess } from 'node:child_process';
+import { resolve } from 'node:path';
 
 const PORT = 3111, URL = `http://127.0.0.1:${PORT}`, TOKEN = 'token-de-teste';
 let proc: ChildProcess;
@@ -9,8 +10,11 @@ const rpc = (body: any, headers: any = {}) => fetch(`${URL}/api/mcp`, {
 const list = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
 
 beforeAll(async () => {
-  proc = spawn('npx', ['tsx', 'server.ts'], { env: { ...process.env, PORT: String(PORT),
-    MCP_TOKEN: TOKEN, MCP_MAX_INFLIGHT: '2' }, stdio: 'ignore' });
+  proc = spawn(process.execPath, [resolve(process.cwd(), 'node_modules/tsx/dist/cli.mjs'), 'server.ts'], {
+    cwd: process.cwd(),
+    env: { ...process.env, PORT: String(PORT), MCP_TOKEN: TOKEN, MCP_MAX_INFLIGHT: '2' },
+    stdio: 'ignore',
+  });
   for (let i = 0; i < 60; i++) { try { if ((await fetch(URL)).ok) return; } catch {} await new Promise(r => setTimeout(r, 500)); }
   throw new Error('servidor nao subiu');
 }, 40000);

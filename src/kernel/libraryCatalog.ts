@@ -15,7 +15,34 @@ export interface LibraryCategoryMeta {
   label: string;
   description: string;
   defaultCatalogQuery: string;
+  industrySector: string;
+  processStages: readonly ('cad' | 'cae' | 'cam' | 'erp' | 'crm' | 'bi')[];
 }
+
+export interface GrabCadReference {
+  id: string;
+  industry: string;
+  title: string;
+  url: string;
+  source: 'GrabCAD Community Library';
+  usage: 'link-only-metadata';
+  licenseStatus: 'verify-per-item';
+  attributionRequired: true;
+  downloaded: false;
+}
+
+export const GRABCAD_INDUSTRY_REFERENCES: readonly GrabCadReference[] = [
+  { id: 'gc-automotive-category', industry: 'automotivo-mobilidade', title: 'Automotive - Recent models', url: 'https://grabcad.com/library/category/automotive', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-automotive-ev', industry: 'automotivo-mobilidade', title: 'electric car - 3D CAD Model Collection', url: 'https://grabcad.com/library/tag/electric%20car', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-aero-compressor', industry: 'aeroespacial-turbomaquinas', title: 'Centrifugal Compressor – Aerospace Grade', url: 'https://grabcad.com/library/centrifugal-compressor-aerospace-grade-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-aero-turbofan', industry: 'aeroespacial-turbomaquinas', title: 'High-Bypass Turbofan Engine Cutaway', url: 'https://grabcad.com/library/high-bypass-turbofan-engine-cutaway-fan-compressor-combustor-turbine-step-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-robot-arm', industry: 'robotica-automacao', title: 'Industrial Multi-Axis Robotic Arm with End-Effector Gripper', url: 'https://grabcad.com/library/industrial-multi-axis-robotic-arm-with-end-effector-gripper-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-robot-conveyor', industry: 'robotica-automacao', title: 'Industrial Robot Manipulator with Conveyor Belt', url: 'https://grabcad.com/library/industrial-robot-manipulator-with-conveyor-belt-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-medical-implant', industry: 'dispositivos-medicos', title: 'Subperiosteal implant', url: 'https://grabcad.com/library/subperiosteal-implant-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-medical-dental', industry: 'dispositivos-medicos', title: 'Bicon dental implant CAD', url: 'https://grabcad.com/library/bicon-dental-implant-cad-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-bim-house', industry: 'arquitetura-bim', title: 'Exploded View of a Two-Story Residential House', url: 'https://grabcad.com/library/exploded-view-of-a-two-story-residential-house-structural-architectural-assembly-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+  { id: 'gc-bim-freecad', industry: 'arquitetura-bim', title: 'Treehouse Guest House – Parametric FreeCAD / BIM Replica', url: 'https://grabcad.com/library/treehouse-guest-house-parametric-freecad-bim-replica-1', source: 'GrabCAD Community Library', usage: 'link-only-metadata', licenseStatus: 'verify-per-item', attributionRequired: true, downloaded: false },
+];
 
 export interface LibraryCatalogItem {
   id: string;
@@ -44,42 +71,49 @@ export const LIBRARY_CATEGORIES: LibraryCategoryMeta[] = [
     label: 'Ciclismo & Mobilidade',
     description: 'Conjuntos multi-peça com canelas, coroas CNC, eixos passantes e testes ISO 4210.',
     defaultCatalogQuery: 'RockShox BoXXer Ultimate 27.5 garfo dupla coroa STEP',
+    industrySector: 'ciclismo-mobilidade', processStages: ['cad', 'cae', 'cam', 'erp', 'crm', 'bi'],
   },
   {
     id: 'aeroespacial',
     label: 'Aeroespacial & Turbomáquinas',
     description: 'Pás helicoidais em Ti-6Al-4V com torção NURBS contínua e certificação AS9100.',
     defaultCatalogQuery: 'titanium turbine blade impeller 5-axis STEP',
+    industrySector: 'aeroespacial-turbomaquinas', processStages: ['cad', 'cae', 'cam', 'erp', 'bi'],
   },
   {
     id: 'industrial-cnc',
     label: 'CNC & Transmissão Mecânica',
     description: 'Engrenagens evolventes ISO 53, flanges ASME Y14.5 e componentes de transmissão.',
     defaultCatalogQuery: 'spur gear involute M2 Z24 flange STEP DXF',
+    industrySector: 'industrial-cnc', processStages: ['cad', 'cae', 'cam', 'erp', 'bi'],
   },
   {
     id: 'arquitetura-bim',
     label: 'Arquitetura & Estruturas BIM',
     description: 'Cascas NURBS dupla curvatura, grelhas waffle IfcBeam/IfcMember e norma NBR 8800.',
     defaultCatalogQuery: 'parametric waffle pavilion shell IFC BIM Rhino',
+    industrySector: 'arquitetura-bim', processStages: ['cad', 'cae', 'cam', 'erp', 'crm', 'bi'],
   },
   {
     id: 'robotica',
     label: 'Robótica & Efetuadores 6-Eixos',
     description: 'Moldes e efetuadores em CFRP para cinemática inversa KUKA 6-eixos e pós KRL.',
     defaultCatalogQuery: 'robotic end effector gripper KUKA 6 axis STEP',
+    industrySector: 'robotica-automacao', processStages: ['cad', 'cae', 'cam', 'erp', 'crm', 'bi'],
   },
   {
     id: 'aditiva',
     label: 'Manufatura Aditiva LPBF & SLA',
     description: 'Suportes metálicos Ti-6Al-4V sinterizados (LPBF) e moldes ópticos em resina UV 405nm.',
     defaultCatalogQuery: 'topology optimized bracket LPBF titanium SLA resin mold',
+    industrySector: 'manufatura-aditiva', processStages: ['cad', 'cae', 'cam', 'erp', 'bi'],
   },
   {
     id: 'datacenter-cmos',
     label: 'Datacenter 800VDC & Pré-Silício CMOS',
     description: 'Infraestrutura 1MW Liquid Cooling HVAC e arquitetura FrostbiteEngine CMOS 7nm 500MHz.',
     defaultCatalogQuery: 'server rack cold plate liquid cooling manifold STEP',
+    industrySector: 'datacenter-cmos', processStages: ['cad', 'cae', 'cam', 'erp', 'bi'],
   },
 ];
 
@@ -252,6 +286,10 @@ export function filterLibraryItems(
       .toLowerCase();
     return haystack.includes(cleanQuery);
   }).sort((a, b) => Number(b.isCategoryBest) - Number(a.isCategoryBest));
+}
+
+export function listGrabCadReferences(industry?: string): GrabCadReference[] {
+  return GRABCAD_INDUSTRY_REFERENCES.filter((reference) => !industry || reference.industry === industry).map((reference) => ({ ...reference }));
 }
 
 export function resolveLibraryPreset(itemOrPresetId: string): FullWorkspacePreset | undefined {

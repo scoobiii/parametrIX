@@ -8,6 +8,7 @@ import urllib.request
 
 PARAMETRIX_URL = os.environ.get("PARAMETRIX_URL", "http://127.0.0.1:3000").rstrip("/")
 MCP_ENDPOINT = f"{PARAMETRIX_URL}/api/mcp"
+MCP_TOKEN = os.environ.get("MCP_TOKEN", "")
 
 
 def main() -> None:
@@ -39,7 +40,10 @@ def main() -> None:
         http_req = urllib.request.Request(
             MCP_ENDPOINT,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                **({"Authorization": f"Bearer {MCP_TOKEN}"} if MCP_TOKEN else {}),
+            },
             method="POST",
         )
         try:

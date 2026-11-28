@@ -1,0 +1,237 @@
+{
+  "schema": "parametrix.test-classification.v1",
+  "files": 32,
+  "rows": [
+    {
+      "file": "tests/agentProvenanceHeader.test.ts",
+      "classification": [
+        "fixture-determinística",
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/cameraTransitions.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/carbonFootprint.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/ecosystem_frostbite_cam_voice.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/fatigueAnalysis.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/ganConformityEngine.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/googleDriveProjects.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/graphEngine.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/hermes_bridge.test.ts",
+      "classification": [
+        "mock",
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/imageToCad.test.ts",
+      "classification": [
+        "mock",
+        "stub"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/layerTolerances.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/libraryCatalog.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/magicPenToolsCatalog.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/mcp/integration.test.ts",
+      "classification": [
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/mcp/unit.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/mediaStudioEngine.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/nurbs_curvature_scoobiii.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/oauthAuthHandler.test.ts",
+      "classification": [
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/openErpEngine.test.ts",
+      "classification": [
+        "fixture-determinística",
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/plugins.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/publicChatSignaling.test.ts",
+      "classification": [
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/qwenProjectRagFinetune.test.ts",
+      "classification": [
+        "fixture-determinística"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/qwenSimpleToolHarness.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/ragEngine.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/realMachineConnector.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/rhino_process_workspace_ramdisk.test.ts",
+      "classification": [
+        "mock",
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/ringBuffer.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/scoobiiiProofTelemetry.test.ts",
+      "classification": [
+        "fixture-determinística",
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/sessionPointerRecorder.test.ts",
+      "classification": [
+        "integração-real"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/spurGear.test.ts",
+      "classification": [
+        "unitário-determinístico"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/structuralFea_classifier_cam_mcp.test.ts",
+      "classification": [
+        "mock"
+      ],
+      "productionMockRisk": false
+    },
+    {
+      "file": "tests/workspacePresets.test.ts",
+      "classification": [
+        "mock"
+      ],
+      "productionMockRisk": false
+    }
+  ],
+  "policy": "Mocks são permitidos somente em testes e nunca em src/produção; integração-real exige endpoint e evidência executada."
+}

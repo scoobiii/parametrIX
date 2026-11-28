@@ -34,6 +34,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Environment contract (bounded diagnostics)
+        run: npm run diagnose:env -- --ci
+
+      - name: Classify test doubles and real integrations
+        run: npm run classify:tests
+
       - name: Verify Node >= 24.12.0 and Environment Contracts
         run: |
           node --version
@@ -67,3 +73,53 @@ jobs:
         with:
           name: vuc-formal-proof
           path: proof/vuc-latest.json
+
+  k6-contract:
+    name: MCP / REST / WebSocket k6 Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: ci-gate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24.12.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.12.0'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Start Parametrix backend
+        env:
+          PORT: 3000
+          MCP_MAX_INFLIGHT: 4
+        run: |
+          nohup npm run dev > /tmp/parametrix-k6.log 2>&1 &
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/claw/status >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:3000/api/claw/status >/dev/null
+
+      - name: Run k6 contract and Node WebSocket stress
+        env:
+          PARAMETRIX_URL: http://127.0.0.1:3000
+          REQUIRE_K6: '1'
+          K6_SMOKE: '1'
+        run: npm run test:k6
+
+      - name: Upload k6 backend log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-parametrix-backend-log
+          path: /tmp/parametrix-k6.log
