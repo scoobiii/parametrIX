@@ -1,0 +1,25 @@
+services:
+  parametrix:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: parametrix-cad-studio
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - PARAMETRIX_DB_PATH=/app/data/parametrix.sqlite
+    volumes:
+      - parametrix_data:/app/data
+      - parametrix_proof:/app/proof
+      - parametrix_models:/app/models
+    restart: unless-stopped
+
+volumes:
+  parametrix_data:
+  parametrix_proof:
+  parametrix_models:

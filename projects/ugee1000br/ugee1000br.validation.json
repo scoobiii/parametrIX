@@ -1,0 +1,40 @@
+{
+  "schema": "parametrix-ugee1000br-validation/0.1",
+  "projectId": "ugee1000br-rotor-1mw-ethanol",
+  "status": "BLOCKED",
+  "releaseAllowed": false,
+  "missingInputs": [
+    "nominalRpm",
+    "maximumRpm",
+    "inletTemperatureK",
+    "outletTemperatureK",
+    "massFlowKgPerS",
+    "pressureRatio",
+    "rotorOuterDiameterMm",
+    "hubDiameterMm",
+    "bladeCount",
+    "bladeMaterial",
+    "designLifeHours",
+    "overspeedFactor"
+  ],
+  "dependencies": {
+    "note": "PATH presence is not execution evidence; tool gates must be run by CI/host adapters.",
+    "requiredTools": [
+      "k6",
+      "freecadcmd",
+      "lean",
+      "z3"
+    ],
+    "observedEnvironment": {
+      "k6": false,
+      "freecadcmd": false,
+      "lean": false,
+      "z3": false
+    }
+  },
+  "claims": [
+    "This artifact is a requirements gate, not a safety certification.",
+    "No PASS is emitted for CAD/CAE/CAM, rotor dynamics, overspeed, or normative conformity."
+  ],
+  "specSha256": "a060297ce348c0de1524d990a37d68cff191a2da21e182f7dc229e13766e5b97"
+}

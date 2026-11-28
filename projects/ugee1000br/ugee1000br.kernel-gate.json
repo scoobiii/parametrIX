@@ -1,0 +1,49 @@
+{
+  "schema": "parametrix-ugee1000br-kernel-gate/0.1",
+  "projectId": "ugee1000br-rotor-1mw-ethanol",
+  "status": "PASS",
+  "scope": "KERNEL_PROTOTYPE_ONLY",
+  "sourceProfile": "preset-aero-titanium",
+  "disclaimer": "PASS significa que o kernel determinístico executou e satisfez seus invariantes computacionais; não é certificação aeronáutica, validação de turbomáquina, ensaio físico, FreeCAD B-Rep ou aprovação normativa.",
+  "gates": {
+    "cad": true,
+    "cae": true,
+    "cam": true,
+    "optimization": true,
+    "toleranceKernel": true
+  },
+  "cad": {
+    "triangles": 4832,
+    "volumeCm3": 444.01,
+    "bboxMm": [
+      222.3319220791704,
+      65.28791476339707,
+      130
+    ]
+  },
+  "cae": {
+    "maxStressMpa": 15.82,
+    "safetyFactor": 37.92,
+    "maxDeflectionMm": 1.31,
+    "meanStressMpa": 2.44
+  },
+  "cam": {
+    "machineType": "cnc-5axis",
+    "points": 744,
+    "cuttingLengthMm": 6429.8,
+    "estimatedMinutes": 5.75,
+    "spindleRpm": 7150,
+    "feedRateMmMin": 1158
+  },
+  "vuc": {
+    "certificateId": "SCOOBIII-VUC-041B-5CFA",
+    "maxPartitionUnityResidual": 0,
+    "allPassed": true
+  },
+  "optimization": {
+    "weightReductionPct": 34.5,
+    "safetyFactorAfter": 18.85
+  },
+  "carbonKg": 233.691,
+  "inputsHash": "5242E903F551A55D3CE8F2D6560A546767BD74157168171C7E5ED7A0529A7C60"
+}

@@ -68,6 +68,7 @@ describe('Qwen 0.5B + SimpleTool Harness Kernel', () => {
     expect(matchDynamicProjectFromPrompt('helice titanio aero as9100', projects)?.id).toBe('preset-aero-titanium');
     expect(matchDynamicProjectFromPrompt('abobada waffle nbr 8800 bim', projects)?.id).toBe('preset-bim-dome');
     expect(matchDynamicProjectFromPrompt('efetuador kuka 6 eixos', projects)?.id).toBe('preset-robot-6axis');
+    expect(matchDynamicProjectFromPrompt('abrir projeto UGEE1000BR rotor de etanol', projects)?.id).toBe('preset-aero-titanium');
     expect(matchDynamicProjectFromPrompt('rack frostbite 1 mw 800vdc', projects)?.id).toBe('preset-frostbite-rack');
     expect(matchDynamicProjectFromPrompt('interposer soc chiplet silicio', projects)?.id).toBe('preset-soc-hybrid');
     expect(matchDynamicProjectFromPrompt('po metalico lpbf sinterizacao', projects)?.id).toBe('preset-metal-powder');
@@ -82,6 +83,7 @@ describe('Qwen 0.5B + SimpleTool Harness Kernel', () => {
     expect(matchDynamicProjectFromPrompt('helice', [])).toBeNull();
     expect(matchDynamicProjectFromPrompt('abobada', [])).toBeNull();
     expect(matchDynamicProjectFromPrompt('kuka', [])).toBeNull();
+    expect(matchDynamicProjectFromPrompt('ugee1000br rotor de etanol', [])).toBeNull();
     expect(matchDynamicProjectFromPrompt('frostbite', [])).toBeNull();
     expect(matchDynamicProjectFromPrompt('soc', [])).toBeNull();
     expect(matchDynamicProjectFromPrompt('lpbf', [])).toBeNull();

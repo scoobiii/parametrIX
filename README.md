@@ -219,7 +219,7 @@ artefatos, limitações e histórico de commits — está em
 
 ## Perfil MOBILE_LITE — Android/Termux/Proot de baixa infraestrutura
 
-O perfil Lite validado para o Parametrix usa uma única instância sem `--watch`, Node 24 Linux ARM64 e heap limitado a 384 MB. O diagnóstico somente leitura está em [`scripts/onboard_anticagada.sh`](scripts/onboard_anticagada.sh); ele não instala dependências, não troca o Node e não encerra processos.
+O perfil Lite validado para o Parametrix usa uma única instância sem `--watch`, Node **24.12.0** Linux ARM64 e heap limitado a 384 MB. O diagnóstico somente leitura está em [`scripts/onboard_anticagada.sh`](scripts/onboard_anticagada.sh); ele não instala dependências, não troca o Node e não encerra processos.
 
 ```bash
 # No Termux, antes de entrar no Debian

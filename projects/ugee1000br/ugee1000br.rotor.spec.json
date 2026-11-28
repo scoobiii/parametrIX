@@ -1,0 +1,54 @@
+{
+  "schema": "parametrix-ugee1000br-rotor/0.1",
+  "projectId": "ugee1000br-rotor-1mw-ethanol",
+  "title": "Rotor da turbina UGEE1000BR — Aero Concepts — 1 MW a etanol",
+  "lifecycle": "PROTOTYPE_REQUIREMENTS_INCOMPLETE",
+  "releaseAllowed": false,
+  "conformityClaim": "NOT_ASSESSED",
+  "powerMw": 1,
+  "fuel": "ethanol",
+  "manufacturer": "Aero Concepts",
+  "requiredInputs": {
+    "nominalRpm": null,
+    "maximumRpm": null,
+    "inletTemperatureK": null,
+    "outletTemperatureK": null,
+    "massFlowKgPerS": null,
+    "pressureRatio": null,
+    "rotorOuterDiameterMm": null,
+    "hubDiameterMm": null,
+    "bladeCount": null,
+    "bladeMaterial": null,
+    "designLifeHours": null,
+    "overspeedFactor": null
+  },
+  "geometryStrategy": {
+    "cadPreset": "impeller",
+    "provisionalThicknessMm": 16,
+    "sourceOfTruth": "requirements_pending",
+    "prototypeOnly": true,
+    "noManufacturingGeometryClaim": true
+  },
+  "validationGates": [
+    "requirements-completeness",
+    "unit-consistency",
+    "cad-kernel",
+    "fea-thermal-rotordynamics",
+    "fatigue-creep",
+    "modal-critical-speed",
+    "balance-and-overspeed",
+    "cam-postprocessor",
+    "ndt-and-metrology",
+    "normative-review"
+  ],
+  "normativeEvidence": {
+    "registryPath": "projects/ugee1000br/normative-registry.json",
+    "authorityNote": "Referências são índice de trabalho; não substituem textos controlados, autoridade aeronáutica, responsável técnico ou ensaios acreditados.",
+    "conformityClaim": "NOT_ASSESSED"
+  },
+  "uiLayout": {
+    "productionArea": "centered-primary-viewport",
+    "harnessRoute": "lower-half-compact-panel",
+    "pointerRecording": "opt-in-session-samples-only"
+  }
+}

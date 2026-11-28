@@ -1,12 +1,12 @@
 # Estratégia de testes Parametrix
 
-Atualizado em 2026-11-25.
+Atualizado em 2026-11-28; validação desta entrega executada com Node **24.12.0**.
 
 ## Cobertura unitária
 
 A suíte Vitest instrumenta o escopo kernel/servidor configurado e, nesse escopo, pode atingir 100% de statements, branches, functions e lines. Isso não equivale a 100% do repositório. O inventário automatizado `npm run quality:static` é a fonte de verdade do total atual, excluindo `.git`, `node_modules`, `dist`, coverage, caches e artefatos temporários; no último run local foram contados **195 arquivos relevantes**. A matriz completa também cobre GUI, UX, acessibilidade, performance, stress e balanceamento.
 
-A integração MCP completa pode depender do binding nativo `lightningcss` no ARM64 do Sandbox. O gate CI roda em `ubuntu-latest` com Node 24, onde o backend e a matriz k6 são inicializados de forma reproduzível.
+A integração MCP e o build foram validados no Sandbox ARM64 com Node 24.12.0 após `npm ci`; o gate remoto roda em `ubuntu-latest` com exatamente Node 24.12.0, onde a matriz k6 instala o binário e valida o contrato real.
 
 ## Contrato k6
 
@@ -41,11 +41,11 @@ Para tornar o probe concorrente estrito e exigir ao menos um `429` observado:
 EXPECT_429=1 REQUIRE_K6=1 npm run test:k6
 ```
 
-O CI instala k6 via `grafana/setup-k6-action@v1`, inicia o servidor em Node 24 e executa o contrato com `K6_SMOKE=1`. O modo estrito de `429` não é usado como threshold obrigatório no CI porque a ocorrência depende do escalonamento e do tempo de execução do backend; a cobertura determinística desse ramo permanece na suíte de integração/limites.
+O CI instala k6 via `grafana/setup-k6-action@v1`, inicia o servidor em Node 24.12.0 e executa o contrato com `K6_SMOKE=1`. O modo estrito de `429` não é usado como threshold obrigatório no CI porque a ocorrência depende do escalonamento e do tempo de execução do backend; a cobertura determinística desse ramo permanece na suíte de integração/limites.
 
-## Evidência executada no Sandbox
+## Evidência executada no Sandbox — 2026-11-28
 
-Com os bindings opcionais ARM64 instalados explicitamente no ambiente, o backend respondeu `readyForClaw: true` e anunciou 23 tools. O fallback executou com sucesso **44 chamadas HTTP**, sem erros de assert; o probe concorrente observou 0 respostas `429` nessa execução rápida. O stress WebSocket também passou com 12 clientes, `ecosystem:sync`, ping/pong e relay MCP bidirecional com VUC Ed25519 válido. Isso valida o contrato Node; não substitui a execução do binário k6.
+Com Node 24.12.0, o backend respondeu `readyForClaw: true` e anunciou 23 tools. O fallback executou com sucesso **44 chamadas HTTP**, sem erros de assert; o probe concorrente observou 0 respostas `429` nessa execução rápida. O stress WebSocket também passou com 12 clientes, `ecosystem:sync`, ping/pong e relay MCP bidirecional com VUC Ed25519 válido. `npm ci`, lint, **165 testes**, cobertura de 100% no escopo configurado e build de produção também passaram. Isso valida o contrato fallback Node; não substitui a execução do binário k6, ainda pendente nos checks remotos após a atualização do PR.
 
 ## Interpretação
 

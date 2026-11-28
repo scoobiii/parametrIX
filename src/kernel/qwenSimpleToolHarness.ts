@@ -160,13 +160,13 @@ export const HARNESS_OPTIONAL_API_PROVIDERS: {
 }[] = [
   {
     id: 'local-llm',
-    label: 'Qwen 0.5B + SimpleTool Harness (Padrão)',
+    label: 'SimpleTool determinístico (padrão; sem inferência LLM)',
     envVarName: '',
-    defaultBaseUrl: 'embedded://qwen-0.5b-simpletool',
-    defaultModel: 'qwen2.5-0.5b-simpletool-v1',
+    defaultBaseUrl: 'embedded://simpletool-deterministic',
+    defaultModel: 'simpletool-rules-v1',
     kind: 'embedded',
     description:
-      'Motor padrão embutido sem download de LLM. Decodificação paralela SimpleTool (4-6x compressão) com troca dinâmica de projetos e prova VUC.',
+      'Roteamento determinístico por regras SimpleTool; não carrega nem chama Qwen ou outro LLM. Inclui troca dinâmica de projetos e prova VUC.',
   },
   {
     id: 'deepseek',
@@ -281,6 +281,9 @@ export function matchDynamicProjectFromPrompt(
   if (/(kuka|efetuador|6-eixos|6 eixos|braco)/.test(q)) {
     return projects.find((p) => p.id === 'preset-robot-6axis') ?? null;
   }
+  if (/(ugee1000br|rotor.*etanol|etanol.*rotor)/.test(q)) {
+    return projects.find((p) => p.id === 'preset-aero-titanium') ?? null;
+  }
   if (/(frostbite|rack|800vdc|datacenter|1 mw)/.test(q)) {
     return projects.find((p) => p.id === 'preset-frostbite-rack') ?? null;
   }
@@ -324,6 +327,8 @@ export function executeQwenSimpleToolHarness(params: {
     HARNESS_OPTIONAL_API_PROVIDERS.find((p) => p.id === engineId) ?? HARNESS_OPTIONAL_API_PROVIDERS[0];
 
   const q = normalizePtBr(params.prompt);
+  const asksCrossLayerValidation =
+    /\b(valid\w*|verific\w*|audit\w*)\b/.test(q) && /\b(cad|cae|cam)\b/.test(q);
   const matchedProj = matchDynamicProjectFromPrompt(params.prompt, params.projects);
   const currentProject =
     params.projects.find((p) => p.id === params.context.activeProjectId) ??
@@ -440,7 +445,12 @@ export function executeQwenSimpleToolHarness(params: {
   }
 
   // 2) Layer-specific SimpleTool actions
-  if (params.layer === 'cae' || /(fea|von mises|seguranca|otimiz|curvatura|co2|carbono)/.test(q)) {
+  if (
+    params.layer === 'cae' ||
+    /\bcae\b/.test(q) ||
+    asksCrossLayerValidation ||
+    /(fea|von mises|seguranca|otimiz|curvatura|co2|carbono)/.test(q)
+  ) {
     selectedSchema = SIMPLE_TOOL_SCHEMAS[2];
     const wantsOpt = /(otimiz|peso|massa|curvatura)/.test(q);
     actionsToApply.push({ type: 'run-fea' });
@@ -456,12 +466,12 @@ export function executeQwenSimpleToolHarness(params: {
         optimizeMass: wantsOpt,
         targetSf: 1.5,
       },
-      resultSummary: `CAE executado: FS=${params.context.safetyFactor ?? 2.4}x · Máx ${params.context.maxStressMpa ?? 48} MPa · CO₂ ${(params.context.co2TotalKg ?? 1.2).toFixed(2)} kg.`,
+      resultSummary: `Ação FEA solicitada para "${nextProject.title}"; métricas serão recalculadas pelo kernel cliente.`,
       durationMs: 22,
       status: 'ok',
     });
     replyParts.push(
-      `CAE atualizado em "${nextProject.title}": Fator de Segurança ${params.context.safetyFactor ?? 2.4}x, tensão Von Mises ${params.context.maxStressMpa ?? 48} MPa e LCA ${(params.context.co2TotalKg ?? 1.2).toFixed(2)} kg CO₂e${wantsOpt ? ' com otimização NURBS aplicada' : ''}.`
+      `Ação CAE${wantsOpt ? ' (FEA + otimização de curvatura)' : ' (FEA)'} solicitada para "${nextProject.title}". As métricas devem ser lidas após o recálculo no kernel cliente; esta resposta não certifica o resultado estrutural.`
     );
   }
 
@@ -495,12 +505,12 @@ export function executeQwenSimpleToolHarness(params: {
         restart: shouldRestart,
         postFormat: targetMachine === 'robot-6axis' ? 'kuka-krl' : 'fanuc-nc',
       },
-      resultSummary: `CAM configurado para ${targetMachine}${shouldRestart ? ' e processo reiniciado (0%)' : ''}.`,
+      resultSummary: `CAM configurado para ${targetMachine}${shouldRestart ? ' e simulação reiniciada (0%)' : '; nenhum G-code foi gerado nesta etapa'}.`,
       durationMs: 18,
       status: 'ok',
     });
     replyParts.push(
-      `CAM sincronizado em ${targetMachine}${shouldRestart ? ' com reinício limpo do percurso G-Code/KRL' : ''}.`
+      `CAM configurado para ${targetMachine}${shouldRestart ? '; simulação reiniciada' : '; geração de G-code não solicitada nem executada'}.`
     );
   }
 

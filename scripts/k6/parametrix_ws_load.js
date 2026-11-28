@@ -40,6 +40,7 @@ function mcp(id, method, params, extraHeaders = {}) {
   const response = http.post(MCP_URL, rpc(id, method, params), {
     headers: { ...jsonHeaders.headers, ...extraHeaders },
     tags: { endpoint: 'mcp', method },
+    responseCallback: http.expectedStatuses(200),
   });
   mcpLatency.add(Date.now() - started);
   if (response.status === 429) mcp429.add(1);
@@ -120,16 +121,23 @@ function runMcpContract() {
   const unknownMethod = assertRpc(mcp(202, 'method/does-not-exist'), 'unknown method', (b) => b.error?.code === -32601);
   check(unknownMethod, { 'unknown method uses -32601': (b) => b.error?.code === -32601 });
 
-  const malformed = http.post(MCP_URL, '{"jsonrpc":', jsonHeaders);
+  const malformed = http.post(MCP_URL, '{"jsonrpc":', {
+    ...jsonHeaders,
+    responseCallback: http.expectedStatuses(400),
+  });
   check(malformed, {
-    'malformed JSON is rejected': (r) => r.status >= 400 && r.status < 500,
+    'malformed JSON is rejected with HTTP 400': (r) => r.status === 400,
   });
 
   // Tunnel authentication: no token and wrong token must be rejected. A configured token must work.
   const tunnelHeaders = { 'cf-connecting-ip': '203.0.113.10' };
-  const noToken = http.post(MCP_URL, rpc(300, 'ping'), { headers: { ...jsonHeaders.headers, ...tunnelHeaders } });
+  const noToken = http.post(MCP_URL, rpc(300, 'ping'), {
+    headers: { ...jsonHeaders.headers, ...tunnelHeaders },
+    responseCallback: http.expectedStatuses(401),
+  });
   const wrongToken = http.post(MCP_URL, rpc(301, 'ping'), {
     headers: { ...jsonHeaders.headers, ...tunnelHeaders, Authorization: 'Bearer definitely-wrong' },
+    responseCallback: http.expectedStatuses(401),
   });
   check({ noToken, wrongToken }, {
     'tunnel without token is 401': (v) => v.noToken.status === 401,
@@ -162,7 +170,10 @@ function runConcurrencyProbe() {
   const requests = Array.from({ length: 12 }, (_, i) => [
     'POST', MCP_URL, rpc(400 + i, 'tools/call', {
       name: 'hermes_search', arguments: { query: 'MCP concurrency probe', includeWeb: false, maxResults: 1 },
-    }), jsonHeaders,
+    }), {
+      ...jsonHeaders,
+      responseCallback: http.expectedStatuses(200, 429, 503),
+    },
   ]);
   const responses = http.batch(requests);
   const rejected = responses.filter((response) => response.status === 429).length;

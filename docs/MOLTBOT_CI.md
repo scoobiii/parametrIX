@@ -10,7 +10,7 @@ O bridge STDIO existente em `scripts/hermes/parametrix_mcp_stdio.py` também pod
 
 ## Limites de segurança
 
-O workflow usa `permissions: contents: read`, Node 24 e uma lista explícita de ferramentas. O modo LLM permite no máximo uma chamada MCP e rejeita ferramentas fora de `PARAMETRIX_ALLOWED_TOOLS`. Não coloque chaves em `args_json`, prompts, artefatos ou logs. Para execução destrutiva, crie uma workflow separada com aprovação de ambiente; não adicione esse tipo de ferramenta à allowlist padrão.
+O workflow usa `permissions: contents: read`, Node **24.12.0** e uma lista explícita de ferramentas. O modo LLM permite no máximo uma chamada MCP e rejeita ferramentas fora de `PARAMETRIX_ALLOWED_TOOLS`. Não coloque chaves em `args_json`, prompts, artefatos ou logs. Para execução destrutiva, crie uma workflow separada com aprovação de ambiente; não adicione esse tipo de ferramenta à allowlist padrão.
 
 ## Uso
 

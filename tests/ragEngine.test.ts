@@ -220,6 +220,16 @@ describe('ragEngine kernel', () => {
     });
     expect(asyncIptNullBuf.importedCad).toBeNull();
 
+    const asyncTextFallback = await tryBuildCadAndRagDocAsync({
+      title: 'notes.txt',
+      kind: 'upload',
+      mimeType: 'text/plain',
+      byteSize: 18,
+      extractedText: 'Notas de cálculo.',
+    });
+    expect(asyncTextFallback.importedCad).toBeNull();
+    expect(asyncTextFallback.ragDoc.formatTag).toBe('TXT');
+
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: false,
       status: 500,
